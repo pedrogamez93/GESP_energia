@@ -1,6 +1,11 @@
 from fastapi import FastAPI
-from app.api.v1 import users
 
-app = FastAPI(title="FastAPI Migrated Project")
+app = FastAPI()
 
-app.include_router(users.router, prefix="/users", tags=["Users"])
+@app.get("/", tags=["Health"])
+def root():
+    return {"status": "ok", "message": "API up"}
+
+@app.get("/api/v1", tags=["Health"])
+def api_v1_root():
+    return {"status": "ok", "message": "API up"}
