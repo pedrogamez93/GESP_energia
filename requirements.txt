@@ -6,3 +6,4 @@ python-jose
 passlib[bcrypt]
 pydantic-settings
 email-validator
+pyodbc
