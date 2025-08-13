@@ -1,4 +1,8 @@
-from sqlalchemy import Column, String, Boolean, Integer, DateTime, ForeignKey, UniqueConstraint
+# app/db/models/identity.py
+from __future__ import annotations
+
+import datetime
+from sqlalchemy import String, Boolean, Integer, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
 from app.db.base import Base
@@ -20,22 +24,29 @@ class AspNetUser(Base):
     PhoneNumber: Mapped[str | None] = mapped_column(String(64))
     PhoneNumberConfirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     TwoFactorEnabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    LockoutEnd: Mapped[DateTime | None]
+
+    # ❗ Tipo Python en la anotación; tipo SQLAlchemy dentro de mapped_column
+    #   - Si tu columna en SQL Server es datetimeoffset, puedes dejar timezone=True.
+    #   - Si es datetime/datetime2, usa timezone=False (o quítalo).
+    LockoutEnd: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
     LockoutEnabled: Mapped[bool] = mapped_column(Boolean, default=True)
     AccessFailedCount: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Campos de negocio (los que uses realmente)
+    # Campos de negocio
     Nombres: Mapped[str | None] = mapped_column(String(256))
     Apellidos: Mapped[str | None] = mapped_column(String(256))
     Active: Mapped[bool] = mapped_column(Boolean, default=True)
     Validado: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Relación many-to-many con Roles a través de la tabla pivote
     roles: Mapped[list["AspNetRole"]] = relationship(
         "AspNetRole",
-        secondary="dbo.AspNetUserRoles",
+        secondary="dbo.AspNetUserRoles",  # o secondary=AspNetUserRole.__table__
         back_populates="users",
         lazy="joined",
     )
+
 
 # dbo.AspNetRoles
 class AspNetRole(Base):
@@ -50,11 +61,12 @@ class AspNetRole(Base):
     # Extras
     Nombre: Mapped[str | None] = mapped_column(String(256))
 
-    users: Mapped[list[AspNetUser]] = relationship(
+    users: Mapped[list["AspNetUser"]] = relationship(
         "AspNetUser",
-        secondary="dbo.AspNetUserRoles",
+        secondary="dbo.AspNetUserRoles",  # o secondary=AspNetUserRole.__table__
         back_populates="roles",
     )
+
 
 # dbo.AspNetUserRoles (pivote)
 class AspNetUserRole(Base):
@@ -64,5 +76,9 @@ class AspNetUserRole(Base):
         {"schema": "dbo"},
     )
 
-    UserId: Mapped[str] = mapped_column(UNIQUEIDENTIFIER, ForeignKey("dbo.AspNetUsers.Id"), primary_key=True)
-    RoleId: Mapped[str] = mapped_column(UNIQUEIDENTIFIER, ForeignKey("dbo.AspNetRoles.Id"), primary_key=True)
+    UserId: Mapped[str] = mapped_column(
+        UNIQUEIDENTIFIER, ForeignKey("dbo.AspNetUsers.Id"), primary_key=True
+    )
+    RoleId: Mapped[str] = mapped_column(
+        UNIQUEIDENTIFIER, ForeignKey("dbo.AspNetRoles.Id"), primary_key=True
+    )
