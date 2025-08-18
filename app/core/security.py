@@ -10,7 +10,7 @@ from app.db.session import SessionLocal
 from app.db.models.identity import AspNetUser, AspNetRole
 from app.schemas.auth import UserPublic
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")  # Solo referencia para OpenAPI
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 # Configuración de bloqueo (puedes mover a settings/.env si prefieres)
 LOCKOUT_MAX_FAILED = 5

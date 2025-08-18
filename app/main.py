@@ -1,12 +1,10 @@
-# app/main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api.v1 import auth, users, comunas, regiones
+from app.api.v1 import auth, users, comunas, regiones, instituciones
 from app.db.session import engine
 
-# (opcional) si tienes settings, usa .env; si no, deja la lista fija
 try:
     from app.core.config import settings
     ALLOW_ORIGINS = getattr(settings, "CORS_ORIGINS", ["*"])
@@ -18,24 +16,21 @@ tags_metadata = [
     {"name": "Auth", "description": "Autenticación y sesión."},
     {"name": "Users", "description": "Usuarios."},
     {"name": "Comunas", "description": "Comunas por región."},
+    {"name": "Regiones", "description": "Regiones del país."},
+    {"name": "Instituciones", "description": "Instituciones y asociaciones de usuarios."},
 ]
 
-app = FastAPI(
-    title="API GESP",
-    version="1.0.0",
-    openapi_tags=tags_metadata,
-)
+app = FastAPI(title="API GESP", version="1.0.0", openapi_tags=tags_metadata)
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOW_ORIGINS,  # en prod: define CORS_ORIGINS en .env
+    allow_origins=ALLOW_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---- Health ----
+# Health
 @app.get("/", tags=["Health"])
 def root():
     return {"status": "ok", "message": "API up"}
@@ -44,7 +39,6 @@ def root():
 def api_v1_root():
     return {"status": "ok", "message": "API up"}
 
-# Health DB simple: SELECT 1 (sin get_db)
 @app.get("/api/v1/health/db", tags=["Health"])
 def health_db():
     try:
@@ -54,8 +48,9 @@ def health_db():
     except Exception:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
-# ---- Routers v1 ----
-app.include_router(auth.router,    prefix="/api/v1", tags=["Auth"])
-app.include_router(users.router,   prefix="/api/v1", tags=["Users"])
-app.include_router(comunas.router, prefix="/api/v1", tags=["Comunas"])
-app.include_router(regiones.router, prefix="/api/v1", tags=["Regiones"])
+# Incluye routers (cada uno ya define su prefix /api/v1/...)
+app.include_router(auth.router)
+app.include_router(users.router)
+app.include_router(comunas.router)
+app.include_router(regiones.router)
+app.include_router(instituciones.router)

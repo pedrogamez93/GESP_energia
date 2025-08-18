@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
 from app.db.session import get_db
 from app.db.models.comuna import Region, Comuna
 from app.schemas.comuna import ComunaDTO
 
-router = APIRouter()
+router = APIRouter(prefix="/api/v1/comunas", tags=["Comunas"])
 
-@router.get("/comunas/byRegionId/{id}", response_model=list[ComunaDTO])
+@router.get("/byRegionId/{id}", response_model=list[ComunaDTO])
 def get_by_region_id(id: int, db: Session = Depends(get_db)):
     region = db.query(Region).filter(Region.Id == id).first()
     if not region:
