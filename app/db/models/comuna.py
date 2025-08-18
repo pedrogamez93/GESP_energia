@@ -10,8 +10,8 @@ class Region(Base):
 
     Id: Mapped[int] = mapped_column(Integer, primary_key=True)
     Nombre: Mapped[str] = mapped_column(String(256))
-    # Extras en la tabla (no son necesarios para el endpoint actual, pero están):
-    # Numero, Posicion
+    Numero: Mapped[int | None] = mapped_column(Integer)     # <- agregado
+    Posicion: Mapped[int | None] = mapped_column(Integer)   # <- agregado
 
     comunas: Mapped[list["Comuna"]] = relationship("Comuna", back_populates="region")
 

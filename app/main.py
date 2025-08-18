@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api.v1 import auth, users, comunas
+from app.api.v1 import auth, users, comunas, regiones
 from app.db.session import engine
 
 # (opcional) si tienes settings, usa .env; si no, deja la lista fija
@@ -58,3 +58,4 @@ def health_db():
 app.include_router(auth.router,    prefix="/api/v1", tags=["Auth"])
 app.include_router(users.router,   prefix="/api/v1", tags=["Users"])
 app.include_router(comunas.router, prefix="/api/v1", tags=["Comunas"])
+app.include_router(regiones.router, prefix="/api/v1", tags=["Regiones"])
