@@ -42,7 +42,7 @@ def root():
 
 @app.get("/api/v1", tags=["Health"])
 def api_v1_root():
-    return {"status": "ok", "message": "API v1 up"}
+    return {"status": "ok", "message": "API up"}
 
 # Health DB simple: SELECT 1 (sin get_db)
 @app.get("/api/v1/health/db", tags=["Health"])

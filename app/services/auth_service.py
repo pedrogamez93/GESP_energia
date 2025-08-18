@@ -7,6 +7,9 @@ from app.utils.identity_password import verify_aspnet_password
 from app.core.security import create_access_token, LOCKOUT_MAX_FAILED, LOCKOUT_WINDOW_MINUTES
 from app.schemas.auth import UserPublic
 
+from sqlalchemy.orm import Session
+
+
 def _normalize(s: str) -> str:
     # Identity usa UpperInvariant; en la práctica .upper() suele bastar
     return s.strip().upper()
@@ -51,7 +54,7 @@ def handle_success_attempt(db: Session, user: AspNetUser):
     db.add(user)
     db.commit()
 
-def login_and_issue_token(db: Session, username_or_email: str, password: str) -> tuple[str, UserPublic]:
+def login_and_issue_token(db: Session, username_or_email: str, password: str):
     user = find_user_by_username_or_email(db, username_or_email)
     # Mensaje genérico para no filtrar existencia del usuario
     invalid_exc = HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Credenciales inválidas")
