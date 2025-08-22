@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api.v1 import auth, users, comunas, regiones, instituciones
+from app.api.v1 import auth, users, comunas, regiones, instituciones, servicios
 from app.db.session import engine
 
 try:
@@ -54,3 +54,4 @@ app.include_router(users.router)
 app.include_router(comunas.router)
 app.include_router(regiones.router)
 app.include_router(instituciones.router)
+app.include_router(servicios.router)

@@ -1,24 +1,20 @@
 # app/schemas/institucion.py
-from pydantic import BaseModel
 from typing import Optional
+from pydantic import BaseModel, ConfigDict
 
 # --- Salidas ---
 
 class InstitucionListDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
-
-    class Config:
-        from_attributes = True  # pydantic v2
+    model_config = ConfigDict(from_attributes=True)  # pydantic v2
 
 
 class InstitucionDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
     Active: bool
-
-    class Config:
-        from_attributes = True  # pydantic v2
+    model_config = ConfigDict(from_attributes=True)  # pydantic v2
 
 
 # --- Entradas ---
@@ -29,5 +25,6 @@ class InstitucionCreate(BaseModel):
 
 
 class InstitucionUpdate(BaseModel):
-    # Para editar, seguimos el mismo modelo: sólo Nombre
-    Nombre: str
+    # Ahora permite editar Nombre y Active (para activar/desactivar)
+    Nombre: Optional[str] = None
+    Active: Optional[bool] = None

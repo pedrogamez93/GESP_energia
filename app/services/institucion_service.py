@@ -1,5 +1,6 @@
 # app/services/institucion_service.py
-from typing import List
+from typing import List, Optional
+from datetime import datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 from fastapi import HTTPException, status
@@ -74,37 +75,62 @@ class InstitucionService:
         return self._get_or_404(institucion_id)
 
     # ---------- comandos (CRUD) ----------
-    def create(self, data: InstitucionCreate) -> InstitucionDTO:
-        inst = Institucion(Nombre=data.Nombre, Active=True)
+    def create(self, data: InstitucionCreate, created_by: Optional[str] = None) -> InstitucionDTO:
+        inst = Institucion(
+            Nombre=data.Nombre,
+            Active=True,
+            CreatedBy=created_by,
+            ModifiedBy=created_by,
+        )
         self.db.add(inst)
         self.db.commit()
         self.db.refresh(inst)
         return InstitucionDTO.model_validate(inst)
 
-    def update(self, institucion_id: int, data: InstitucionUpdate) -> InstitucionDTO:
+    def update(self, institucion_id: int, data: InstitucionUpdate, modified_by: Optional[str] = None) -> InstitucionDTO:
         inst = self._get_or_404(institucion_id)
-        inst.Nombre = data.Nombre
+
+        # ⚠️ No descartar False: sólo ignorar None
+        for k, v in data.model_dump(exclude_unset=True).items():
+            if v is None:
+                continue
+            setattr(inst, k, v)
+
+        # Auditoría
+        inst.UpdatedAt = datetime.utcnow()
+        inst.ModifiedBy = modified_by
+        inst.Version = (inst.Version or 0) + 1
+
         self.db.add(inst)
         self.db.commit()
         self.db.refresh(inst)
         return InstitucionDTO.model_validate(inst)
 
-    def soft_delete(self, institucion_id: int) -> InstitucionDTO:
+    def soft_delete(self, institucion_id: int, modified_by: Optional[str] = None) -> InstitucionDTO:
         inst = self._get_or_404(institucion_id)
         if not inst.Active:
-            # ya estaba inactiva: respondemos 200 con el estado actual para idempotencia
             return InstitucionDTO.model_validate(inst)
+
         inst.Active = False
+        inst.UpdatedAt = datetime.utcnow()
+        inst.ModifiedBy = modified_by
+        inst.Version = (inst.Version or 0) + 1
+
         self.db.add(inst)
         self.db.commit()
         self.db.refresh(inst)
         return InstitucionDTO.model_validate(inst)
 
-    def reactivate(self, institucion_id: int) -> InstitucionDTO:
+    def reactivate(self, institucion_id: int, modified_by: Optional[str] = None) -> InstitucionDTO:
         inst = self._get_or_404(institucion_id)
         if inst.Active:
             return InstitucionDTO.model_validate(inst)
+
         inst.Active = True
+        inst.UpdatedAt = datetime.utcnow()
+        inst.ModifiedBy = modified_by
+        inst.Version = (inst.Version or 0) + 1
+
         self.db.add(inst)
         self.db.commit()
         self.db.refresh(inst)

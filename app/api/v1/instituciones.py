@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.services.institucion_service import InstitucionService
 from app.core.security import require_roles
+from app.schemas.auth import UserPublic  # 👈 para inyectar el usuario (Opción B)
 
 # Schemas
 from app.schemas.institucion import (
@@ -15,13 +16,11 @@ from app.schemas.institucion import (
     InstitucionUpdate,
 )
 
-# Alias de dependencia (NO repetir = Depends(get_db) al usarlo)
 DbDep = Annotated[Session, Depends(get_db)]
-
 router = APIRouter(prefix="/api/v1/instituciones", tags=["Instituciones"])
 
 # ---------------------------
-# Públicos (equivalente a AllowAnonymous en .NET)
+# Públicos (AllowAnonymous)
 # ---------------------------
 
 @router.get(
@@ -43,7 +42,7 @@ def get_list_all(db: DbDep) -> List[InstitucionListDTO]:
         "Si **no** es admin ⇒ devuelve **solo** las instituciones activas asociadas a ese `user_id`."
     ),
 )
-@router.get(  # alias legacy para compatibilidad
+@router.get(  # alias legacy para compatibilidad (OCULTO en Swagger)
     "/getAsociadosByUserId/{user_id}",
     response_model=List[InstitucionListDTO],
     include_in_schema=False,
@@ -56,7 +55,7 @@ def get_asociados_by_user_id(
 
 
 # ---------------------------
-# CRUD (solo ADMINISTRADOR)
+# CRUD (solo ADMINISTRADOR) — Opción B
 # ---------------------------
 
 @router.post(
@@ -64,21 +63,24 @@ def get_asociados_by_user_id(
     response_model=InstitucionDTO,
     status_code=status.HTTP_201_CREATED,
     summary="Crear institución (solo ADMINISTRADOR)",
-    dependencies=[Depends(require_roles("ADMINISTRADOR"))],
 )
-def crear_institucion(data: InstitucionCreate, db: DbDep) -> InstitucionDTO:
-    return InstitucionService(db).create(data)
+def crear_institucion(
+    data: InstitucionCreate,
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+) -> InstitucionDTO:
+    return InstitucionService(db).create(data, created_by=current_user.id)
 
 
 @router.get(
     "/{institucion_id}",
     response_model=InstitucionDTO,
     summary="Obtener institución por Id (solo ADMINISTRADOR)",
-    dependencies=[Depends(require_roles("ADMINISTRADOR"))],
 )
 def obtener_institucion(
     institucion_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ) -> InstitucionDTO:
     inst = InstitucionService(db).get_by_id(institucion_id)
     return InstitucionDTO.model_validate(inst)
@@ -88,14 +90,15 @@ def obtener_institucion(
     "/{institucion_id}",
     response_model=InstitucionDTO,
     summary="Actualizar institución (solo ADMINISTRADOR)",
-    dependencies=[Depends(require_roles("ADMINISTRADOR"))],
 )
 def actualizar_institucion(
     institucion_id: Annotated[int, Path(..., ge=1)],
     data: InstitucionUpdate,
     db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ) -> InstitucionDTO:
-    return InstitucionService(db).update(institucion_id, data)
+    # Permite cambiar Nombre y Active (true/false)
+    return InstitucionService(db).update(institucion_id, data, modified_by=current_user.id)
 
 
 @router.delete(
@@ -103,23 +106,23 @@ def actualizar_institucion(
     response_model=InstitucionDTO,
     summary="Eliminar (soft-delete) institución (solo ADMINISTRADOR)",
     description="Marca la institución como Inactiva (Active = false).",
-    dependencies=[Depends(require_roles("ADMINISTRADOR"))],
 )
 def eliminar_institucion(
     institucion_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ) -> InstitucionDTO:
-    return InstitucionService(db).soft_delete(institucion_id)
+    return InstitucionService(db).soft_delete(institucion_id, modified_by=current_user.id)
 
 
 @router.patch(
     "/{institucion_id}/reactivar",
     response_model=InstitucionDTO,
     summary="Reactivar institución (solo ADMINISTRADOR)",
-    dependencies=[Depends(require_roles("ADMINISTRADOR"))],
 )
 def reactivar_institucion(
     institucion_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ) -> InstitucionDTO:
-    return InstitucionService(db).reactivate(institucion_id)
+    return InstitucionService(db).reactivate(institucion_id, modified_by=current_user.id)
