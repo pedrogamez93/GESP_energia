@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api.v1 import auth, users, comunas, regiones, instituciones, servicios
+from app.api.v1 import auth, users, comunas, regiones, instituciones, servicios, unidades_medida, energeticos, empresas_distribuidoras
 from app.db.session import engine
 
 try:
@@ -18,6 +18,10 @@ tags_metadata = [
     {"name": "Comunas", "description": "Comunas por región."},
     {"name": "Regiones", "description": "Regiones del país."},
     {"name": "Instituciones", "description": "Instituciones y asociaciones de usuarios."},
+    {"name": "Unidades de medida", "description": "Catálogo de unidades (Nombre, Abrv)."},
+    {"name": "Energéticos", "description": "Catálogo de energéticos, sus unidades de medida y asignación por división."},
+    {"name": "Empresas distribuidoras", "description": "Catálogo de empresas distribuidoras y comunas asociadas."},
+
 ]
 
 app = FastAPI(title="API GESP", version="1.0.0", openapi_tags=tags_metadata)
@@ -55,3 +59,6 @@ app.include_router(comunas.router)
 app.include_router(regiones.router)
 app.include_router(instituciones.router)
 app.include_router(servicios.router)
+app.include_router(unidades_medida.router)
+app.include_router(energeticos.router)
+app.include_router(empresas_distribuidoras.router)
