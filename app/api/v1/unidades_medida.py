@@ -30,6 +30,10 @@ def list_unidades(
 def list_unidades_select(
     db: DbDep,
 ):
+    rows = svc.list_select(db) or []   # <- si por alguna razón viniera None
+    # rows de SQLAlchemy .all() ya es lista, pero protegemos por si el service cambia
+    out = [UnidadMedidaSelectDTO(Id=int(r[0]), Nombre=r[1]) for r in rows]
+    return out
     ...
 
 @router.get("/{id}", response_model=UnidadMedidaDTO)

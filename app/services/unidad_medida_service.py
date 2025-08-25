@@ -23,9 +23,11 @@ class UnidadMedidaService:
 
     # Lista reducida para selects (Id, Nombre)
     def list_select(self, db: Session):
-        return db.execute(
+        result = db.execute(
             select(UnidadMedida.Id, UnidadMedida.Nombre).order_by(UnidadMedida.Nombre)
-        ).all()
+        )
+        rows = result.all()
+        return rows or []   # <- evita None por cualquier cambio futuro
 
     def get(self, db: Session, id: int) -> UnidadMedida:
         obj = db.get(UnidadMedida, id)
