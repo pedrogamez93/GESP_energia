@@ -1,3 +1,4 @@
+# app/api/v1/energeticos.py
 from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from sqlalchemy.orm import Session
@@ -27,7 +28,7 @@ def list_energeticos(
 
 @router.get("/select", response_model=list[EnergeticoSelectDTO])
 def list_energeticos_select(db: DbDep):
-    rows = svc.list_select(db)
+    rows = svc.list_select(db) or []
     return [EnergeticoSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
 @router.get("/{id}", response_model=EnergeticoDTO)
@@ -37,25 +38,23 @@ def get_energetico(
 ):
     return svc.get(db, id)
 
-# Energeticos por división (equivale a GetByDivisionId)
+# Energéticos por división (equivale a GetByDivisionId)
 @router.get("/division/{division_id}", response_model=list[EnergeticoDivisionDTO])
 def get_by_division(
     db: DbDep,
     division_id: Annotated[int, Path(..., ge=1)],
 ):
-    rows = svc.by_division(db, division_id)
-    return rows
+    return svc.by_division(db, division_id)
 
-# Activos por división (equivale a GetEnergeticosActivos) – pendiente validar permiso de compra
+# Activos por división (equivale a GetEnergeticosActivos)
 @router.get("/activos/division/{division_id}", response_model=list[EnergeticoDTO])
 def get_activos_by_division(
     db: DbDep,
     division_id: Annotated[int, Path(..., ge=1)],
 ):
-    items = svc.activos_by_division(db, division_id)
-    return items
+    return svc.activos_by_division(db, division_id)
 
-# Equivalente a GetByEdificioId – dejamos 501 hasta tener los modelos/tablas asociados
+# Equivalente a GetByEdificioId – 501 hasta tener el modelo/relación
 @router.get("/edificio/{edificio_id}", status_code=status.HTTP_501_NOT_IMPLEMENTED)
 def get_by_edificio(
     db: DbDep,

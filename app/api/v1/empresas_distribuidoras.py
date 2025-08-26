@@ -1,3 +1,4 @@
+# app/api/v1/empresas_distribuidoras.py
 from typing import Annotated, List
 from fastapi import APIRouter, Depends, Query, Path, status
 from sqlalchemy.orm import Session
@@ -16,7 +17,6 @@ svc = EmpresaDistribuidoraService()
 DbDep = Annotated[Session, Depends(get_db)]
 
 # -------- GET públicos --------
-
 @router.get("", response_model=dict)
 def list_empresas(
     db: DbDep,
@@ -33,7 +33,7 @@ def select_empresas(
     db: DbDep,
     EnergeticoId: int | None = Query(default=None),
 ):
-    rows = svc.list_select(db, EnergeticoId)
+    rows = svc.list_select(db, EnergeticoId) or []
     return [EmpresaDistribuidoraSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
 @router.get("/{id}", response_model=EmpresaDistribuidoraDetailDTO)
@@ -48,7 +48,6 @@ def get_empresa(
     )
 
 # -------- Escrituras (ADMINISTRADOR) --------
-
 @router.post("", response_model=EmpresaDistribuidoraDetailDTO,
              status_code=status.HTTP_201_CREATED,
              summary="(ADMINISTRADOR) Crear empresa distribuidora")
@@ -58,7 +57,8 @@ def create_empresa(
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     ed = svc.create(db, payload)
-    return get_empresa(db, ed.Id)  # reutilizo para devolver con comunas
+    # reutilizo get_empresa para devolver con comunas
+    return get_empresa(db, ed.Id)
 
 @router.put("/{id}", response_model=EmpresaDistribuidoraDetailDTO,
             summary="(ADMINISTRADOR) Actualizar empresa distribuidora")
@@ -82,7 +82,6 @@ def delete_empresa(
     return None
 
 # -------- Set de comunas (opcional, explícito) --------
-
 @router.put("/{id}/comunas", response_model=List[int],
             summary="(ADMINISTRADOR) Reemplaza comunas asociadas a la empresa")
 def set_comunas_empresa(
