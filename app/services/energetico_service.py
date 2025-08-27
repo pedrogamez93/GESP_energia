@@ -3,7 +3,9 @@ from sqlalchemy import select, func
 from fastapi import HTTPException
 from datetime import datetime, timezone
 
-from app.db.models.energetico import Energetico, EnergeticoUnidadMedida, EnergeticoDivision
+from app.db.models.energetico import Energetico, EnergeticoUnidadMedida
+from app.db.models.energetico_division import EnergeticoDivision
+
 from app.schemas.energetico import EnergeticoCreate, EnergeticoUpdate, EnergeticoUMCreate, EnergeticoUMUpdate
 
 def _now():

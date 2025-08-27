@@ -8,6 +8,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from app.db.base import Base
 
+# Import “de efecto lateral” para registrar la tabla dbo.Sexo en el MetaData.
+# (Mantén este import si no tienes un agregador que importe Sexo al arrancar)
+from app.db.models.sexo import Sexo  # noqa: F401
+
 
 # =========================
 # dbo.AspNetUsers
@@ -65,6 +69,10 @@ class AspNetUser(Base):
     CreatedBy: Mapped[str | None] = mapped_column(Text)
     ModifiedBy: Mapped[str | None] = mapped_column(Text)
     UpdatedAt: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+    # ───────── Relaciones ─────────
+    # Relación 1–N con Sexo (opcional, según FK)
+    sexo: Mapped["Sexo"] = relationship("app.db.models.sexo.Sexo")
 
     # M2M con Roles (pivot dbo.AspNetUserRoles)
     roles: Mapped[list["AspNetRole"]] = relationship(

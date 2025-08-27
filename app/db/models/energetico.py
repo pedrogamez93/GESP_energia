@@ -1,18 +1,22 @@
 # app/db/models/energetico.py
-from datetime import datetime  # <-- agrega esto
+from __future__ import annotations
+
+from datetime import datetime
 from sqlalchemy import (
-    BigInteger, Integer, String, Text, Boolean, DateTime, Float, ForeignKey
+    BigInteger, Integer, Text, Boolean, DateTime, Float, ForeignKey
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.db.base import Base
+
 
 class Energetico(Base):
     __tablename__ = "Energeticos"
     __table_args__ = {"schema": "dbo"}
 
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    CreatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)   # <-- datetime (sin comillas)
-    UpdatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)   # <-- idem
+    CreatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    UpdatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     Version: Mapped[int] = mapped_column(BigInteger, nullable=False)
     Active: Mapped[bool] = mapped_column(Boolean, nullable=False)
     ModifiedBy: Mapped[str | None] = mapped_column(Text)
@@ -27,11 +31,20 @@ class Energetico(Base):
     PermitePotenciaSuministrada: Mapped[bool] = mapped_column(Boolean, nullable=False)
     PermiteTipoTarifa: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
-    unidades_medidas: Mapped[list["EnergeticoUnidadMedida"]] = relationship(
-        "EnergeticoUnidadMedida", back_populates="energetico", cascade="all, delete-orphan"
+    # ───────── Relaciones ─────────
+    unidades_medidas: Mapped[list["app.db.models.energetico.EnergeticoUnidadMedida"]] = relationship(
+        "app.db.models.energetico.EnergeticoUnidadMedida",
+        back_populates="energetico",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
-    divisiones: Mapped[list["EnergeticoDivision"]] = relationship(
-        "EnergeticoDivision", back_populates="energetico", cascade="all, delete-orphan"
+
+    # 👉 apuntamos al modelo que está en energetico_division.py
+    divisiones: Mapped[list["app.db.models.energetico_division.EnergeticoDivision"]] = relationship(
+        "app.db.models.energetico_division.EnergeticoDivision",
+        back_populates="energetico",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
 
@@ -40,8 +53,8 @@ class EnergeticoUnidadMedida(Base):
     __table_args__ = {"schema": "dbo"}
 
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    CreatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)   # <-- datetime
-    UpdatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)   # <-- datetime
+    CreatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    UpdatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     Version: Mapped[int] = mapped_column(BigInteger, nullable=False)
     Active: Mapped[bool] = mapped_column(Boolean, nullable=False)
     ModifiedBy: Mapped[str | None] = mapped_column(Text)
@@ -58,26 +71,15 @@ class EnergeticoUnidadMedida(Base):
         BigInteger, ForeignKey("dbo.UnidadesMedida.Id", ondelete="CASCADE"), nullable=False
     )
 
-    energetico: Mapped["Energetico"] = relationship("Energetico", back_populates="unidades_medidas")
-    unidad_medida: Mapped["UnidadMedida"] = relationship("UnidadMedida")
-
-
-class EnergeticoDivision(Base):
-    __tablename__ = "EnergeticoDivision"
-    __table_args__ = {"schema": "dbo"}
-
-    Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    CreatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)   # <-- datetime
-    UpdatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)   # <-- datetime
-    Version: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    Active: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    ModifiedBy: Mapped[str | None] = mapped_column(Text)
-    CreatedBy: Mapped[str | None] = mapped_column(Text)
-
-    DivisionId: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    EnergeticoId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Energeticos.Id", ondelete="CASCADE"), nullable=False
+    energetico: Mapped["app.db.models.energetico.Energetico"] = relationship(
+        "app.db.models.energetico.Energetico",
+        back_populates="unidades_medidas",
+        passive_deletes=True,
     )
-    NumeroClienteId: Mapped[int | None] = mapped_column(BigInteger)
 
-    energetico: Mapped["Energetico"] = relationship("Energetico", back_populates="divisiones")
+    # Si no hay ambigüedad, esto puede quedar corto:
+    # unidad_medida: Mapped["UnidadMedida"] = relationship("UnidadMedida")
+    # O calificado si prefieres:
+    # unidad_medida: Mapped["app.db.models.unidad_medida.UnidadMedida"] = relationship(
+    #     "app.db.models.unidad_medida.UnidadMedida"
+    # )
