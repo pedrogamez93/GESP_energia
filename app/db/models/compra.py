@@ -5,6 +5,7 @@ from sqlalchemy import BigInteger, Boolean, DateTime, Float, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
+
 class Compra(Base):
     __tablename__ = "Compras"
     __table_args__ = {"schema": "dbo"}
@@ -20,9 +21,9 @@ class Compra(Base):
     CreatedBy:  Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Datos de la compra/lectura
-    Consumo:       Mapped[float]   = mapped_column(Float, nullable=False)
-    InicioLectura: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
-    FinLectura:    Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    Consumo:        Mapped[float]     = mapped_column(Float, nullable=False)
+    InicioLectura:  Mapped[datetime]  = mapped_column(DateTime(timezone=False), nullable=False)
+    FinLectura:     Mapped[datetime]  = mapped_column(DateTime(timezone=False), nullable=False)
 
     NumeroClienteId:     Mapped[int | None] = mapped_column(BigInteger)
     DivisionId:          Mapped[int]        = mapped_column(BigInteger, nullable=False)
@@ -37,7 +38,7 @@ class Compra(Base):
     RevisadoPor:         Mapped[str | None] = mapped_column(Text)
     ReviewedAt:          Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
 
-    CreatedByDivisionId: Mapped[int]  = mapped_column(BigInteger, nullable=False)
+    CreatedByDivisionId: Mapped[int]        = mapped_column(BigInteger, nullable=False)
     ObservacionRevision: Mapped[str | None] = mapped_column(Text)
 
     SinMedidor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

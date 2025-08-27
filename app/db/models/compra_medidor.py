@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from sqlalchemy import BigInteger, Float, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
+
 
 class CompraMedidor(Base):
     __tablename__ = "CompraMedidor"

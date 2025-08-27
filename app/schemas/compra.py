@@ -1,15 +1,17 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field
 from typing import Optional, List
+from pydantic import BaseModel, Field, ConfigDict
 
 # ----- Detalle por medidor -----
 class CompraMedidorItemDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     Id: int
     Consumo: float
     MedidorId: int
     ParametroMedicionId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
-    class Config: from_attributes = True
+
 
 class CompraMedidorItemCreate(BaseModel):
     Consumo: float
@@ -17,8 +19,11 @@ class CompraMedidorItemCreate(BaseModel):
     ParametroMedicionId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
 
+
 # ----- Compra (cabecera) -----
 class CompraListDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     Id: int
     DivisionId: int
     EnergeticoId: int
@@ -29,9 +34,11 @@ class CompraListDTO(BaseModel):
     InicioLectura: str
     FinLectura: str
     Active: bool = True
-    class Config: from_attributes = True
+
 
 class CompraDTO(CompraListDTO):
+    model_config = ConfigDict(from_attributes=True)
+
     UnidadMedidaId: Optional[int] = None
     Observacion: Optional[str] = None
     FacturaId: int
@@ -43,6 +50,7 @@ class CompraDTO(CompraListDTO):
     SinMedidor: bool = False
 
     Items: List[CompraMedidorItemDTO] = Field(default_factory=list)
+
 
 class CompraCreate(BaseModel):
     Consumo: float
@@ -63,6 +71,7 @@ class CompraCreate(BaseModel):
 
     Items: List[CompraMedidorItemCreate] = Field(default_factory=list)
 
+
 class CompraUpdate(BaseModel):
     Consumo: Optional[float] = None
     InicioLectura: Optional[str] = None
@@ -82,6 +91,7 @@ class CompraUpdate(BaseModel):
     CreatedByDivisionId: Optional[int] = None
     ObservacionRevision: Optional[str] = None
     SinMedidor: Optional[bool] = None
+
 
 # ----- Payload para reemplazar los items por medidor -----
 class CompraItemsPayload(BaseModel):

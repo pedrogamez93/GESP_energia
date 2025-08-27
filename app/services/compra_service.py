@@ -1,14 +1,31 @@
 from __future__ import annotations
+
 from datetime import datetime
 from typing import Optional, List, Tuple
-from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, select, delete
 
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import func, and_, delete, extract
+
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
 
+
 CM_TBL = CompraMedidor.__table__
+
+
+# ---------------- Helpers ----------------
+def _to_dt(s: str | None) -> datetime | None:
+    """Convierte strings comunes (YYYY-MM-DD, ISO8601) a datetime."""
+    if not s:
+        return None
+    try:
+        # ISO 8601 / 'YYYY-MM-DDTHH:MM:SS(.mmm)(Z)'
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        # fallback: solo fecha
+        return datetime.strptime(s[:10], "%Y-%m-%d")
+
 
 class CompraService:
     # -------- listados --------
@@ -39,16 +56,16 @@ class CompraService:
 
         # rango por FechaCompra
         if fecha_desde:
-            query = query.filter(Compra.FechaCompra >= fecha_desde)
+            query = query.filter(Compra.FechaCompra >= _to_dt(fecha_desde))
         if fecha_hasta:
-            query = query.filter(Compra.FechaCompra <  fecha_hasta)
+            query = query.filter(Compra.FechaCompra < _to_dt(fecha_hasta))
 
         total = query.count()
         items = (
             query.order_by(Compra.FechaCompra.desc(), Compra.Id.desc())
-                 .offset((page - 1) * page_size)
-                 .limit(page_size)
-                 .all()
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
         )
         return {"total": total, "page": page, "page_size": page_size, "items": items}
 
@@ -61,9 +78,9 @@ class CompraService:
     def _items_by_compra(self, db: Session, compra_id: int) -> List[CompraMedidor]:
         return (
             db.query(CompraMedidor)
-              .filter(CompraMedidor.CompraId == compra_id)
-              .order_by(CompraMedidor.Id)
-              .all()
+            .filter(CompraMedidor.CompraId == compra_id)
+            .order_by(CompraMedidor.Id)
+            .all()
         )
 
     # -------- escrituras --------
@@ -76,11 +93,11 @@ class CompraService:
             CreatedBy=created_by, ModifiedBy=created_by,
 
             Consumo=data.Consumo,
-            InicioLectura=data.InicioLectura,
-            FinLectura=data.FinLectura,
+            InicioLectura=_to_dt(data.InicioLectura),
+            FinLectura=_to_dt(data.FinLectura),
             DivisionId=data.DivisionId,
             EnergeticoId=data.EnergeticoId,
-            FechaCompra=data.FechaCompra,
+            FechaCompra=_to_dt(data.FechaCompra),
             Costo=data.Costo,
             FacturaId=data.FacturaId,
 
@@ -114,7 +131,14 @@ class CompraService:
     def update(self, db: Session, compra_id: int, data, modified_by: Optional[str] = None) -> Tuple[Compra, List[CompraMedidor]]:
         obj = self.get(db, compra_id)
 
-        for name, value in data.model_dump(exclude_unset=True).items():
+        payload = data.model_dump(exclude_unset=True)
+
+        # normaliza fechas si vienen como string
+        for k in ("InicioLectura", "FinLectura", "FechaCompra", "ReviewedAt"):
+            if k in payload and payload[k] is not None:
+                payload[k] = _to_dt(payload[k])
+
+        for name, value in payload.items():
             setattr(obj, name, value)
 
         obj.Version = (obj.Version or 0) + 1
@@ -127,7 +151,7 @@ class CompraService:
 
     def delete(self, db: Session, compra_id: int):
         obj = self.get(db, compra_id)
-        # CompraMedidor tiene FK con ON DELETE CASCADE, pero igual limpiamos explícito por seguridad
+        # Limpieza explícita (además del ON DELETE CASCADE)
         db.execute(delete(CM_TBL).where(CM_TBL.c.CompraId == compra_id))
         db.delete(obj)
         db.commit()
@@ -155,22 +179,25 @@ class CompraService:
     def resumen_mensual(
         self, db: Session, division_id: int, energetico_id: int, desde: str, hasta: str
     ) -> List[dict]:
-        y = func.extract("year", Compra.FechaCompra).label("anio")
-        m = func.extract("month", Compra.FechaCompra).label("mes")
+        y = extract("year",  Compra.FechaCompra).label("anio")
+        m = extract("month", Compra.FechaCompra).label("mes")
 
         rows = (
             db.query(y, m, func.sum(Compra.Consumo), func.sum(Compra.Costo))
-              .filter(
-                  and_(
-                      Compra.DivisionId == division_id,
-                      Compra.EnergeticoId == energetico_id,
-                      Compra.FechaCompra >= desde,
-                      Compra.FechaCompra <  hasta,
-                  )
-              )
-              .group_by(y, m)
-              .order_by(y.asc(), m.asc())
-              .all()
+            .filter(
+                and_(
+                    Compra.DivisionId == division_id,
+                    Compra.EnergeticoId == energetico_id,
+                    Compra.FechaCompra >= _to_dt(desde),
+                    Compra.FechaCompra <  _to_dt(hasta),
+                )
+            )
+            .group_by(y, m)
+            .order_by(y.asc(), m.asc())
+            .all()
         )
 
-        return [{"Anio": int(r[0]), "Mes": int(r[1]), "Consumo": float(r[2] or 0), "Costo": float(r[3] or 0)} for r in rows]
+        return [
+            {"Anio": int(r[0]), "Mes": int(r[1]), "Consumo": float(r[2] or 0), "Costo": float(r[3] or 0)}
+            for r in rows
+        ]
