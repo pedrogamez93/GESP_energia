@@ -1,10 +1,26 @@
-import base64, struct, hashlib, hmac
+# app/utils/identity_password.py
+from __future__ import annotations
 
-# PRF segun Microsoft.AspNetCore.Cryptography.KeyDerivation.KeyDerivationPrf
+import base64
+import struct
+import hashlib
+import hmac
+
+# PRF según Microsoft.AspNetCore.Cryptography.KeyDerivation.KeyDerivationPrf
 _PRF_MAP = {0: "sha1", 1: "sha256", 2: "sha512"}
 
 def _pbkdf2(hash_name: str, password: str, salt: bytes, iterations: int, dklen: int) -> bytes:
     return hashlib.pbkdf2_hmac(hash_name, password.encode("utf-8"), salt, iterations, dklen=dklen)
+
+def is_aspnet_hash(stored: str | None) -> bool:
+    """Heurística mínima: base64 decodifica y empieza con 0x01 (v3) o 0x00 (v2)."""
+    if not stored:
+        return False
+    try:
+        decoded = base64.b64decode(stored)
+    except Exception:
+        return False
+    return len(decoded) > 0 and decoded[0] in (0x00, 0x01)
 
 def verify_aspnet_password(hashed: str, password: str) -> bool:
     """
@@ -22,7 +38,7 @@ def verify_aspnet_password(hashed: str, password: str) -> bool:
     version = decoded[0]
 
     if version == 0x01:
-        # >>> IMPORTANTE: ASP.NET Core serializa en BIG-ENDIAN <<<
+        # ASP.NET Core serializa en BIG-ENDIAN
         if len(decoded) < 13:
             return False
         prf = struct.unpack(">I", decoded[1:5])[0]
