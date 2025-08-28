@@ -41,10 +41,19 @@ from app.api.v1.medidores import router as medidores_router
 from app.api.v1.medidores_inteligentes import router as medidores_inteligentes_router
 from app.api.v1.numero_clientes import router as numero_clientes_router
 from app.api.v1.tipos_tarifas import router as tipos_tarifas_router
+from app.api.v1.documentos import router as documentos_router
+from app.api.v1.plangestion import router as plangestion_router
+from app.api.v1.inmuebles import router as inmuebles_router
+from app.api.v1.pisos import router as pisos_router
+from app.api.v1.areas import router as areas_router
+from app.api.v1.direcciones import router as direcciones_router
 from app.api.v1 import medidores_vinculos
 from app.api.v1 import energetico_divisiones
 from app.api.v1 import medidor_divisiones
 from app.api.v1 import compras
+from app.api.v1.ajustes import router as ajustes_router
+
+
 
 # --- OpenAPI tags (opcional, añade los que quieras mostrar en Swagger) ---
 tags_metadata = [
@@ -75,6 +84,12 @@ tags_metadata = [
     {"name": "Medidores inteligentes", "description": "Smart meters."},
     {"name": "Números de cliente", "description": "Números de cliente y datos asociados."},
     {"name": "Tipos de tarifa", "description": "Catálogo de tarifas eléctricas."},
+    {"name": "Documentos", "description": "Gestión y listado de documentos."},
+    {"name": "Plan de Gestión", "description": "Acciones, tareas y reportes del plan de gestión."},
+    {"name": "Inmuebles", "description": "Inmuebles (basado en Divisiones + Direcciones)."},
+    {"name": "Pisos", "description": "Gestión de pisos por inmueble (División)."},
+    {"name": "Áreas", "description": "Gestión de áreas por piso."},
+    {"name": "Direcciones", "description": "Catálogo/CRUD de direcciones y resolución exacta."},
 ]
 
 # --- App ---
@@ -139,3 +154,10 @@ app.include_router(medidores_vinculos.router)
 app.include_router(energetico_divisiones.router)
 app.include_router(medidor_divisiones.router)
 app.include_router(compras.router)
+app.include_router(documentos_router)
+app.include_router(plangestion_router)
+app.include_router(inmuebles_router)
+app.include_router(pisos_router)
+app.include_router(areas_router)
+app.include_router(direcciones_router)
+app.include_router(ajustes_router)

@@ -1,7 +1,8 @@
-# app/db/models/division.py
 from __future__ import annotations
-
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, Text
+from datetime import datetime
+from sqlalchemy import (
+    BigInteger, Boolean, DateTime, Float, Integer, Text, String, ForeignKey
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
@@ -11,30 +12,42 @@ class Division(Base):
 
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
-    CreatedAt: Mapped[object] = mapped_column(DateTime(timezone=False), nullable=False)
-    UpdatedAt: Mapped[object] = mapped_column(DateTime(timezone=False), nullable=False)
-    Version:   Mapped[int]    = mapped_column(BigInteger, nullable=False)
-    Active:    Mapped[bool]   = mapped_column(Boolean, nullable=False, default=True)
+    # Metadatos / estado
+    CreatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    UpdatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    Version:   Mapped[int]      = mapped_column(BigInteger, nullable=False)
+    Active:    Mapped[bool]     = mapped_column(Boolean, nullable=False, default=True)
 
     ModifiedBy: Mapped[str | None] = mapped_column(Text)
     CreatedBy:  Mapped[str | None] = mapped_column(Text)
 
+    # Datos base obligatorios en DDL
     Funcionarios:       Mapped[int]        = mapped_column(Integer, nullable=False)
     Nombre:             Mapped[str | None] = mapped_column(Text)
     ReportaPMG:         Mapped[bool]       = mapped_column(Boolean, nullable=False, default=False)
     AnyoConstruccion:   Mapped[int]        = mapped_column(Integer, nullable=False)
 
+    # Geo/vínculos
     Latitud:    Mapped[float | None] = mapped_column(Float)
     Longitud:   Mapped[float | None] = mapped_column(Float)
-    EdificioId: Mapped[int]          = mapped_column(BigInteger, nullable=False)
-    ServicioId: Mapped[int]          = mapped_column(BigInteger, nullable=False)
 
+    # FKs (principales con las reglas de tu DDL)
+    EdificioId: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("dbo.Edificios.Id", ondelete="CASCADE"), nullable=False
+    )
+    ServicioId: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("dbo.Servicios.Id", ondelete="CASCADE"), nullable=False
+    )
+    TipoPropiedadId: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("dbo.TipoPropiedades.Id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Resto de referencias (opcionales; sin ondelete específico en tu script)
     TipoUnidadId:       Mapped[int | None] = mapped_column(BigInteger)
-    TipoPropiedadId:    Mapped[int]        = mapped_column(BigInteger, nullable=False)
     Superficie:         Mapped[float | None] = mapped_column(Float)
     Pisos:              Mapped[str | None] = mapped_column(Text)
     TipoUsoId:          Mapped[int | None] = mapped_column(BigInteger)
-    NroRol:             Mapped[str | None] = mapped_column(Text)  # nvarchar(255) -> Text está bien; si prefieres, String(255)
+    NroRol:             Mapped[str | None] = mapped_column(Text)  # nvarchar(255)
     Direccion:          Mapped[str | None] = mapped_column(Text)
 
     ComparteMedidorElectricidad: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -118,9 +131,9 @@ class Division(Base):
     EquipoCalefaccionId:       Mapped[int | None] = mapped_column(BigInteger)
     EquipoRefrigeracionId:     Mapped[int | None] = mapped_column(BigInteger)
 
-    FotoTecho:   Mapped[bool]       = mapped_column(Boolean, nullable=False, default=False)
-    ImpSisFv:    Mapped[bool]       = mapped_column(Boolean, nullable=False, default=False)
-    InstTerSisFv:Mapped[bool]       = mapped_column(Boolean, nullable=False, default=False)
+    FotoTecho:   Mapped[bool]         = mapped_column(Boolean, nullable=False, default=False)
+    ImpSisFv:    Mapped[bool]         = mapped_column(Boolean, nullable=False, default=False)
+    InstTerSisFv:Mapped[bool]         = mapped_column(Boolean, nullable=False, default=False)
     PotIns:      Mapped[float | None] = mapped_column(Float)
     SistemaSolarTermico: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
@@ -135,6 +148,6 @@ class Division(Base):
     MantColectores:         Mapped[int | None] = mapped_column(Integer)
     MantSfv:                Mapped[int | None] = mapped_column(Integer)
 
-    CargaPosteriorT: Mapped[bool]       = mapped_column(Boolean, nullable=False, default=False)
+    CargaPosteriorT: Mapped[bool]         = mapped_column(Boolean, nullable=False, default=False)
     IndicadorEnegia: Mapped[float | None] = mapped_column(Float)
     ObsInexistenciaEyV: Mapped[str | None] = mapped_column(Text)

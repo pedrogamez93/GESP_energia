@@ -1,7 +1,5 @@
-# app/db/models/direccion.py
 from __future__ import annotations
-
-from sqlalchemy import BigInteger, Text
+from sqlalchemy import BigInteger, Text, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
@@ -13,7 +11,6 @@ class Direccion(Base):
     Calle: Mapped[str | None] = mapped_column(Text)
     Numero: Mapped[str | None] = mapped_column(Text)
     DireccionCompleta: Mapped[str | None] = mapped_column(Text)
-
-    RegionId:    Mapped[int] = mapped_column(BigInteger)
-    ProvinciaId: Mapped[int] = mapped_column(BigInteger)
-    ComunaId:    Mapped[int] = mapped_column(BigInteger)
+    RegionId: Mapped[int | None] = mapped_column(BigInteger)
+    ProvinciaId: Mapped[int | None] = mapped_column(BigInteger)
+    ComunaId: Mapped[int | None] = mapped_column(BigInteger)
