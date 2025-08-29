@@ -1,6 +1,6 @@
 # app/api/v1/edificios.py
 from typing import Annotated, List
-from fastapi import APIRouter, Depends, Query, Path, status
+from fastapi import APIRouter, Depends, Query, Path, status, Response
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -8,7 +8,7 @@ from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 from app.schemas.edificio import (
     EdificioDTO, EdificioListDTO, EdificioSelectDTO,
-    EdificioCreate, EdificioUpdate
+    EdificioCreate, EdificioUpdate,
 )
 from app.services.edificio_service import EdificioService
 
@@ -17,21 +17,29 @@ svc = EdificioService()
 DbDep = Annotated[Session, Depends(get_db)]
 
 # --- GET públicos ---
-@router.get("", response_model=dict, summary="Listado paginado de edificios")
+@router.get("", response_model=List[EdificioListDTO], summary="Listado paginado (headers) de edificios")
 def list_edificios(
+    response: Response,
     db: DbDep,
     q: str | None = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     ComunaId: int | None = Query(default=None),
-    active: bool | None = Query(default=True),  # <- NUEVO
+    active: bool | None = Query(default=True),
 ):
-    return svc.list(db, q, page, page_size, ComunaId, active)
+    res = svc.list(db, q, page, page_size, ComunaId, active)
+    total = res["total"]; size = res["page_size"]; curr = res["page"]
+    total_pages = (total + size - 1) // size if size else 1
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Page"] = str(curr)
+    response.headers["X-Page-Size"] = str(size)
+    response.headers["X-Total-Pages"] = str(total_pages)
+    return [EdificioListDTO.model_validate(x) for x in res["items"]]
 
-@router.get("/select", response_model=List[EdificioSelectDTO], summary="Select (Id, Nombre)")
+@router.get("/select", response_model=List[EdificioSelectDTO], summary="Select (Id, Nombre) solo activos")
 def select_edificios(
     db: DbDep,
-    q: str | None = Query(default=None),
+    q: str | None = Query(default=None),   # <-- aquí estaba el 'none'
     ComunaId: int | None = Query(default=None),
 ):
     rows = svc.list_select(db, q, ComunaId)
@@ -58,7 +66,7 @@ def create_edificio(
 @router.put("/{id}", response_model=EdificioDTO,
             summary="(ADMINISTRADOR) Actualizar edificio")
 def update_edificio(
-    id: int,
+    id: Annotated[int, Path(..., ge=1)],
     payload: EdificioUpdate,
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
@@ -69,7 +77,7 @@ def update_edificio(
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT,
                summary="(ADMINISTRADOR) Eliminar edificio (soft-delete)")
 def delete_edificio(
-    id: int,
+    id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
@@ -77,9 +85,9 @@ def delete_edificio(
     return None
 
 @router.patch("/{id}/reactivar", response_model=EdificioDTO,
-              summary="(ADMINISTRADOR) Reactivar edificio")
+              summary="(ADMINISTRADOR) Reactivar edificio (Active=True)")
 def reactivate_edificio(
-    id: int,
+    id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):

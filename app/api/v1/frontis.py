@@ -1,3 +1,4 @@
+# app/api/v1/frontis.py
 from typing import Annotated, List
 from fastapi import APIRouter, Depends, Query, Path, status
 from sqlalchemy.orm import Session
@@ -6,11 +7,11 @@ from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 from app.schemas.catalogo_simple import CatalogoDTO, CatalogoSelectDTO, CatalogoCreate, CatalogoUpdate
-from app.db.models.modo_operacion import ModoOperacion
+from app.db.models.frontis import Frontis
 from app.services.catalogo_simple_service import CatalogoSimpleService
 
-router = APIRouter(prefix="/api/v1/modos-operacion", tags=["Modos de operación"])
-svc = CatalogoSimpleService(ModoOperacion, has_audit=True)
+router = APIRouter(prefix="/api/v1/frontis", tags=["Frontis"])
+svc = CatalogoSimpleService(Frontis, has_audit=True)
 DbDep = Annotated[Session, Depends(get_db)]
 
 @router.get("", response_model=dict)
@@ -26,14 +27,14 @@ def select_items(db: DbDep, q: str | None = Query(None)):
 def get_item(db: DbDep, id: Annotated[int, Path(..., ge=1)]):
     return svc.get(db, id)
 
-@router.post("", response_model=CatalogoDTO, status_code=status.HTTP_201_CREATED, summary="(ADMIN) Crear modo de operación")
+@router.post("", response_model=CatalogoDTO, status_code=status.HTTP_201_CREATED, summary="(ADMINISTRADOR) Crear frontis")
 def create_item(payload: CatalogoCreate, db: DbDep, _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     return svc.create(db, payload)
 
-@router.put("/{id}", response_model=CatalogoDTO, summary="(ADMIN) Actualizar modo de operación")
+@router.put("/{id}", response_model=CatalogoDTO, summary="(ADMINISTRADOR) Actualizar frontis")
 def update_item(id: int, payload: CatalogoUpdate, db: DbDep, _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     return svc.update(db, id, payload)
 
-@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMIN) Eliminar modo de operación (soft-delete)")
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMINISTRADOR) Eliminar frontis (soft-delete)")
 def delete_item(id: int, db: DbDep, _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     svc.delete(db, id); return None

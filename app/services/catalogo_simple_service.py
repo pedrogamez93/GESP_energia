@@ -1,71 +1,112 @@
 # app/services/catalogo_simple_service.py
 from __future__ import annotations
+from typing import Type
 from datetime import datetime
+
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from fastapi import HTTPException
 
-# Este servicio es genérico; recibe el modelo SQLAlchemy
+# Se espera que los modelos tengan (Id, Nombre) y opcionalmente:
+# CreatedAt, UpdatedAt, Version, Active, CreatedBy, ModifiedBy
 class CatalogoSimpleService:
-    def __init__(self, model, has_audit: bool = False):
+    def __init__(self, model: Type, has_audit: bool = False):
         self.model = model
         self.has_audit = has_audit
 
-    def list(self, db: Session, q: str | None, page: int, page_size: int) -> dict:
+    # ---- Listado paginado ----
+    def list(self, db: Session, q: str | None, page: int, page_size: int, include_inactive: bool = False) -> dict:
         M = self.model
         query = db.query(M)
-        if hasattr(M, "Nombre") and q:
+        if self.has_audit and not include_inactive and hasattr(M, "Active"):
+            query = query.filter(M.Active == True)
+
+        if q:
             like = f"%{q}%"
-            query = query.filter(func.lower(M.Nombre).like(func.lower(like)))
+            # coalesce para evitar NULLs
+            query = query.filter(func.lower(func.coalesce(M.Nombre, "")).like(func.lower(like)))
+
         total = query.count()
-        items = (query.order_by(M.Nombre if hasattr(M, "Nombre") else M.Id, M.Id)
-                      .offset((page - 1) * page_size)
-                      .limit(page_size)
-                      .all())
+        items = (
+            query.order_by(M.Nombre.asc().nulls_last(), M.Id.asc())
+                 .offset((page - 1) * page_size)
+                 .limit(page_size)
+                 .all()
+        )
         return {"total": total, "page": page, "page_size": page_size, "items": items}
 
+    # ---- Select liviano (Id, Nombre) ----
     def list_select(self, db: Session, q: str | None):
         M = self.model
-        if hasattr(M, "Nombre"):
-            query = db.query(M.Id, M.Nombre)
-            if q:
-                like = f"%{q}%"
-                query = query.filter(func.lower(M.Nombre).like(func.lower(like)))
-            return query.order_by(M.Nombre, M.Id).all()
-        else:
-            return db.query(M.Id).order_by(M.Id).all()
+        query = db.query(M.Id, M.Nombre)
+        if self.has_audit and hasattr(M, "Active"):
+            query = query.filter(M.Active == True)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(func.lower(func.coalesce(M.Nombre, "")).like(func.lower(like)))
+        return query.order_by(M.Nombre.asc().nulls_last(), M.Id.asc()).all()
 
-    def get(self, db: Session, id_: int):
+    # ---- Get ----
+    def get(self, db: Session, id: int):
         M = self.model
-        obj = db.query(M).filter(M.Id == id_).first()
+        obj = db.query(M).filter(M.Id == id).first()
         if not obj:
-            raise HTTPException(status_code=404, detail="Registro no encontrado")
+            raise HTTPException(status_code=404, detail="No encontrado")
         return obj
 
-    def create(self, db: Session, data):
+    # ---- Create ----
+    def create(self, db: Session, payload):
         M = self.model
-        payload = data.model_dump(exclude_unset=True)
+        data = payload.model_dump(exclude_unset=True)
         if self.has_audit:
             now = datetime.utcnow()
-            payload.setdefault("CreatedAt", now)
-            payload.setdefault("UpdatedAt", now)
-            payload.setdefault("Version", 0)
-            payload.setdefault("Active", True)
-        obj = M(**payload)
-        db.add(obj); db.commit(); db.refresh(obj)
+            # set por defecto si existen estos campos
+            for fld, val in [
+                ("CreatedAt", now),
+                ("UpdatedAt", now),
+                ("Version", 1),
+                ("Active", True),
+            ]:
+                if hasattr(M, fld):
+                    data.setdefault(fld, val)
+            for fld in ("CreatedBy", "ModifiedBy"):
+                if hasattr(M, fld):
+                    data.setdefault(fld, None)
+        obj = M(**data)
+        db.add(obj)
+        db.commit()
+        db.refresh(obj)
         return obj
 
-    def update(self, db: Session, id_: int, data):
+    # ---- Update ----
+    def update(self, db: Session, id: int, payload):
         M = self.model
-        obj = self.get(db, id_)
-        for k, v in data.model_dump(exclude_unset=True).items():
+        obj = self.get(db, id)
+        data = payload.model_dump(exclude_unset=True)
+        for k, v in data.items():
             setattr(obj, k, v)
-        if self.has_audit and hasattr(obj, "UpdatedAt"):
+        if self.has_audit and hasattr(M, "UpdatedAt"):
             obj.UpdatedAt = datetime.utcnow()
-        db.commit(); db.refresh(obj)
+        if self.has_audit and hasattr(M, "Version"):
+            obj.Version = (obj.Version or 0) + 1
+        db.commit()
+        db.refresh(obj)
         return obj
 
-    def delete(self, db: Session, id_: int):
+    # ---- Delete (soft si has_audit) ----
+    def delete(self, db: Session, id: int):
         M = self.model
-        obj = self.get(db, id_)
-        db.delete(obj); db.commit()
+        obj = self.get(db, id)
+        if self.has_audit and hasattr(M, "Active"):
+            if getattr(obj, "Active", True) is False:
+                return  # ya inactivo
+            obj.Active = False
+            if hasattr(M, "UpdatedAt"):
+                obj.UpdatedAt = datetime.utcnow()
+            if hasattr(M, "Version"):
+                obj.Version = (obj.Version or 0) + 1
+            db.commit()
+            return
+        # hard delete si no hay auditoría
+        db.delete(obj)
+        db.commit()

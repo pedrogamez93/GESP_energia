@@ -1,4 +1,3 @@
-# app/api/v1/servicios.py
 from typing import List, Annotated
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Path, Query
@@ -12,7 +11,7 @@ from app.db.models.servicio import Servicio
 from app.schemas.servicios import (
     ServicioDTO, ServicioListDTO, ServicioResponse,
     ServicioPatchDTO, DiagnosticoDTO,
-    ServicioCreate, ServicioUpdate
+    ServicioCreate, ServicioUpdate, ServicioEstadoDTO,
 )
 from app.schemas.auth import UserPublic
 from app.core.app_validation import is_app_validate
@@ -252,7 +251,7 @@ def get_diagnostico(
     return ServicioService(db).get_diagnostico(servicio_id)
 
 # ---------------------------
-# NUEVO: CRUD ADMIN (visible en Swagger) — Opción B
+# CRUD ADMIN
 # ---------------------------
 
 @router.post(
@@ -287,11 +286,45 @@ def actualizar_servicio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
 
+# ---- NUEVO: activar/desactivar ----
+
+@router.patch(
+    "/{servicio_id}/estado",
+    response_model=ServicioDTO,
+    summary="(ADMIN) Activar/Desactivar servicio (setear Active=true/false)",
+)
+def set_estado_servicio(
+    servicio_id: Annotated[int, Path(..., ge=1)],
+    body: ServicioEstadoDTO,
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+) -> ServicioDTO:
+    from app.services.servicio_service import ServicioService
+    srv = ServicioService(db)._set_active(servicio_id, body.Active, modified_by=current_user.id)
+    if not srv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
+    return ServicioDTO.model_validate(srv)
+
+@router.patch(
+    "/{servicio_id}/reactivar",
+    response_model=ServicioDTO,
+    summary="(ADMIN) Reactivar servicio (Active=true)",
+)
+def reactivar_servicio(
+    servicio_id: Annotated[int, Path(..., ge=1)],
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+) -> ServicioDTO:
+    from app.services.servicio_service import ServicioService
+    srv = ServicioService(db).activate(servicio_id, modified_by=current_user.id)
+    if not srv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
+    return ServicioDTO.model_validate(srv)
+
 @router.delete(
     "/{servicio_id}",
     response_model=ServicioDTO,
-    summary="(ADMIN) Eliminar servicio (soft-delete)",
-    description="Marca Active = false. Si en tu .NET era hard-delete, dilo y lo cambiamos.",
+    summary="(ADMIN) Eliminar servicio (soft-delete = Active=false)",
 )
 def eliminar_servicio(
     servicio_id: Annotated[int, Path(..., ge=1)],

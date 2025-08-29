@@ -1,4 +1,6 @@
 from datetime import datetime
+from typing import Optional
+
 from sqlalchemy.orm import Session
 
 from app.db.models.usuarios_servicios import UsuarioServicio
@@ -44,7 +46,37 @@ class ServicioService:
             EtapaSEV=srv.EtapaSEV
         )
 
-    # --------- NUEVO: CRUD ADMIN ---------
+    # --------- Helpers de estado (activar/desactivar) ---------
+
+    def _set_active(self, servicio_id: int, active: bool, modified_by: str) -> Optional[Servicio]:
+        srv = self.db.query(Servicio).filter(Servicio.Id == servicio_id).first()
+        if not srv:
+            return None
+
+        # si no cambia el estado, sólo auditamos
+        if srv.Active == active:
+            srv.UpdatedAt = datetime.utcnow()
+            srv.ModifiedBy = modified_by
+            srv.Version = (srv.Version or 0) + 1
+            self.db.commit()
+            self.db.refresh(srv)
+            return srv
+
+        srv.Active = active
+        srv.UpdatedAt = datetime.utcnow()
+        srv.ModifiedBy = modified_by
+        srv.Version = (srv.Version or 0) + 1
+        self.db.commit()
+        self.db.refresh(srv)
+        return srv
+
+    def deactivate(self, servicio_id: int, modified_by: str) -> Optional[Servicio]:
+        return self._set_active(servicio_id, False, modified_by)
+
+    def activate(self, servicio_id: int, modified_by: str) -> Optional[Servicio]:
+        return self._set_active(servicio_id, True, modified_by)
+
+    # --------- CRUD ADMIN ---------
 
     def create(self, data: ServicioCreate, created_by: str) -> Servicio:
         now = datetime.utcnow()
@@ -70,7 +102,7 @@ class ServicioService:
         self.db.refresh(srv)
         return srv
 
-    def update_admin(self, servicio_id: int, data: ServicioUpdate, modified_by: str) -> Servicio:
+    def update_admin(self, servicio_id: int, data: ServicioUpdate, modified_by: str) -> Optional[Servicio]:
         srv = self.db.query(Servicio).filter(Servicio.Id == servicio_id).first()
         if not srv:
             return None
@@ -88,19 +120,6 @@ class ServicioService:
         self.db.refresh(srv)
         return srv
 
-    def soft_delete(self, servicio_id: int, modified_by: str) -> Servicio:
-        """Equivalente más seguro a Delete del Admin (si allá fuese hard-delete, me indicas y lo cambiamos)."""
-        srv = self.db.query(Servicio).filter(Servicio.Id == servicio_id).first()
-        if not srv:
-            return None
-        if not srv.Active:
-            return srv  # ya inactivo
-
-        srv.Active = False
-        srv.UpdatedAt = datetime.utcnow()
-        srv.ModifiedBy = modified_by
-        srv.Version = (srv.Version or 0) + 1
-
-        self.db.commit()
-        self.db.refresh(srv)
-        return srv
+    def soft_delete(self, servicio_id: int, modified_by: str) -> Optional[Servicio]:
+        """Paridad con .NET: baja lógica (Active = false)."""
+        return self.deactivate(servicio_id, modified_by)

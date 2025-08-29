@@ -69,3 +69,8 @@ class ServicioUpdate(BaseModel):
     PgaRevisionRed: Optional[bool] = None
     RevisionRed: Optional[bool] = None
     ValidacionConcientizacion: Optional[bool] = None
+
+# ------- NUEVO: set de estado (activar/desactivar) -------
+
+class ServicioEstadoDTO(BaseModel):
+    Active: bool

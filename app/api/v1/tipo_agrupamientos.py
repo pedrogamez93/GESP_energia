@@ -10,7 +10,7 @@ from app.schemas.catalogo_simple import CatalogoDTO, CatalogoSelectDTO, Catalogo
 from app.db.models.tipo_agrupamiento import TipoAgrupamiento
 from app.services.catalogo_simple_service import CatalogoSimpleService
 
-router = APIRouter(prefix="/api/v1/tipo-agrupamientos", tags=["Tipo de agrupamientos"])
+router = APIRouter(prefix="/api/v1/tipo-agrupamientos", tags=["Tipos de agrupamientos"])
 svc = CatalogoSimpleService(TipoAgrupamiento, has_audit=True)
 DbDep = Annotated[Session, Depends(get_db)]
 
@@ -35,6 +35,6 @@ def create_item(payload: CatalogoCreate, db: DbDep, _u: Annotated[UserPublic, De
 def update_item(id: int, payload: CatalogoUpdate, db: DbDep, _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     return svc.update(db, id, payload)
 
-@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMINISTRADOR) Eliminar tipo de agrupamiento")
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMINISTRADOR) Eliminar tipo de agrupamiento (soft-delete)")
 def delete_item(id: int, db: DbDep, _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     svc.delete(db, id); return None

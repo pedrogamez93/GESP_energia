@@ -1,14 +1,23 @@
-# app/db/models/tipo_colector.py
 from __future__ import annotations
-
-from sqlalchemy import BigInteger, Text
+from datetime import datetime
+from sqlalchemy import BigInteger, Text, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 class TipoColector(Base):
-    __tablename__ = "TiposColectores"
+    __tablename__ = "TipoColectores"
     __table_args__ = {"schema": "dbo"}
 
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    # auditoría / soft-delete
+    CreatedAt: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    UpdatedAt: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    Version:   Mapped[int]      = mapped_column(BigInteger, nullable=False, default=1)
+    Active:    Mapped[bool]     = mapped_column(Boolean, nullable=False, default=True)
+    CreatedBy: Mapped[str | None] = mapped_column(Text)
+    ModifiedBy:Mapped[str | None] = mapped_column(Text)
+
+    # datos
     Nombre: Mapped[str | None] = mapped_column(Text)
-    Tipo:   Mapped[str | None] = mapped_column(Text)
+    OldId:  Mapped[int | None] = mapped_column(BigInteger)

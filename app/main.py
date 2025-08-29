@@ -53,6 +53,7 @@ from app.api.v1 import energetico_divisiones
 from app.api.v1 import medidor_divisiones
 from app.api.v1 import compras
 from app.api.v1.ajustes import router as ajustes_router
+from app.api.v1.frontis import router as frontis_router
 
 
 
@@ -164,3 +165,4 @@ app.include_router(pisos_router)
 app.include_router(areas_router)
 app.include_router(direcciones_router)
 app.include_router(ajustes_router)
+app.include_router(frontis_router)

@@ -35,6 +35,6 @@ def create_item(payload: CatalogoCreate, db: DbDep, _u: Annotated[UserPublic, De
 def update_item(id: int, payload: CatalogoUpdate, db: DbDep, _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     return svc.update(db, id, payload)
 
-@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMINISTRADOR) Eliminar entorno")
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMINISTRADOR) Eliminar entorno (soft-delete)")
 def delete_item(id: int, db: DbDep, _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     svc.delete(db, id); return None
