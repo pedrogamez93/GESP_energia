@@ -15,6 +15,7 @@ except Exception:
 # --- Importa routers explícitamente desde cada submódulo ---
 from app.api.v1.auth import router as auth_router
 from app.api.v1.users import router as users_router
+from app.api.v1.usuarios import router as usuarios_router
 from app.api.v1.comunas import router as comunas_router
 from app.api.v1.regiones import router as regiones_router
 from app.api.v1.instituciones import router as instituciones_router
@@ -60,6 +61,7 @@ tags_metadata = [
     {"name": "Health", "description": "Endpoints de verificación."},
     {"name": "Auth", "description": "Autenticación y sesión."},
     {"name": "Users", "description": "Usuarios."},
+    {"name": "Usuarios (admin)", "description": "Detalle y vínculos de usuarios (solo ADMIN)."},
     {"name": "Comunas", "description": "Comunas por región."},
     {"name": "Regiones", "description": "Regiones del país."},
     {"name": "Instituciones", "description": "Instituciones y asociaciones de usuarios."},
@@ -124,6 +126,7 @@ def health_db():
 # --- Routers ---
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(usuarios_router) 
 app.include_router(comunas_router)
 app.include_router(regiones_router)
 app.include_router(instituciones_router)

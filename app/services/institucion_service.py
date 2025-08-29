@@ -1,11 +1,13 @@
 # app/services/institucion_service.py
 from typing import List, Optional
 from datetime import datetime
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select
-from fastapi import HTTPException, status
 
-from app.db.models.institucion import Institucion, UsuarioInstitucion
+from fastapi import HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
+
+from app.db.models.institucion import Institucion
+from app.db.models.usuarios_instituciones import UsuarioInstitucion  # <-- import correcto
 from app.db.models.identity import AspNetUser
 from app.schemas.institucion import (
     InstitucionListDTO,
@@ -14,12 +16,16 @@ from app.schemas.institucion import (
     InstitucionUpdate,
 )
 
+
 class InstitucionService:
     def __init__(self, db: Session):
         self.db = db
 
     # ---------- helpers ----------
     def _is_admin_by_user_id(self, user_id: str) -> bool:
+        """
+        Retorna True si el usuario tiene el rol ADMINISTRADOR.
+        """
         user = (
             self.db.query(AspNetUser)
             .options(joinedload(AspNetUser.roles))
@@ -28,6 +34,7 @@ class InstitucionService:
         )
         if not user:
             return False
+
         roles = [
             (getattr(r, "NormalizedName", None) or getattr(r, "Name", None) or "").upper()
             for r in (user.roles or [])
@@ -45,7 +52,7 @@ class InstitucionService:
         rows = (
             self.db.execute(
                 select(Institucion)
-                .where(Institucion.Active == True)
+                .where(Institucion.Active == True)  # noqa: E712
                 .order_by(Institucion.Nombre.asc())
             )
             .scalars()
@@ -63,7 +70,7 @@ class InstitucionService:
             select(Institucion)
             .join(UsuarioInstitucion, UsuarioInstitucion.InstitucionId == Institucion.Id)
             .where(
-                Institucion.Active == True,
+                Institucion.Active == True,  # noqa: E712
                 UsuarioInstitucion.UsuarioId == user_id,
             )
             .order_by(Institucion.Nombre.asc())

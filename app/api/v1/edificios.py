@@ -24,8 +24,9 @@ def list_edificios(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     ComunaId: int | None = Query(default=None),
+    active: bool | None = Query(default=True),  # <- NUEVO
 ):
-    return svc.list(db, q, page, page_size, ComunaId)
+    return svc.list(db, q, page, page_size, ComunaId, active)
 
 @router.get("/select", response_model=List[EdificioSelectDTO], summary="Select (Id, Nombre)")
 def select_edificios(
@@ -66,11 +67,21 @@ def update_edificio(
     return obj
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="(ADMINISTRADOR) Eliminar edificio (hard delete)")
+               summary="(ADMINISTRADOR) Eliminar edificio (soft-delete)")
 def delete_edificio(
     id: int,
     db: DbDep,
-    _current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
-    svc.delete(db, id)
+    svc.soft_delete(db, id, modified_by=current_user.id)
     return None
+
+@router.patch("/{id}/reactivar", response_model=EdificioDTO,
+              summary="(ADMINISTRADOR) Reactivar edificio")
+def reactivate_edificio(
+    id: int,
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    obj = svc.reactivate(db, id, modified_by=current_user.id)
+    return obj

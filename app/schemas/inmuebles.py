@@ -2,16 +2,7 @@
 from __future__ import annotations
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict
-
-# -------- Dirección --------
-class DireccionDTO(BaseModel):
-    Calle: Optional[str] = None
-    Numero: Optional[str] = None
-    RegionId: Optional[int] = None
-    ProvinciaId: Optional[int] = None
-    ComunaId: Optional[int] = None
-    DireccionCompleta: Optional[str] = None
-    model_config = ConfigDict(from_attributes=True)
+from app.schemas.direcciones import DireccionDTO  # <- usar DTO central
 
 # -------- Lecturas --------
 class InmuebleListDTO(BaseModel):
@@ -34,21 +25,19 @@ class InmuebleDTO(InmuebleListDTO):
 
 # -------- Escrituras --------
 class InmuebleCreate(BaseModel):
-    # obligatorios mínimos (ajustados al DDL de Divisiones)
     TipoInmueble: int
     Nombre: Optional[str] = None
     AnyoConstruccion: int
     ServicioId: int
     TipoPropiedadId: int
-    EdificioId: int  # se usa en Divisiones
-    # opcionales
+    EdificioId: int
     Superficie: Optional[float] = None
     TipoUsoId: Optional[int] = None
     TipoAdministracionId: Optional[int] = None
     AdministracionServicioId: Optional[int] = None
     ParentId: Optional[int] = None
     NroRol: Optional[str] = None
-    Direccion: Optional[DireccionDTO] = None
+    Direccion: Optional[DireccionDTO] = None  # <- usa DTO central
 
 class InmuebleUpdate(BaseModel):
     TipoInmueble: Optional[int] = None
@@ -63,7 +52,7 @@ class InmuebleUpdate(BaseModel):
     AdministracionServicioId: Optional[int] = None
     ParentId: Optional[int] = None
     NroRol: Optional[str] = None
-    Direccion: Optional[DireccionDTO] = None
+    Direccion: Optional[DireccionDTO] = None  # <- usa DTO central
     Active: Optional[bool] = None
 
 # -------- Compat: búsquedas/vínculos (como .NET) --------
@@ -74,7 +63,6 @@ class InmuebleByAddressRequest(BaseModel):
 
 class InmuebleUnidadRequest(BaseModel):
     UnidadId: int
-
 
 class UnidadVinculadaDTO(BaseModel):
     UnidadId: int

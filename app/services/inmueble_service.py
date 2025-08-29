@@ -11,8 +11,9 @@ from app.db.models.unidad_inmueble import UnidadInmueble
 from app.schemas.inmuebles import (
     InmuebleDTO, InmuebleListDTO,
     InmuebleCreate, InmuebleUpdate,
-    DireccionDTO, InmuebleByAddressRequest
+    InmuebleByAddressRequest
 )
+from app.schemas.direcciones import DireccionDTO
 
 class InmuebleService:
     def __init__(self, db: Session):

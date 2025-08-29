@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -12,5 +12,12 @@ def create(user: UserCreate, db: Session = Depends(get_db)):
     return create_user(db, user)
 
 @router.get("", response_model=list[UserOut])
-def read_users(db: Session = Depends(get_db)):
-    return get_users(db)
+def read_users(
+    db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0, description="Registros a omitir"),
+    limit: int = Query(50, ge=1, le=200, description="Registros a devolver"),
+    sort_by: str = Query("Id", description="Columna para ordenar"),
+    sort_dir: str = Query("asc", pattern="^(?i)(asc|desc)$", description="Dirección de orden")
+):
+    """Lista usuarios con paginación y orden obligatorio (requerido por MSSQL)."""
+    return get_users(db, skip=skip, limit=limit, sort_by=sort_by, sort_dir=sort_dir)
