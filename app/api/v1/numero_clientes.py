@@ -23,8 +23,9 @@ def list_numero_clientes(
     EmpresaDistribuidoraId: int | None = Query(default=None),
     TipoTarifaId: int | None = Query(default=None),
     DivisionId: int | None = Query(default=None),
+    active: bool | None = Query(default=True),  # <- NUEVO
 ):
-    return svc.list(db, q, page, page_size, EmpresaDistribuidoraId, TipoTarifaId, DivisionId)
+    return svc.list(db, q, page, page_size, EmpresaDistribuidoraId, TipoTarifaId, DivisionId, active)
 
 @router.get("/{num_cliente_id}", response_model=NumeroClienteDTO, summary="Detalle")
 def get_numero_cliente(
@@ -53,11 +54,20 @@ def update_numero_cliente(
     return svc.update(db, num_cliente_id, payload, modified_by=current_user.id)
 
 @router.delete("/{num_cliente_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="(ADMINISTRADOR) Eliminar número de cliente")
+               summary="(ADMINISTRADOR) Eliminar número de cliente (soft-delete)")
 def delete_numero_cliente(
     num_cliente_id: int,
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
-    svc.delete(db, num_cliente_id)
+    svc.soft_delete(db, num_cliente_id, modified_by=current_user.id)
     return None
+
+@router.patch("/{num_cliente_id}/reactivar", response_model=NumeroClienteDTO,
+              summary="(ADMINISTRADOR) Reactivar número de cliente")
+def reactivate_numero_cliente(
+    num_cliente_id: int,
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    return svc.reactivate(db, num_cliente_id, modified_by=current_user.id)

@@ -15,7 +15,6 @@ router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
 svc = CompraService()
 DbDep = Annotated[Session, Depends(get_db)]
 
-
 # ---- GET públicos ----
 @router.get("", response_model=dict, summary="Listado paginado de compras/consumos")
 def list_compras(
@@ -28,9 +27,9 @@ def list_compras(
     NumeroClienteId: int | None = Query(default=None),
     FechaDesde: str | None = Query(default=None),
     FechaHasta: str | None = Query(default=None),
+    active: bool | None = Query(default=True),  # <- NUEVO
 ):
-    return svc.list(db, q, page, page_size, DivisionId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta)
-
+    return svc.list(db, q, page, page_size, DivisionId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active)
 
 @router.get("/{compra_id}", response_model=CompraDTO, summary="Detalle (incluye items por medidor)")
 def get_compra(
@@ -42,7 +41,6 @@ def get_compra(
     dto = CompraDTO.model_validate(c)
     dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
     return dto
-
 
 # ---- Escrituras (ADMINISTRADOR) ----
 @router.post("", response_model=CompraDTO, status_code=status.HTTP_201_CREATED,
@@ -57,7 +55,6 @@ def create_compra(
     dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
     return dto
 
-
 @router.put("/{compra_id}", response_model=CompraDTO,
             summary="(ADMINISTRADOR) Actualizar compra/consumo")
 def update_compra(
@@ -71,17 +68,28 @@ def update_compra(
     dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
     return dto
 
-
 @router.delete("/{compra_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="(ADMINISTRADOR) Eliminar compra/consumo")
+               summary="(ADMINISTRADOR) Eliminar compra/consumo (soft-delete)")
 def delete_compra(
     compra_id: int,
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
-    svc.delete(db, compra_id)
+    svc.soft_delete(db, compra_id, modified_by=current_user.id)
     return None
 
+@router.patch("/{compra_id}/reactivar", response_model=CompraDTO,
+              summary="(ADMINISTRADOR) Reactivar compra/consumo")
+def reactivate_compra(
+    compra_id: int,
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    c = svc.reactivate(db, compra_id, modified_by=current_user.id)
+    items = svc._items_by_compra(db, compra_id)
+    dto = CompraDTO.model_validate(c)
+    dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
+    return dto
 
 # ---- Reemplazar items por medidor (ADMIN) ----
 @router.put("/{compra_id}/medidores", response_model=List[CompraMedidorItemDTO],
@@ -94,7 +102,6 @@ def replace_items_compra(
 ):
     rows = svc.replace_items(db, compra_id, [x.model_dump() for x in (payload.Items or [])])
     return [CompraMedidorItemDTO.model_validate(x) for x in rows]
-
 
 # ---- Resumen mensual simple ----
 @router.get("/resumen/mensual", response_model=List[dict],

@@ -10,22 +10,16 @@ from sqlalchemy import func, and_, delete, extract
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
 
-
 CM_TBL = CompraMedidor.__table__
-
 
 # ---------------- Helpers ----------------
 def _to_dt(s: str | None) -> datetime | None:
-    """Convierte strings comunes (YYYY-MM-DD, ISO8601) a datetime."""
     if not s:
         return None
     try:
-        # ISO 8601 / 'YYYY-MM-DDTHH:MM:SS(.mmm)(Z)'
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
-        # fallback: solo fecha
         return datetime.strptime(s[:10], "%Y-%m-%d")
-
 
 class CompraService:
     # -------- listados --------
@@ -40,8 +34,12 @@ class CompraService:
         numero_cliente_id: Optional[int] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
+        active: Optional[bool] = True,  # <- NUEVO
     ) -> dict:
         query = db.query(Compra)
+
+        if active is not None:
+            query = query.filter(Compra.Active == active)
 
         if q:
             like = f"%{q}%"
@@ -54,7 +52,6 @@ class CompraService:
         if numero_cliente_id is not None:
             query = query.filter(Compra.NumeroClienteId == numero_cliente_id)
 
-        # rango por FechaCompra
         if fecha_desde:
             query = query.filter(Compra.FechaCompra >= _to_dt(fecha_desde))
         if fecha_hasta:
@@ -111,7 +108,6 @@ class CompraService:
         db.add(obj)
         db.flush()  # para obtener Id
 
-        # Insert masivo de items
         payload = []
         for it in data.Items or []:
             payload.append({
@@ -133,7 +129,6 @@ class CompraService:
 
         payload = data.model_dump(exclude_unset=True)
 
-        # normaliza fechas si vienen como string
         for k in ("InicioLectura", "FinLectura", "FechaCompra", "ReviewedAt"):
             if k in payload and payload[k] is not None:
                 payload[k] = _to_dt(payload[k])
@@ -149,15 +144,31 @@ class CompraService:
         db.refresh(obj)
         return obj, self._items_by_compra(db, obj.Id)
 
-    def delete(self, db: Session, compra_id: int):
+    def soft_delete(self, db: Session, compra_id: int, modified_by: Optional[str] = None):
         obj = self.get(db, compra_id)
-        # Limpieza explícita (además del ON DELETE CASCADE)
-        db.execute(delete(CM_TBL).where(CM_TBL.c.CompraId == compra_id))
-        db.delete(obj)
+        if not obj.Active:
+            return
+        # No borramos items (quedan asociados a la compra inactiva)
+        obj.Active = False
+        obj.Version = (obj.Version or 0) + 1
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
         db.commit()
 
+    def reactivate(self, db: Session, compra_id: int, modified_by: Optional[str] = None) -> Compra:
+        obj = self.get(db, compra_id)
+        if obj.Active:
+            return obj
+        obj.Active = True
+        obj.Version = (obj.Version or 0) + 1
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
+        db.commit()
+        db.refresh(obj)
+        return obj
+
     def replace_items(self, db: Session, compra_id: int, items: List[dict]) -> List[CompraMedidor]:
-        self.get(db, compra_id)  # valida existencia
+        self.get(db, compra_id)
         db.execute(delete(CM_TBL).where(CM_TBL.c.CompraId == compra_id))
 
         payload = []

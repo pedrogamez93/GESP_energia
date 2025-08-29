@@ -1,4 +1,3 @@
-# app/api/v1/empresas_distribuidoras.py
 from typing import Annotated, List
 from fastapi import APIRouter, Depends, Query, Path, status
 from sqlalchemy.orm import Session
@@ -25,8 +24,9 @@ def list_empresas(
     page_size: int = Query(50, ge=1, le=200),
     EnergeticoId: int | None = Query(default=None),
     ComunaId: int | None = Query(default=None),
+    active: bool | None = Query(default=True),  # <- NUEVO
 ):
-    return svc.list(db, q, page, page_size, EnergeticoId, ComunaId)
+    return svc.list(db, q, page, page_size, EnergeticoId, ComunaId, active)
 
 @router.get("/select", response_model=List[EmpresaDistribuidoraSelectDTO])
 def select_empresas(
@@ -56,8 +56,7 @@ def create_empresa(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
-    ed = svc.create(db, payload)
-    # reutilizo get_empresa para devolver con comunas
+    ed = svc.create(db, payload, created_by=current_user.id)
     return get_empresa(db, ed.Id)
 
 @router.put("/{id}", response_model=EmpresaDistribuidoraDetailDTO,
@@ -68,18 +67,28 @@ def update_empresa(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
-    svc.update(db, id, payload)
+    svc.update(db, id, payload, modified_by=current_user.id)
     return get_empresa(db, id)
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="(ADMINISTRADOR) Eliminar empresa distribuidora (hard delete)")
+               summary="(ADMINISTRADOR) Eliminar empresa distribuidora (soft-delete)")
 def delete_empresa(
     id: int,
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
-    svc.delete(db, id)
+    svc.soft_delete(db, id, modified_by=current_user.id)
     return None
+
+@router.patch("/{id}/reactivar", response_model=EmpresaDistribuidoraDetailDTO,
+              summary="(ADMINISTRADOR) Reactivar empresa distribuidora")
+def reactivate_empresa(
+    id: int,
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    svc.reactivate(db, id, modified_by=current_user.id)
+    return get_empresa(db, id)
 
 # -------- Set de comunas (opcional, explícito) --------
 @router.put("/{id}/comunas", response_model=List[int],

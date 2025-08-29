@@ -10,9 +10,13 @@ from app.db.models.numero_cliente import NumeroCliente
 class NumeroClienteService:
     def list(
         self, db: Session, q: Optional[str], page: int, page_size: int,
-        empresa_id: Optional[int] = None, tipo_tarifa_id: Optional[int] = None, division_id: Optional[int] = None
+        empresa_id: Optional[int] = None, tipo_tarifa_id: Optional[int] = None,
+        division_id: Optional[int] = None,
+        active: Optional[bool] = True,   # <- NUEVO
     ) -> dict:
         query = db.query(NumeroCliente)
+        if active is not None:
+            query = query.filter(NumeroCliente.Active == active)
 
         if q:
             like = f"%{q}%"
@@ -73,6 +77,23 @@ class NumeroClienteService:
         db.commit(); db.refresh(obj)
         return obj
 
-    def delete(self, db: Session, num_cliente_id: int) -> None:
+    def soft_delete(self, db: Session, num_cliente_id: int, modified_by: str | None = None) -> None:
         obj = self.get(db, num_cliente_id)
-        db.delete(obj); db.commit()
+        if not obj.Active:
+            return
+        obj.Active = False
+        obj.Version = (obj.Version or 0) + 1
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
+        db.commit()
+
+    def reactivate(self, db: Session, num_cliente_id: int, modified_by: str | None = None) -> NumeroCliente:
+        obj = self.get(db, num_cliente_id)
+        if obj.Active:
+            return obj
+        obj.Active = True
+        obj.Version = (obj.Version or 0) + 1
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
+        db.commit(); db.refresh(obj)
+        return obj
