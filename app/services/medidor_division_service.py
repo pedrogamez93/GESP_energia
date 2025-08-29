@@ -30,7 +30,6 @@ class MedidorDivisionService:
         return [r[0] for r in rows]
 
     def replace_for_division(self, db: Session, division_id: int, medidor_ids: Iterable[int]) -> List[MedidorDivision]:
-        # borra existentes para la división y crea nuevos vínculos
         db.execute(delete(MDIV_TBL).where(MDIV_TBL.c.DivisionId == division_id))
 
         now = datetime.utcnow()

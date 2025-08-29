@@ -39,22 +39,15 @@ class MedidorVinculoService:
         )
 
     # --- escrituras ---
-    def set_divisiones_para_medidor(
-        self, db: Session, medidor_id: int, division_ids: Iterable[int]
-    ) -> list[int]:
+    def set_divisiones_para_medidor(self, db: Session, medidor_id: int, division_ids: Iterable[int]) -> list[int]:
         db.execute(delete(MDIV_TBL).where(MDIV_TBL.c.MedidorId == medidor_id))
 
         now = datetime.utcnow()
         payload = [
             {
-                "CreatedAt": now,
-                "UpdatedAt": now,
-                "Version": 0,
-                "Active": True,
-                "ModifiedBy": None,
-                "CreatedBy": None,
-                "DivisionId": int(d),
-                "MedidorId": int(medidor_id),
+                "CreatedAt": now, "UpdatedAt": now, "Version": 0, "Active": True,
+                "ModifiedBy": None, "CreatedBy": None,
+                "DivisionId": int(d), "MedidorId": int(medidor_id),
             }
             for d in (division_ids or [])
         ]

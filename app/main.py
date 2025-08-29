@@ -55,6 +55,7 @@ from app.api.v1 import compras
 from app.api.v1.ajustes import router as ajustes_router
 from app.api.v1.frontis import router as frontis_router
 from app.api.v1.reportes import router as reportes_router
+from app.api.v1.parametros_medicion import router as parametros_medicion_router
 
 
 
@@ -94,6 +95,8 @@ tags_metadata = [
     {"name": "Pisos", "description": "Gestión de pisos por inmueble (División)."},
     {"name": "Áreas", "description": "Gestión de áreas por piso."},
     {"name": "Direcciones", "description": "Catálogo/CRUD de direcciones y resolución exacta."},
+    {"name": "Parámetros de medición", "description": "Catálogo y CRUD de parámetros (vinculados a UM)."},
+
 ]
 
 # --- App ---
@@ -168,3 +171,4 @@ app.include_router(direcciones_router)
 app.include_router(ajustes_router)
 app.include_router(frontis_router)
 app.include_router(reportes_router)
+app.include_router(parametros_medicion_router)

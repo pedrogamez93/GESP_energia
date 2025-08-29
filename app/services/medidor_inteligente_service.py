@@ -60,7 +60,9 @@ class MedidorInteligenteService:
             CreatedBy=created_by, ModifiedBy=created_by,
             ChileMedidoId=chilemedido_id,
         )
-        db.add(obj); db.commit(); db.refresh(obj)
+        db.add(obj)
+        db.commit()
+        db.refresh(obj)
         return obj
 
     def update_chilemedido(
@@ -71,7 +73,8 @@ class MedidorInteligenteService:
         obj.Version = (obj.Version or 0) + 1
         obj.UpdatedAt = datetime.utcnow()
         obj.ModifiedBy = modified_by
-        db.commit(); db.refresh(obj)
+        db.commit()
+        db.refresh(obj)
         return obj
 
     # --- reemplazos atómicos de vínculos ---
