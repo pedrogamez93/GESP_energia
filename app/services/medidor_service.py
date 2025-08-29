@@ -1,29 +1,22 @@
 from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional, List
-from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, or_, delete
+from typing import Optional, Iterable
 
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import func, delete
 
 from app.db.models.medidor import Medidor
+from app.db.models.numero_cliente import NumeroCliente
 from app.db.models.medidor_division import MedidorDivision
+from app.db.models.compra_medidor import CompraMedidor
 
-# Si aún no existe el modelo, crea app/db/models/compra_medidor.py (abajo)
-try:
-    from app.db.models.compra_medidor import CompraMedidor
-except Exception:
-    CompraMedidor = None  # type: ignore
+MDIV_TBL = MedidorDivision.__table__
 
 
 class MedidorService:
-    # -------- util ----------
-    @staticmethod
-    def _norm(txt: str):
-        # normaliza para comparaciones case/space-insensitive
-        return func.lower(func.trim(func.coalesce(txt, "")))
-
-    # -------- Listado / filtros ----------
+    # ---------------- Listado / lecturas ----------------
     def list(
         self,
         db: Session,
@@ -32,192 +25,178 @@ class MedidorService:
         page_size: int,
         numero_cliente_id: Optional[int] = None,
         division_id: Optional[int] = None,
-        smart: Optional[bool] = None,
-        consumo: Optional[bool] = None,
-        chilemedido: Optional[bool] = None,
     ) -> dict:
         query = db.query(Medidor)
 
         if q:
-            like = f"%{q.strip()}%"
-            query = query.filter(self._norm(Medidor.Numero).like(func.lower(like)))
+            like = f"%{q}%"
+            query = (
+                query.outerjoin(NumeroCliente, NumeroCliente.Id == Medidor.NumeroClienteId)
+                .filter(
+                    func.lower(func.coalesce(Medidor.Numero, "")).like(func.lower(like)) |
+                    func.lower(func.coalesce(NumeroCliente.NombreCliente, "")).like(func.lower(like))
+                )
+            )
 
         if numero_cliente_id is not None:
             query = query.filter(Medidor.NumeroClienteId == numero_cliente_id)
 
         if division_id is not None:
-            # Soporta ambos: columna directa y relación en tabla puente
-            query = (
-                query.outerjoin(
-                    MedidorDivision,
-                    MedidorDivision.MedidorId == Medidor.Id
-                )
-                .filter(
-                    or_(
-                        Medidor.DivisionId == division_id,
-                        MedidorDivision.DivisionId == division_id
-                    )
-                )
-                .distinct()
-            )
-
-        if smart is not None:
-            query = query.filter(Medidor.Smart == bool(smart))
-
-        if consumo is not None:
-            query = query.filter(Medidor.MedidorConsumo == bool(consumo))
-
-        if chilemedido is not None:
-            query = query.filter(Medidor.Chilemedido == bool(chilemedido))
+            query = query.filter(Medidor.DivisionId == division_id)
 
         total = query.count()
         items = (
-            query.order_by(Medidor.NumeroClienteId, Medidor.Numero, Medidor.Id)
-                 .offset((page - 1) * page_size)
-                 .limit(page_size)
-                 .all()
+            query.order_by(Medidor.Numero.nullslast(), Medidor.Id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
         )
         return {"total": total, "page": page, "page_size": page_size, "items": items}
 
-    # -------- CRUD ----------
+    def by_division(self, db: Session, division_id: int):
+        return (
+            db.query(Medidor)
+            .filter(Medidor.DivisionId == division_id)
+            .order_by(Medidor.Numero.nullslast(), Medidor.Id)
+            .all()
+        )
+
+    def by_numero_cliente(self, db: Session, numero_cliente_id: int):
+        return (
+            db.query(Medidor)
+            .filter(Medidor.NumeroClienteId == numero_cliente_id)
+            .order_by(Medidor.Numero.nullslast(), Medidor.Id)
+            .all()
+        )
+
+    def by_numcliente_and_numero(
+        self, db: Session, numero_cliente_id: int, num_medidor: str
+    ) -> Optional[Medidor]:
+        if not num_medidor:
+            return None
+        return (
+            db.query(Medidor)
+            .filter(
+                Medidor.NumeroClienteId == numero_cliente_id,
+                func.lower(func.coalesce(Medidor.Numero, "")) == func.lower(num_medidor),
+            )
+            .first()
+        )
+
+    def for_compra_by_numcliente_division(
+        self, db: Session, numero_cliente_id: int, division_id: int
+    ):
+        return (
+            db.query(Medidor)
+            .filter(
+                Medidor.NumeroClienteId == numero_cliente_id,
+                Medidor.DivisionId == division_id,
+                Medidor.Active == True,
+            )
+            .order_by(Medidor.Numero.nullslast(), Medidor.Id)
+            .all()
+        )
+
+    def by_compra(self, db: Session, compra_id: int):
+        ids = (
+            db.query(CompraMedidor.MedidorId)
+            .filter(CompraMedidor.CompraId == compra_id)
+            .all()
+        )
+        id_list = [r[0] for r in ids]
+        if not id_list:
+            return []
+        return db.query(Medidor).filter(Medidor.Id.in_(id_list)).order_by(Medidor.Id).all()
+
+    def check_exist(
+        self,
+        db: Session,
+        numero_cliente_id: int,
+        numero: str,
+        division_id: Optional[int] = None,
+    ) -> Optional[Medidor]:
+        if not numero:
+            return None
+        q = db.query(Medidor).filter(
+            Medidor.NumeroClienteId == numero_cliente_id,
+            func.lower(func.coalesce(Medidor.Numero, "")) == func.lower(numero),
+        )
+        if division_id is not None:
+            q = q.filter(Medidor.DivisionId == division_id)
+        return q.first()
+
     def get(self, db: Session, medidor_id: int) -> Medidor:
         obj = db.query(Medidor).filter(Medidor.Id == medidor_id).first()
         if not obj:
             raise HTTPException(status_code=404, detail="Medidor no encontrado")
         return obj
 
-    def create(self, db: Session, data, created_by: str | None = None) -> Medidor:
-        # evita duplicados por (NumeroClienteId, Numero [, DivisionId])
-        dupe = self.check_exist(db, data.NumeroClienteId, data.Numero, getattr(data, "DivisionId", None))
-        if dupe:
-            raise HTTPException(status_code=409, detail="Ya existe un medidor con ese número para el cliente/división")
-
+    # ---------------- Escrituras ----------------
+    def create(self, db: Session, data, created_by: Optional[str]) -> Medidor:
         now = datetime.utcnow()
         obj = Medidor(
-            CreatedAt=now, UpdatedAt=now, Version=0, Active=True,
-            CreatedBy=created_by, ModifiedBy=created_by,
-            NumeroClienteId=data.NumeroClienteId,
+            CreatedAt=now,
+            UpdatedAt=now,
+            Version=0,
+            Active=True,
+            CreatedBy=created_by,
+            ModifiedBy=created_by,
             Numero=data.Numero,
-            Fases=getattr(data, "Fases", None),
-            Smart=getattr(data, "Smart", None),
-            Compartido=getattr(data, "Compartido", None),
-            DivisionId=getattr(data, "DivisionId", None),
-            Factura=getattr(data, "Factura", None),
-            Chilemedido=getattr(data, "Chilemedido", None),
-            DeviceId=getattr(data, "DeviceId", None),
-            MedidorConsumo=getattr(data, "MedidorConsumo", None),
+            NumeroClienteId=data.NumeroClienteId,
+            Fases=data.Fases or 0,
+            Smart=bool(data.Smart),
+            Compartido=bool(data.Compartido),
+            DivisionId=data.DivisionId,
+            Factura=data.Factura,
+            Chilemedido=bool(data.Chilemedido),
+            DeviceId=data.DeviceId,
+            MedidorConsumo=bool(data.MedidorConsumo),
         )
-        db.add(obj); db.commit(); db.refresh(obj)
+        db.add(obj)
+        db.commit()
+        db.refresh(obj)
         return obj
 
-    def update(self, db: Session, medidor_id: int, data, modified_by: str | None = None) -> Medidor:
+    def update(self, db: Session, medidor_id: int, data, modified_by: Optional[str]) -> Medidor:
         obj = self.get(db, medidor_id)
-
-        # si cambia Numero/Division, validar duplicado
-        will_num = data.model_dump(exclude_unset=True).get("Numero", obj.Numero)
-        will_div = data.model_dump(exclude_unset=True).get("DivisionId", obj.DivisionId)
-        dupe = (
-            self.check_exist(db, obj.NumeroClienteId, will_num, will_div)
-            and self.by_numcliente_and_numero(db, obj.NumeroClienteId, will_num).Id != obj.Id  # type: ignore
-        )
-        if dupe:
-            raise HTTPException(status_code=409, detail="Conflicto: otro medidor ya tiene ese número/división")
-
         for name, value in data.model_dump(exclude_unset=True).items():
             setattr(obj, name, value)
         obj.Version = (obj.Version or 0) + 1
         obj.UpdatedAt = datetime.utcnow()
         obj.ModifiedBy = modified_by
-        db.commit(); db.refresh(obj)
+        db.commit()
+        db.refresh(obj)
         return obj
 
     def delete(self, db: Session, medidor_id: int) -> None:
         obj = self.get(db, medidor_id)
-        db.delete(obj); db.commit()
-
-    # -------- consultas específicas ----------
-    def by_numero_cliente(self, db: Session, numero_cliente_id: int) -> List[Medidor]:
-        return (
-            db.query(Medidor)
-              .filter(Medidor.NumeroClienteId == numero_cliente_id)
-              .order_by(Medidor.Numero, Medidor.Id)
-              .all()
-        )
-
-    def by_division(self, db: Session, division_id: int) -> List[Medidor]:
-        return (
-            db.query(Medidor)
-              .outerjoin(MedidorDivision, MedidorDivision.MedidorId == Medidor.Id)
-              .filter(or_(Medidor.DivisionId == division_id, MedidorDivision.DivisionId == division_id))
-              .order_by(Medidor.Numero, Medidor.Id)
-              .distinct()
-              .all()
-        )
-
-    def by_numcliente_and_numero(self, db: Session, numero_cliente_id: int, num_medidor: str) -> Medidor | None:
-        if not num_medidor:
-            return None
-        return (
-            db.query(Medidor)
-              .filter(
-                  and_(
-                      Medidor.NumeroClienteId == numero_cliente_id,
-                      self._norm(Medidor.Numero) == self._norm(num_medidor),
-                  )
-              )
-              .first()
-        )
-
-    # -------- para compras ----------
-    def for_compra_by_numcliente_division(self, db: Session, numero_cliente_id: int, division_id: int) -> List[Medidor]:
-        # Medidores del cliente que sean "globales" (DivisionId NULL) o específicos de la división
-        return (
-            db.query(Medidor)
-              .filter(
-                  Medidor.NumeroClienteId == numero_cliente_id,
-                  or_(Medidor.DivisionId == None, Medidor.DivisionId == division_id)  # noqa: E711
-              )
-              .order_by(Medidor.Numero, Medidor.Id)
-              .all()
-        )
-
-    def by_compra(self, db: Session, compra_id: int) -> List[Medidor]:
-        if not CompraMedidor:
-            raise HTTPException(status_code=501, detail="Modelo CompraMedidor no disponible")
-        return (
-            db.query(Medidor)
-              .join(CompraMedidor, CompraMedidor.MedidorId == Medidor.Id)
-              .filter(CompraMedidor.CompraId == compra_id)
-              .order_by(Medidor.Numero, Medidor.Id)
-              .all()
-        )
-
-    def check_exist(self, db: Session, numero_cliente_id: int, numero: str, division_id: int | None) -> Medidor | None:
-        qry = db.query(Medidor).filter(
-            Medidor.NumeroClienteId == numero_cliente_id,
-            self._norm(Medidor.Numero) == self._norm(numero),
-        )
-        if division_id is not None:
-            qry = qry.filter(or_(Medidor.DivisionId == None, Medidor.DivisionId == division_id))  # noqa: E711
-        return qry.first()
-
-    # -------- divisiones (set) ----------
-    def list_divisiones(self, db: Session, medidor_id: int) -> List[int]:
-        rows = (
-            db.query(MedidorDivision.DivisionId)
-              .filter(MedidorDivision.MedidorId == medidor_id)
-              .all()
-        )
-        return [r[0] for r in rows]
-
-    def set_divisiones(self, db: Session, medidor_id: int, division_ids: List[int], actor_id: str | None = None) -> List[int]:
-        db.execute(delete(MedidorDivision).where(MedidorDivision.MedidorId == medidor_id))
-        now = datetime.utcnow()
-        for did in set(division_ids or []):
-            db.add(MedidorDivision(
-                CreatedAt=now, UpdatedAt=now, Version=0, Active=True,
-                CreatedBy=actor_id, ModifiedBy=actor_id,
-                MedidorId=medidor_id, DivisionId=int(did),
-            ))
+        db.delete(obj)
         db.commit()
-        return self.list_divisiones(db, medidor_id)
+
+    # ---------------- N-N con Divisiones (dbo.MedidorDivision) ----------------
+    def set_divisiones(self, db: Session, medidor_id: int, division_ids: Iterable[int], actor_id: Optional[str]) -> list[int]:
+        db.execute(delete(MDIV_TBL).where(MDIV_TBL.c.MedidorId == medidor_id))
+        now = datetime.utcnow()
+        payload = [
+            {
+                "CreatedAt": now,
+                "UpdatedAt": now,
+                "Version": 0,
+                "Active": True,
+                "ModifiedBy": actor_id,
+                "CreatedBy": actor_id,
+                "DivisionId": int(d),
+                "MedidorId": int(medidor_id),
+            }
+            for d in (division_ids or [])
+        ]
+        if payload:
+            db.execute(MDIV_TBL.insert(), payload)
+        db.commit()
+
+        return [
+            r[0]
+            for r in db.query(MedidorDivision.DivisionId)
+            .filter(MedidorDivision.MedidorId == medidor_id)
+            .all()
+        ]

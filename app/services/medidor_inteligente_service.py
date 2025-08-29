@@ -1,85 +1,139 @@
 from __future__ import annotations
-from datetime import datetime
-from typing import Iterable, List
-from sqlalchemy.orm import Session
-from sqlalchemy import delete, select
 
-from fastapi import HTTPException
-from app.db.models.medidor_inteligente import (
-    MedidorInteligente,
+from datetime import datetime
+from typing import Iterable, Tuple, List, Optional
+
+from sqlalchemy.orm import Session
+from sqlalchemy import delete
+
+from app.db.models.medidor_inteligente import MedidorInteligente
+from app.db.models.medidor_inteligente_links import (
     MedidorInteligenteDivision,
     MedidorInteligenteEdificio,
     MedidorInteligenteServicio,
 )
 
+MID_TBL = MedidorInteligenteDivision.__table__
+MIE_TBL = MedidorInteligenteEdificio.__table__
+MIS_TBL = MedidorInteligenteServicio.__table__
+
+
 class MedidorInteligenteService:
-    # -------- CRUD básico --------
+    # -------- lecturas --------
     def get(self, db: Session, med_int_id: int) -> MedidorInteligente:
-        obj = db.get(MedidorInteligente, med_int_id)
+        obj = db.query(MedidorInteligente).filter(MedidorInteligente.Id == med_int_id).first()
         if not obj:
-            raise HTTPException(status_code=404, detail="Medidor inteligente no encontrado")
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="No encontrado")
         return obj
 
-    def find_by_chilemedido(self, db: Session, chile_medido_id: int) -> MedidorInteligente | None:
-        return db.query(MedidorInteligente).filter(
-            MedidorInteligente.ChileMedidoId == chile_medido_id
-        ).first()
+    def find_by_chilemedido(self, db: Session, chilemedido_id: int) -> Optional[MedidorInteligente]:
+        return (
+            db.query(MedidorInteligente)
+            .filter(MedidorInteligente.ChileMedidoId == chilemedido_id)
+            .first()
+        )
 
-    def create(self, db: Session, chile_medido_id: int, created_by: str | None = None) -> MedidorInteligente:
+    def get_detail_ids(self, db: Session, med_int_id: int) -> Tuple[List[int], List[int], List[int]]:
+        divs = (
+            db.query(MedidorInteligenteDivision.DivisionId)
+            .filter(MedidorInteligenteDivision.MedidorInteligenteId == med_int_id)
+            .all()
+        )
+        edis = (
+            db.query(MedidorInteligenteEdificio.EdificioId)
+            .filter(MedidorInteligenteEdificio.MedidorInteligenteId == med_int_id)
+            .all()
+        )
+        srvs = (
+            db.query(MedidorInteligenteServicio.ServicioId)
+            .filter(MedidorInteligenteServicio.MedidorInteligenteId == med_int_id)
+            .all()
+        )
+        return [r[0] for r in divs], [r[0] for r in edis], [r[0] for r in srvs]
+
+    # -------- escrituras --------
+    def create(self, db: Session, chilemedido_id: int, created_by: str | None) -> MedidorInteligente:
         now = datetime.utcnow()
         obj = MedidorInteligente(
             CreatedAt=now, UpdatedAt=now, Version=0, Active=True,
             CreatedBy=created_by, ModifiedBy=created_by,
-            ChileMedidoId=chile_medido_id,
+            ChileMedidoId=chilemedido_id,
         )
         db.add(obj); db.commit(); db.refresh(obj)
         return obj
 
-    def update_chilemedido(self, db: Session, med_int_id: int, new_val: int, modified_by: str | None = None) -> MedidorInteligente:
+    def update_chilemedido(
+        self, db: Session, med_int_id: int, chilemedido_id: int, modified_by: str | None
+    ) -> MedidorInteligente:
         obj = self.get(db, med_int_id)
-        obj.ChileMedidoId = new_val
+        obj.ChileMedidoId = chilemedido_id
         obj.Version = (obj.Version or 0) + 1
         obj.UpdatedAt = datetime.utcnow()
         obj.ModifiedBy = modified_by
         db.commit(); db.refresh(obj)
         return obj
 
-    # -------- Vínculos (replace set) --------
-    def _replace(self, db: Session, model, med_int_id: int, field: str, ids: Iterable[int]) -> List[int]:
-        db.execute(delete(model).where(model.MedidorInteligenteId == med_int_id))
+    # --- reemplazos atómicos de vínculos ---
+    def set_divisiones(self, db: Session, med_int_id: int, division_ids: Iterable[int]) -> list[int]:
+        db.execute(delete(MID_TBL).where(MID_TBL.c.MedidorInteligenteId == med_int_id))
         now = datetime.utcnow()
-        for x in set(ids or []):
-            db.add(model(
-                MedidorInteligenteId=med_int_id,
-                **{field: int(x)},
-                CreatedAt=now, UpdatedAt=now, Version=0, Active=True
-            ))
+        payload = [
+            {
+                "CreatedAt": now, "UpdatedAt": now, "Version": 0, "Active": True,
+                "ModifiedBy": None, "CreatedBy": None,
+                "MedidorInteligenteId": int(med_int_id), "DivisionId": int(d),
+            }
+            for d in (division_ids or [])
+        ]
+        if payload:
+            db.execute(MID_TBL.insert(), payload)
         db.commit()
-        col = getattr(model, field)
-        return [r[0] for r in db.execute(select(col).where(model.MedidorInteligenteId == med_int_id)).all()]
+        rows = (
+            db.query(MedidorInteligenteDivision.DivisionId)
+            .filter(MedidorInteligenteDivision.MedidorInteligenteId == med_int_id)
+            .all()
+        )
+        return [r[0] for r in rows]
 
-    def set_divisiones(self, db: Session, med_int_id: int, ids: Iterable[int]) -> List[int]:
-        self.get(db, med_int_id)
-        return self._replace(db, MedidorInteligenteDivision, med_int_id, "DivisionId", ids)
+    def set_edificios(self, db: Session, med_int_id: int, edificio_ids: Iterable[int]) -> list[int]:
+        db.execute(delete(MIE_TBL).where(MIE_TBL.c.MedidorInteligenteId == med_int_id))
+        now = datetime.utcnow()
+        payload = [
+            {
+                "CreatedAt": now, "UpdatedAt": now, "Version": 0, "Active": True,
+                "ModifiedBy": None, "CreatedBy": None,
+                "MedidorInteligenteId": int(med_int_id), "EdificioId": int(eid),
+            }
+            for eid in (edificio_ids or [])
+        ]
+        if payload:
+            db.execute(MIE_TBL.insert(), payload)
+        db.commit()
+        rows = (
+            db.query(MedidorInteligenteEdificio.EdificioId)
+            .filter(MedidorInteligenteEdificio.MedidorInteligenteId == med_int_id)
+            .all()
+        )
+        return [r[0] for r in rows]
 
-    def set_edificios(self, db: Session, med_int_id: int, ids: Iterable[int]) -> List[int]:
-        self.get(db, med_int_id)
-        return self._replace(db, MedidorInteligenteEdificio, med_int_id, "EdificioId", ids)
-
-    def set_servicios(self, db: Session, med_int_id: int, ids: Iterable[int]) -> List[int]:
-        self.get(db, med_int_id)
-        return self._replace(db, MedidorInteligenteServicio, med_int_id, "ServicioId", ids)
-
-    # -------- detalle (Ids vinculados) --------
-    def get_detail_ids(self, db: Session, med_int_id: int) -> tuple[list[int], list[int], list[int]]:
-        self.get(db, med_int_id)
-        divs = [r[0] for r in db.execute(
-            select(MedidorInteligenteDivision.DivisionId).where(MedidorInteligenteDivision.MedidorInteligenteId == med_int_id)
-        ).all()]
-        edis = [r[0] for r in db.execute(
-            select(MedidorInteligenteEdificio.EdificioId).where(MedidorInteligenteEdificio.MedidorInteligenteId == med_int_id)
-        ).all()]
-        srvs = [r[0] for r in db.execute(
-            select(MedidorInteligenteServicio.ServicioId).where(MedidorInteligenteServicio.MedidorInteligenteId == med_int_id)
-        ).all()]
-        return divs, edis, srvs
+    def set_servicios(self, db: Session, med_int_id: int, servicio_ids: Iterable[int]) -> list[int]:
+        db.execute(delete(MIS_TBL).where(MIS_TBL.c.MedidorInteligenteId == med_int_id))
+        now = datetime.utcnow()
+        payload = [
+            {
+                "CreatedAt": now, "UpdatedAt": now, "Version": 0, "Active": True,
+                "ModifiedBy": None, "CreatedBy": None,
+                "MedidorInteligenteId": int(med_int_id), "ServicioId": int(sid),
+            }
+            for sid in (servicio_ids or [])
+        ]
+        if payload:
+            db.execute(MIS_TBL.insert(), payload)
+        db.commit()
+        rows = (
+            db.query(MedidorInteligenteServicio.ServicioId)
+            .filter(MedidorInteligenteServicio.MedidorInteligenteId == med_int_id)
+            .all()
+        )
+        return [r[0] for r in rows]

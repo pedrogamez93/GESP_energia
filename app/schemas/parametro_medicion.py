@@ -2,13 +2,13 @@ from __future__ import annotations
 from pydantic import BaseModel
 from typing import Optional
 
-class UnidadMedidaDTO(BaseModel):
+class ParametroMedicionDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
     class Config: from_attributes = True
 
-class UnidadMedidaCreate(BaseModel):
+class ParametroMedicionCreate(BaseModel):
     Nombre: str
 
-class UnidadMedidaUpdate(BaseModel):
+class ParametroMedicionUpdate(BaseModel):
     Nombre: str

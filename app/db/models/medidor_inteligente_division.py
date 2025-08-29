@@ -5,8 +5,8 @@ from sqlalchemy import BigInteger, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
-class MedidorDivision(Base):
-    __tablename__ = "MedidorDivision"          # <-- nombre EXACTO de la tabla en SQL
+class MedidorInteligenteDivision(Base):
+    __tablename__ = "MedidorInteligenteDivisiones"
     __table_args__ = {"schema": "dbo"}
 
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -19,5 +19,5 @@ class MedidorDivision(Base):
     ModifiedBy: Mapped[str | None] = mapped_column(nullable=True)
     CreatedBy:  Mapped[str | None] = mapped_column(nullable=True)
 
-    DivisionId: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    MedidorId:  Mapped[int] = mapped_column(BigInteger, nullable=False)
+    MedidorInteligenteId: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    DivisionId:           Mapped[int] = mapped_column(BigInteger, nullable=False)

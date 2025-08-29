@@ -5,6 +5,7 @@ from sqlalchemy import BigInteger, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
+
 class MedidorInteligenteDivision(Base):
     __tablename__ = "MedidorInteligenteDivisiones"
     __table_args__ = {"schema": "dbo"}
@@ -16,8 +17,10 @@ class MedidorInteligenteDivision(Base):
     Active:    Mapped[bool]     = mapped_column(Boolean, nullable=False, default=True)
     ModifiedBy: Mapped[str | None] = mapped_column(nullable=True)
     CreatedBy:  Mapped[str | None] = mapped_column(nullable=True)
+
     MedidorInteligenteId: Mapped[int] = mapped_column(BigInteger, nullable=False)
     DivisionId:           Mapped[int] = mapped_column(BigInteger, nullable=False)
+
 
 class MedidorInteligenteEdificio(Base):
     __tablename__ = "MedidorInteligenteEdificios"
@@ -30,8 +33,10 @@ class MedidorInteligenteEdificio(Base):
     Active:    Mapped[bool]     = mapped_column(Boolean, nullable=False, default=True)
     ModifiedBy: Mapped[str | None] = mapped_column(nullable=True)
     CreatedBy:  Mapped[str | None] = mapped_column(nullable=True)
+
     MedidorInteligenteId: Mapped[int] = mapped_column(BigInteger, nullable=False)
     EdificioId:           Mapped[int] = mapped_column(BigInteger, nullable=False)
+
 
 class MedidorInteligenteServicio(Base):
     __tablename__ = "MedidorInteligenteServicios"
@@ -44,5 +49,6 @@ class MedidorInteligenteServicio(Base):
     Active:    Mapped[bool]     = mapped_column(Boolean, nullable=False, default=True)
     ModifiedBy: Mapped[str | None] = mapped_column(nullable=True)
     CreatedBy:  Mapped[str | None] = mapped_column(nullable=True)
+
     MedidorInteligenteId: Mapped[int] = mapped_column(BigInteger, nullable=False)
     ServicioId:           Mapped[int] = mapped_column(BigInteger, nullable=False)
