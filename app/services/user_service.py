@@ -1,6 +1,8 @@
+from typing import Literal
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, or_
+
 from app.schemas.user import UserCreate
 from app.db.models.user import User  # tu modelo ORM (AspNetUser/User)
 from app.utils.hash import Hash
@@ -26,9 +28,9 @@ def create_user(db: Session, user: UserCreate):
     email_norm = user.email.strip().lower()
 
     # Resuelve nombres reales del modelo (PascalCase o snake_case)
-    email_field      = _resolve_name(User, "email", "Email")
-    full_name_field  = _resolve_name(User, "full_name", "FullName")
-    password_field   = _resolve_name(User, "hashed_password", "PasswordHash")
+    email_field     = _resolve_name(User, "email", "Email")
+    full_name_field = _resolve_name(User, "full_name", "FullName")
+    password_field  = _resolve_name(User, "hashed_password", "PasswordHash")
 
     if not (email_field and password_field):
         raise RuntimeError("No se pudieron resolver los campos de email/contraseña en el modelo User.")
@@ -57,10 +59,12 @@ def get_users(
     limit: int = 100,
     sort_by: str = "Id",
     sort_dir: str = "asc",
+    status: Literal["active", "inactive", "all"] = "active",
 ):
     """
-    MSSQL exige ORDER BY cuando usamos OFFSET/FETCH.
-    Además, permitimos sort_by en varios alias seguros para evitar inyección.
+    Lista usuarios con paginación y orden obligatorio (requerido por MSSQL).
+    `status` permite filtrar: 'active' (por defecto, trata NULL como activo),
+    'inactive' o 'all'.
     """
 
     # Columnas posibles en ambos estilos de naming
@@ -80,13 +84,23 @@ def get_users(
     # Columna por defecto: PK si existe, si no, email
     default_col = id_col or email_col
     col = allowed_cols.get(sort_by, default_col) or default_col
-
     order_expr = asc(col) if sort_dir.lower() == "asc" else desc(col)
 
+    q = db.query(User)
+
+    # Filtro de estado (si existe columna Active)
+    if hasattr(User, "Active"):
+        active_col = getattr(User, "Active")
+        if status == "active":
+            # Compat .NET: usuarios con Active NULL se consideran activos
+            q = q.filter(or_(active_col == True, active_col.is_(None)))
+        elif status == "inactive":
+            q = q.filter(active_col == False)
+        # status == "all" -> sin filtro
+
     return (
-        db.query(User)
-        .order_by(order_expr)   # <-- clave para MSSQL con OFFSET/LIMIT
-        .offset(skip)
-        .limit(limit)
-        .all()
+        q.order_by(order_expr)   # <-- clave para MSSQL con OFFSET/FETCH
+         .offset(skip)
+         .limit(limit)
+         .all()
     )

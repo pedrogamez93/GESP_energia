@@ -1,3 +1,4 @@
+from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,17 @@ def read_users(
     skip: int = Query(0, ge=0, description="Registros a omitir"),
     limit: int = Query(50, ge=1, le=200, description="Registros a devolver"),
     sort_by: str = Query("Id", description="Columna para ordenar"),
-    sort_dir: str = Query("asc", pattern="^(?i)(asc|desc)$", description="Dirección de orden")
+    sort_dir: str = Query("asc", pattern="^(?i)(asc|desc)$", description="Dirección de orden"),
+    status: Literal["active", "inactive", "all"] = Query(
+        "active", description="Filtrar por estado: active | inactive | all"
+    ),
 ):
-    """Lista usuarios con paginación y orden obligatorio (requerido por MSSQL)."""
-    return get_users(db, skip=skip, limit=limit, sort_by=sort_by, sort_dir=sort_dir)
+    """Lista usuarios con paginación, orden y filtro de estado (MSSQL friendly)."""
+    return get_users(
+        db,
+        skip=skip,
+        limit=limit,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        status=status,
+    )
