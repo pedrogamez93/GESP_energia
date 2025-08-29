@@ -3,7 +3,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, select
 from fastapi import HTTPException, status
 
 from app.db.models.division import Division
@@ -194,37 +194,117 @@ class DivisionService:
         db.refresh(d)
         return d
 
-    def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None):
-        aj = AjusteService(db)
-        if not aj.can_delete_unidad_pmg():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Eliminación de Unidad PMG deshabilitada por configuración (Ajustes.DeleteUnidadPMG = false)."
+def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None):
+    aj = AjusteService(db)
+    if not aj.can_delete_unidad_pmg():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Eliminación de Unidad PMG deshabilitada por configuración (Ajustes.DeleteUnidadPMG = false)."
+        )
+
+    # Verifica existencia y estado actual sin cargar toda la entidad
+    d = db.query(Division.Id, Division.Active).filter(Division.Id == division_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="División no encontrada")
+    if not d.Active:
+        # Ya estaba inactiva; no hacemos nada (idempotente)
+        return
+
+    now = datetime.utcnow()
+
+    try:
+        # Una sola transacción para todo
+        with db.begin():
+            # --- ÁREAS ---
+            # Subconsulta de pisos activos de la división
+            piso_ids_subq = (
+                db.query(Piso.Id)
+                  .filter(Piso.DivisionId == division_id, Piso.Active.is_(True))
+                  .subquery()
             )
 
-        d = db.query(Division).filter(Division.Id == division_id).first()
-        if not d:
-            raise HTTPException(status_code=404, detail="División no encontrada")
-        if not d.Active:
-            return
+            db.query(Area).filter(
+                Area.Active.is_(True),
+                Area.PisoId.in_(select(piso_ids_subq.c.Id)),
+            ).update(
+                {
+                    Area.Active: False,
+                    Area.UpdatedAt: now,
+                    Area.ModifiedBy: user_id,
+                    Area.Version: func.coalesce(Area.Version, 0) + 1,
+                },
+                synchronize_session=False,
+            )
 
-        now = datetime.utcnow()
-        d.Active = False
-        d.UpdatedAt = now
-        d.ModifiedBy = user_id
-        d.Version = (d.Version or 0) + 1
+            # --- PISOS ---
+            db.query(Piso).filter(
+                Piso.DivisionId == division_id,
+                Piso.Active.is_(True),
+            ).update(
+                {
+                    Piso.Active: False,
+                    Piso.UpdatedAt: now,
+                    Piso.ModifiedBy: user_id,
+                    Piso.Version: func.coalesce(Piso.Version, 0) + 1,
+                },
+                synchronize_session=False,
+            )
 
-        pisos = db.query(Piso).filter(Piso.DivisionId == division_id, Piso.Active == True).all()
-        for p in pisos:
-            p.Active = False
-            p.UpdatedAt = now
-            p.ModifiedBy = user_id
-            p.Version = (p.Version or 0) + 1
-            areas = db.query(Area).filter(Area.PisoId == p.Id, Area.Active == True).all()
-            for a in areas:
-                a.Active = False
-                a.UpdatedAt = now
-                a.ModifiedBy = user_id
-                a.Version = (a.Version or 0) + 1
+            # --- DIVISIÓN ---
+            db.query(Division).filter(
+                Division.Id == division_id,
+                Division.Active.is_(True),
+            ).update(
+                {
+                    Division.Active: False,
+                    Division.UpdatedAt: now,
+                    Division.ModifiedBy: user_id,
+                    Division.Version: func.coalesce(Division.Version, 0) + 1,
+                },
+                synchronize_session=False,
+            )
+        # with db.begin() hace commit automático si no hay excepciones
+    except Exception:
+        # Por si el contexto ya hizo rollback, volvemos a elevar
+        db.rollback()
+        raise
+    
+# --- NUEVO: activar/desactivar en cascada ---
+def set_active_cascada(self, db: Session, division_id: int, active: bool, user_id: str | None):
+    aj = AjusteService(db)
+    # Usamos la misma guarda que el delete "blando" (ajústala si quieres otra política)
+    if not aj.can_delete_unidad_pmg():
+        from fastapi import HTTPException, status
+        accion = "activar" if active else "desactivar"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"No tienes permiso para {accion} la Unidad PMG (Ajustes.DeleteUnidadPMG = false)."
+        )
 
-        db.commit()
+    d = self.get(db, division_id)
+    now = datetime.utcnow()
+
+    # Set estado división
+    d.Active = bool(active)
+    d.UpdatedAt = now
+    d.ModifiedBy = user_id
+    d.Version = (d.Version or 0) + 1
+
+    # Cascada a Pisos y Áreas
+    pisos = db.query(Piso).filter(Piso.DivisionId == division_id).all()
+    for p in pisos:
+        p.Active = bool(active)
+        p.UpdatedAt = now
+        p.ModifiedBy = user_id
+        p.Version = (p.Version or 0) + 1
+
+        areas = db.query(Area).filter(Area.PisoId == p.Id).all()
+        for a in areas:
+            a.Active = bool(active)
+            a.UpdatedAt = now
+            a.ModifiedBy = user_id
+            a.Version = (a.Version or 0) + 1
+
+    db.commit()
+    db.refresh(d)
+    return d

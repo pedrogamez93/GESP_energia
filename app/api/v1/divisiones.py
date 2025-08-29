@@ -194,3 +194,23 @@ def delete_division(
 ):
     svc.delete_soft_cascada(db, division_id, _current_user_id(request))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Activar / Desactivar (soft) ---
+@router.put("/{division_id}/activar", response_model=DivisionDTO, summary="Activar división (soft, en cascada)")
+def activar_division(
+    division_id: Annotated[int, Path(..., ge=1)],
+    db: DbDep,
+    request: Request,
+):
+    obj = svc.set_active_cascada(db, division_id, active=True, user_id=_current_user_id(request))
+    return DivisionDTO.model_validate(obj)
+
+@router.put("/{division_id}/desactivar", response_model=DivisionDTO, summary="Desactivar división (soft, en cascada)")
+def desactivar_division(
+    division_id: Annotated[int, Path(..., ge=1)],
+    db: DbDep,
+    request: Request,
+):
+    obj = svc.set_active_cascada(db, division_id, active=False, user_id=_current_user_id(request))
+    return DivisionDTO.model_validate(obj)
