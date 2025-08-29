@@ -1,5 +1,7 @@
 # app/services/usuario_vinculo_service.py
 from __future__ import annotations
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 from sqlalchemy import delete, select
 from fastapi import HTTPException
@@ -9,6 +11,7 @@ from app.db.models.usuarios_instituciones import UsuarioInstitucion
 from app.db.models.usuarios_divisiones import UsuarioDivision
 from app.db.models.usuarios_unidades import UsuarioUnidad
 from app.db.models.usuarios_servicios import UsuarioServicio  # ya existe en tu proyecto
+
 
 class UsuarioVinculoService:
     # --------- helpers ---------
@@ -83,3 +86,18 @@ class UsuarioVinculoService:
             db.add(UsuarioUnidad(UsuarioId=user_id, UnidadId=int(i)))
         db.commit()
         return [r.UnidadId for r in db.query(UsuarioUnidad).filter_by(UsuarioId=user_id).all()]
+
+    # --------- activar/desactivar ---------
+    def set_active(self, db: Session, user_id: str, active: bool, actor_id: str | None = None) -> AspNetUser:
+        user = self._ensure_user(db, user_id)
+
+        # Idempotente
+        if user.Active is not None and bool(user.Active) == bool(active):
+            return user
+
+        user.Active = bool(active)
+        user.UpdatedAt = datetime.utcnow()
+        user.ModifiedBy = actor_id
+        db.commit()
+        db.refresh(user)
+        return user

@@ -2,7 +2,7 @@
 from typing import Annotated, List
 from fastapi import APIRouter, Depends, Path
 from sqlalchemy.orm import Session
-
+from fastapi import Request
 from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
@@ -93,3 +93,56 @@ def set_user_unidades(
 ):
     ids = payload.Ids if payload else []
     return svc.set_unidades(db, user_id, ids)
+def _actor_id(current_user: UserPublic | None, request: Request | None) -> str | None:
+    # Prioriza el usuario autenticado; si no, permite header X-User-Id (como hiciste en divisiones)
+    return (current_user.id if current_user else None) or (request.headers.get("X-User-Id") if request else None)
+
+@router.put(
+    "/{user_id}/activar",
+    response_model=UserDetailDTO,
+    summary="(ADMINISTRADOR) Activar usuario (Active = true)",
+)
+def activar_usuario(
+    user_id: Annotated[str, Path(...)],
+    db: DbDep,
+    request: Request,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    svc.set_active(db, user_id, True, actor_id=_actor_id(current_user, request))
+    user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
+    return UserDetailDTO(
+        Id=str(user.Id),
+        UserName=user.UserName,
+        Email=user.Email,
+        Active=user.Active if user.Active is not None else True,
+        Roles=roles,
+        InstitucionIds=inst_ids,
+        ServicioIds=srv_ids,
+        DivisionIds=div_ids,
+        UnidadIds=uni_ids,
+    )
+
+@router.put(
+    "/{user_id}/desactivar",
+    response_model=UserDetailDTO,
+    summary="(ADMINISTRADOR) Desactivar usuario (Active = false)",
+)
+def desactivar_usuario(
+    user_id: Annotated[str, Path(...)],
+    db: DbDep,
+    request: Request,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    svc.set_active(db, user_id, False, actor_id=_actor_id(current_user, request))
+    user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
+    return UserDetailDTO(
+        Id=str(user.Id),
+        UserName=user.UserName,
+        Email=user.Email,
+        Active=user.Active if user.Active is not None else False,
+        Roles=roles,
+        InstitucionIds=inst_ids,
+        ServicioIds=srv_ids,
+        DivisionIds=div_ids,
+        UnidadIds=uni_ids,
+    )
