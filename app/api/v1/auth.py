@@ -1,89 +1,66 @@
 # app/api/v1/auth.py
-from typing import Optional, Tuple
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Body
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
+# 👈 usa el get_db que inyecta meta
 from app.dependencies.db import get_db
-from app.core.security import authenticate, issue_jwt, revoke_current_token, get_current_user
+
+from app.schemas.auth import TokenResponse
+from app.services.auth_service import (
+    login_and_issue_token,
+    get_current_user,
+)
 from app.models.audit import AuditLog
 
-router = APIRouter(prefix="/auth", tags=["Auth"])
+router = APIRouter(prefix="/api/v1/auth", tags=["Auth"])
 
-class LoginJSON(BaseModel):
-    username: str
-    password: str
-
-async def extract_credentials(
+@router.post("/login", response_model=TokenResponse)
+def login(
     request: Request,
-    body: Optional[LoginJSON] = Body(default=None),
-) -> Tuple[str, str]:
-    # Si viene JSON válido, úsalo
-    if body is not None:
-        return body.username, body.password
-
-    # Si no, intenta como form (application/x-www-form-urlencoded o multipart/form-data)
-    form = await request.form()
-    username = form.get("username")
-    password = form.get("password")
-    if not username or not password:
-        # Emula el formato típico de error de validación de FastAPI
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=[
-                {"loc": ["body", "username"], "msg": "field required", "type": "value_error.missing"},
-                {"loc": ["body", "password"], "msg": "field required", "type": "value_error.missing"},
-            ],
-        )
-    return username, password
-
-@router.post("/login")
-async def login(
-    request: Request,
-    creds: Tuple[str, str] = Depends(extract_credentials),
+    form: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    username, password = creds
-    user = authenticate(username, password, db)
-    if not user:
-        meta = getattr(request.state, "audit_meta", {}) or {}
-        db.add(AuditLog(
-            action="login_failed",
-            actor_id=None, actor_username=username,
-            ip=meta.get("ip"), user_agent=meta.get("user_agent"),
-            http_method=meta.get("method", "POST"), path=meta.get("path", "/auth/login"),
-            status_code=status.HTTP_401_UNAUTHORIZED,
-        ))
-        db.commit()
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token, user = login_and_issue_token(db, form.username, form.password)
 
-    token, jti = issue_jwt(user, db=db)
+    db.info["actor"] = {"id": str(getattr(user, "id", None)), "username": getattr(user, "username", None)}
     meta = getattr(request.state, "audit_meta", {}) or {}
+
     db.add(AuditLog(
         action="login",
-        actor_id=str(user.id), actor_username=user.username,
-        ip=meta.get("ip"), user_agent=meta.get("user_agent"),
-        http_method=meta.get("method", "POST"), path=meta.get("path", "/auth/login"),
+        actor_id=str(getattr(user, "id", None)),
+        actor_username=getattr(user, "username", None),
+        ip=meta.get("ip"),
+        user_agent=meta.get("user_agent"),
+        http_method=meta.get("method") or "POST",
+        path=meta.get("path") or str(request.url.path),
         status_code=status.HTTP_200_OK,
-        extra={"jti": jti},
+        request_id=meta.get("request_id"),
+        # session_id=meta.get("session_id"),  # quita o implementa en el middleware
     ))
     db.commit()
-    return {"access_token": token, "token_type": "bearer"}
+    return TokenResponse(access_token=token, user=user)
 
 @router.post("/logout")
-async def logout(
+def logout(
     request: Request,
-    current=Depends(get_current_user),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    revoke_current_token(request, db=db)
+    db.info["actor"] = {"id": str(getattr(current_user, "id", None)), "username": getattr(current_user, "username", None)}
     meta = getattr(request.state, "audit_meta", {}) or {}
+
     db.add(AuditLog(
         action="logout",
-        actor_id=str(current.id), actor_username=current.username,
-        ip=meta.get("ip"), user_agent=meta.get("user_agent"),
-        http_method=meta.get("method", "POST"), path=meta.get("path", "/auth/logout"),
+        actor_id=str(getattr(current_user, "id", None)),
+        actor_username=getattr(current_user, "username", None),
+        ip=meta.get("ip"),
+        user_agent=meta.get("user_agent"),
+        http_method=meta.get("method") or "POST",
+        path=meta.get("path") or str(request.url.path),
         status_code=status.HTTP_200_OK,
+        request_id=meta.get("request_id"),
+        # session_id=meta.get("session_id"),
     ))
     db.commit()
     return {"ok": True}
