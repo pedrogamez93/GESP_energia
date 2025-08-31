@@ -1,7 +1,9 @@
 # app/main.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from uuid import uuid4
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.db.session import engine
 
@@ -57,8 +59,6 @@ from app.api.v1.frontis import router as frontis_router
 from app.api.v1.reportes import router as reportes_router
 from app.api.v1.parametros_medicion import router as parametros_medicion_router
 
-
-
 # --- OpenAPI tags (opcional, añade los que quieras mostrar en Swagger) ---
 tags_metadata = [
     {"name": "Health", "description": "Endpoints de verificación."},
@@ -96,11 +96,14 @@ tags_metadata = [
     {"name": "Áreas", "description": "Gestión de áreas por piso."},
     {"name": "Direcciones", "description": "Catálogo/CRUD de direcciones y resolución exacta."},
     {"name": "Parámetros de medición", "description": "Catálogo y CRUD de parámetros (vinculados a UM)."},
-
 ]
 
 # --- App ---
 app = FastAPI(title="API GESP", version="1.0.0", openapi_tags=tags_metadata)
+
+# Respeta X-Forwarded-For / X-Forwarded-Proto si estás detrás de Nginx/ALB
+# (añadido)
+app.add_middleware(ProxyHeadersMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -109,6 +112,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Middleware de request: adjunta metadatos a request.state.audit_meta (añadido) ---
+@app.middleware("http")
+async def attach_request_meta(request: Request, call_next):
+    xff = request.headers.get("x-forwarded-for")
+    ip = (xff.split(",")[0].strip() if xff else request.client.host)
+    request.state.audit_meta = {
+        "ip": ip,
+        "user_agent": request.headers.get("user-agent"),
+        "method": request.method,
+        "path": request.url.path,
+        "request_id": str(uuid4()),
+    }
+    resp = await call_next(request)
+    # completa metadatos con status_code una vez producido el response
+    request.state.audit_meta["status_code"] = resp.status_code
+    return resp
 
 # --- Health ---
 @app.get("/", tags=["Health"])
@@ -131,7 +151,7 @@ def health_db():
 # --- Routers ---
 app.include_router(auth_router)
 app.include_router(users_router)
-app.include_router(usuarios_router) 
+app.include_router(usuarios_router)
 app.include_router(comunas_router)
 app.include_router(regiones_router)
 app.include_router(instituciones_router)
