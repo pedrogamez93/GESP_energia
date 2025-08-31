@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.dependencies.db import get_db             # 👈 usa el get_db que inyecta metadatos
 from app.schemas.auth import TokenResponse
 from app.services.auth_service import login_and_issue_token  # 👈 solo lo que existe
-from app.models.audit import AuditLog
+from app.db.models.audit import AuditLog
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Auth"])
 
