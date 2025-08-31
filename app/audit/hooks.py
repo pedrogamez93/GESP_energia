@@ -1,7 +1,11 @@
+# app/audit/hooks.py
+
 import json
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
-from app.models.audit import AuditLog
+
+from app.db.models.audit import AuditLog
+
 
 @event.listens_for(Session, "after_flush")
 def audit_after_flush(session: Session, flush_context):

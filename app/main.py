@@ -7,6 +7,12 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.db.session import engine
 
+# ⬇️ importa y registra los listeners de auditoría al boot
+from app.audit import hooks   # <-- ¡IMPORTANTE!
+
+from app.db.session import engine
+
+
 # CORS
 try:
     from app.core.config import settings
