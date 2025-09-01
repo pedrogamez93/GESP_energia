@@ -12,15 +12,22 @@ class EnergeticoDTO(BaseModel):
     PermitePotenciaSuministrada: bool
     PermiteTipoTarifa: bool
     Active: bool = True
-    class Config: from_attributes = True
+
+    class Config:
+        from_attributes = True
+
 
 class EnergeticoListDTO(EnergeticoDTO):
     pass
 
+
 class EnergeticoSelectDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
-    class Config: from_attributes = True
+
+    class Config:
+        from_attributes = True
+
 
 class EnergeticoCreate(BaseModel):
     Nombre: Optional[str] = None
@@ -30,6 +37,7 @@ class EnergeticoCreate(BaseModel):
     Posicion: int = 0
     PermitePotenciaSuministrada: bool = False
     PermiteTipoTarifa: bool = False
+
 
 class EnergeticoUpdate(BaseModel):
     Nombre: Optional[str] = None
@@ -41,6 +49,7 @@ class EnergeticoUpdate(BaseModel):
     PermiteTipoTarifa: Optional[bool] = None
     Active: Optional[bool] = None
 
+
 # --- Unidades por energético (N:M con metadata) ---
 class EnergeticoUMDTO(BaseModel):
     Id: int
@@ -50,7 +59,10 @@ class EnergeticoUMDTO(BaseModel):
     EnergeticoId: int
     UnidadMedidaId: int
     Active: bool = True
-    class Config: from_attributes = True
+
+    class Config:
+        from_attributes = True
+
 
 class EnergeticoUMCreate(BaseModel):
     Calor: float
@@ -58,11 +70,13 @@ class EnergeticoUMCreate(BaseModel):
     Factor: float
     UnidadMedidaId: int
 
+
 class EnergeticoUMUpdate(BaseModel):
     Calor: Optional[float] = None
     Densidad: Optional[float] = None
     Factor: Optional[float] = None
     Active: Optional[bool] = None
+
 
 # --- Energetico por División ---
 class EnergeticoDivisionDTO(BaseModel):
@@ -71,24 +85,39 @@ class EnergeticoDivisionDTO(BaseModel):
     EnergeticoId: int
     NumeroClienteId: Optional[int] = None
     Active: bool = True
-    class Config: from_attributes = True
+
+    class Config:
+        from_attributes = True
+
 
 class EnergeticoDivisionCreate(BaseModel):
     DivisionId: int
     EnergeticoId: int
     NumeroClienteId: Optional[int] = None
 
+
 class EnergeticoDivisionUpdate(BaseModel):
     NumeroClienteId: Optional[int] = None
     Active: Optional[bool] = None
+
 
 # --- Modelo para "activos por edificio" (según EnergeticoActivoModel .NET) ---
 class UnidadMedidaLite(BaseModel):
     Id: int
     Nombre: Optional[str] = None
 
+
 class EnergeticoActivoDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
     TieneNumCliente: bool
     UnidadesMedida: List[UnidadMedidaLite] = Field(default_factory=list)
+
+
+# --- Wrapper de paginación para el listado ---
+class EnergeticoPage(BaseModel):
+    total: int = 0
+    data: List[EnergeticoListDTO] = Field(default_factory=list)
+
+    class Config:
+        from_attributes = True

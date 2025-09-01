@@ -1,4 +1,3 @@
-# app/api/v1/energeticos.py
 from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from sqlalchemy.orm import Session
@@ -7,8 +6,16 @@ from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 from app.schemas.energetico import (
-    EnergeticoDTO, EnergeticoListDTO, EnergeticoCreate, EnergeticoUpdate, EnergeticoSelectDTO,
-    EnergeticoUMDTO, EnergeticoUMCreate, EnergeticoUMUpdate, EnergeticoDivisionDTO,
+    EnergeticoDTO,
+    EnergeticoListDTO,
+    EnergeticoCreate,
+    EnergeticoUpdate,
+    EnergeticoSelectDTO,
+    EnergeticoUMDTO,
+    EnergeticoUMCreate,
+    EnergeticoUMUpdate,
+    EnergeticoDivisionDTO,
+    EnergeticoPage,  # <- wrapper de paginación
 )
 from app.services.energetico_service import EnergeticoService
 
@@ -17,19 +24,24 @@ svc = EnergeticoService()
 DbDep = Annotated[Session, Depends(get_db)]
 
 # ---------- GET públicos ----------
-@router.get("", response_model=dict)
+@router.get("", response_model=EnergeticoPage)
 def list_energeticos(
     db: DbDep,
     q: str | None = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ):
-    return svc.list(db, q, page, page_size)
+    res = svc.list(db, q, page, page_size)
+    # Convertimos cada ORM a DTO para que Pydantic serialice sin error
+    items = [EnergeticoListDTO.model_validate(it) for it in (res.get("data") or [])]
+    return EnergeticoPage(total=int(res.get("total") or 0), data=items)
+
 
 @router.get("/select", response_model=list[EnergeticoSelectDTO])
 def list_energeticos_select(db: DbDep):
     rows = svc.list_select(db) or []
     return [EnergeticoSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
+
 
 @router.get("/{id}", response_model=EnergeticoDTO)
 def get_energetico(
@@ -63,8 +75,12 @@ def get_by_edificio(
     raise HTTPException(status_code=501, detail="Pendiente implementar (requiere modelo/tabla de Edificio y relación)")
 
 # ---------- Escrituras ADMINISTRADOR ----------
-@router.post("", response_model=EnergeticoDTO, status_code=status.HTTP_201_CREATED,
-             summary="(ADMINISTRADOR) Crear energético")
+@router.post(
+    "",
+    response_model=EnergeticoDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="(ADMINISTRADOR) Crear energético",
+)
 def create_energetico(
     payload: EnergeticoCreate,
     db: DbDep,
@@ -72,8 +88,11 @@ def create_energetico(
 ):
     return svc.create(db, payload)
 
-@router.put("/{id}", response_model=EnergeticoDTO,
-            summary="(ADMINISTRADOR) Actualizar energético")
+@router.put(
+    "/{id}",
+    response_model=EnergeticoDTO,
+    summary="(ADMINISTRADOR) Actualizar energético",
+)
 def update_energetico(
     id: int,
     payload: EnergeticoUpdate,
@@ -82,8 +101,11 @@ def update_energetico(
 ):
     return svc.update(db, id, payload)
 
-@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="(ADMINISTRADOR) Eliminar energético (hard delete)")
+@router.delete(
+    "/{id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="(ADMINISTRADOR) Eliminar energético (hard delete)",
+)
 def delete_energetico(
     id: int,
     db: DbDep,
@@ -100,9 +122,12 @@ def list_um(
 ):
     return svc.list_um(db, energetico_id)
 
-@router.post("/{energetico_id}/unidades-medida", response_model=EnergeticoUMDTO,
-             status_code=status.HTTP_201_CREATED,
-             summary="(ADMINISTRADOR) Agregar unidad de medida a un energético")
+@router.post(
+    "/{energetico_id}/unidades-medida",
+    response_model=EnergeticoUMDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="(ADMINISTRADOR) Agregar unidad de medida a un energético",
+)
 def add_um(
     energetico_id: Annotated[int, Path(..., ge=1)],
     payload: EnergeticoUMCreate,
@@ -111,8 +136,11 @@ def add_um(
 ):
     return svc.add_um(db, energetico_id, payload)
 
-@router.put("/um/{um_id}", response_model=EnergeticoUMDTO,
-            summary="(ADMINISTRADOR) Actualizar relación UM de un energético")
+@router.put(
+    "/um/{um_id}",
+    response_model=EnergeticoUMDTO,
+    summary="(ADMINISTRADOR) Actualizar relación UM de un energético",
+)
 def update_um(
     um_id: Annotated[int, Path(..., ge=1)],
     payload: EnergeticoUMUpdate,
@@ -121,8 +149,11 @@ def update_um(
 ):
     return svc.update_um(db, um_id, payload)
 
-@router.delete("/um/{um_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="(ADMINISTRADOR) Eliminar relación UM de un energético")
+@router.delete(
+    "/um/{um_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="(ADMINISTRADOR) Eliminar relación UM de un energético",
+)
 def delete_um(
     um_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
