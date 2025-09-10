@@ -1,3 +1,4 @@
+from __future__ import annotations
 from datetime import datetime
 from sqlalchemy import BigInteger, Integer, Boolean, Text, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -16,12 +17,18 @@ class EmpresaDistribuidora(Base):
     CreatedBy: Mapped[str | None] = mapped_column(Text)
 
     Nombre: Mapped[str | None] = mapped_column(Text)
-    EnergeticoId: Mapped[int] = mapped_column(BigInteger, ForeignKey("dbo.Energeticos.Id", ondelete="CASCADE"), nullable=False)
+    EnergeticoId: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("dbo.Energeticos.Id", ondelete="CASCADE"),
+        nullable=False,
+    )
     OldId: Mapped[int] = mapped_column(BigInteger, nullable=False)  # default 0 en BD
     RUT: Mapped[str | None] = mapped_column(Text)
 
     comunas: Mapped[list["EmpresasDistribuidoraComuna"]] = relationship(
-        "EmpresasDistribuidoraComuna", back_populates="empresa", cascade="all, delete-orphan"
+        "EmpresasDistribuidoraComuna",
+        back_populates="empresa",
+        cascade="all, delete-orphan",
     )
 
 class EmpresasDistribuidoraComuna(Base):
@@ -36,9 +43,15 @@ class EmpresasDistribuidoraComuna(Base):
     ModifiedBy: Mapped[str | None] = mapped_column(Text)
     CreatedBy: Mapped[str | None] = mapped_column(Text)
 
-    ComunaId: Mapped[int] = mapped_column(BigInteger, ForeignKey("dbo.Comunas.Id", ondelete="CASCADE"), nullable=False)
-    EmpresaDistribuidoraId: Mapped[int] = mapped_column(BigInteger, ForeignKey("dbo.EmpresaDistribuidoras.Id", ondelete="CASCADE"), nullable=False)
+    ComunaId: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("dbo.Comunas.Id", ondelete="CASCADE"), nullable=False
+    )
+    EmpresaDistribuidoraId: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("dbo.EmpresaDistribuidoras.Id", ondelete="CASCADE"),
+        nullable=False,
+    )
 
-    empresa: Mapped["EmpresaDistribuidora"] = relationship("EmpresaDistribuidora", back_populates="comunas")
-    # relación a Comuna opcional (solo si necesitas navegarla):
-    # comuna: Mapped["Comuna"] = relationship("Comuna")
+    empresa: Mapped["EmpresaDistribuidora"] = relationship(
+        "EmpresaDistribuidora", back_populates="comunas"
+    )

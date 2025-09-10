@@ -1,22 +1,32 @@
-from pydantic import BaseModel
+from __future__ import annotations
 from typing import Optional, List
+from pydantic import BaseModel, ConfigDict
 
+# Elemento para combos
 class EmpresaDistribuidoraSelectDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
-    class Config: from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
+# Item de listado
 class EmpresaDistribuidoraDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
     RUT: Optional[str] = None
     EnergeticoId: int
     Active: bool = True
-    class Config: from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
+# Detalle (incluye comunas)
 class EmpresaDistribuidoraDetailDTO(EmpresaDistribuidoraDTO):
-    ComunaIds: List[int] = []  # para edición/vista detallada
+    ComunaIds: List[int] = []
 
+# Envoltura de paginación
+class EmpresaDistribuidoraListDTO(BaseModel):
+    total: int
+    data: List[EmpresaDistribuidoraDTO]
+
+# Payloads de escritura
 class EmpresaDistribuidoraCreate(BaseModel):
     Nombre: Optional[str] = None
     RUT: Optional[str] = None
@@ -28,12 +38,12 @@ class EmpresaDistribuidoraUpdate(BaseModel):
     RUT: Optional[str] = None
     EnergeticoId: Optional[int] = None
     Active: Optional[bool] = None
-    ComunaIds: Optional[List[int]] = None  # si viene, reemplaza la asignación
+    ComunaIds: Optional[List[int]] = None
 
-# N:M (por si expones endpoints específicos de la relación)
+# Relación N:M (si se expone)
 class EmpresaDistribuidoraComunaDTO(BaseModel):
     Id: int
     EmpresaDistribuidoraId: int
     ComunaId: int
     Active: bool = True
-    class Config: from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
