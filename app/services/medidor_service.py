@@ -1,18 +1,32 @@
 from __future__ import annotations
 
+import time
+import logging
 from datetime import datetime
 from typing import Optional, Iterable
 
 from fastapi import HTTPException
+from sqlalchemy import func, case, delete
 from sqlalchemy.orm import Session
-from sqlalchemy import func, delete
 
 from app.db.models.medidor import Medidor
 from app.db.models.numero_cliente import NumeroCliente
 from app.db.models.medidor_division import MedidorDivision
 from app.db.models.compra_medidor import CompraMedidor
+from app.schemas.medidor import MedidorListDTO
 
 MDIV_TBL = MedidorDivision.__table__
+
+log = logging.getLogger("medidores")
+
+
+def _order_by_numero_nulls_last():
+    """
+    SQL Server no soporta 'NULLS LAST'.
+    Emulamos con: CASE WHEN Numero IS NULL THEN 1 ELSE 0 END, Numero, Id
+    """
+    nulls_flag = case((Medidor.Numero.is_(None), 1), else_=0)
+    return (nulls_flag.asc(), Medidor.Numero.asc(), Medidor.Id.asc())
 
 
 class MedidorService:
@@ -28,6 +42,7 @@ class MedidorService:
     ) -> dict:
         query = db.query(Medidor)
 
+        # Filtros
         if q:
             like = f"%{q}%"
             query = (
@@ -44,20 +59,34 @@ class MedidorService:
         if division_id is not None:
             query = query.filter(Medidor.DivisionId == division_id)
 
+        # Total antes de paginar
+        t0 = time.perf_counter()
         total = query.count()
-        items = (
-            query.order_by(Medidor.Numero.nullslast(), Medidor.Id)
+        t1 = time.perf_counter()
+
+        # 🚀 Orden sargable por PK para paginación rápida (NVARCHAR(MAX) en Numero es caro)
+        rows = (
+            query.order_by(Medidor.Id.asc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
         )
+        t2 = time.perf_counter()
+
+        items = [MedidorListDTO.model_validate(x) for x in rows]
+
+        log.info(
+            "[medidores] count=%s en %.3fs | fetch page=%s size=%s en %.3fs",
+            total, (t1 - t0), page, page_size, (t2 - t1),
+        )
+
         return {"total": total, "page": page, "page_size": page_size, "items": items}
 
     def by_division(self, db: Session, division_id: int):
         return (
             db.query(Medidor)
             .filter(Medidor.DivisionId == division_id)
-            .order_by(Medidor.Numero.nullslast(), Medidor.Id)
+            .order_by(*_order_by_numero_nulls_last())
             .all()
         )
 
@@ -65,7 +94,7 @@ class MedidorService:
         return (
             db.query(Medidor)
             .filter(Medidor.NumeroClienteId == numero_cliente_id)
-            .order_by(Medidor.Numero.nullslast(), Medidor.Id)
+            .order_by(*_order_by_numero_nulls_last())
             .all()
         )
 
@@ -91,9 +120,9 @@ class MedidorService:
             .filter(
                 Medidor.NumeroClienteId == numero_cliente_id,
                 Medidor.DivisionId == division_id,
-                Medidor.Active == True,
+                Medidor.Active.is_(True),
             )
-            .order_by(Medidor.Numero.nullslast(), Medidor.Id)
+            .order_by(*_order_by_numero_nulls_last())
             .all()
         )
 
@@ -106,7 +135,12 @@ class MedidorService:
         id_list = [r[0] for r in ids]
         if not id_list:
             return []
-        return db.query(Medidor).filter(Medidor.Id.in_(id_list)).order_by(Medidor.Id).all()
+        return (
+            db.query(Medidor)
+            .filter(Medidor.Id.in_(id_list))
+            .order_by(Medidor.Id.asc())
+            .all()
+        )
 
     def check_exist(
         self,
@@ -174,7 +208,13 @@ class MedidorService:
         db.commit()
 
     # ---------------- N-N con Divisiones (dbo.MedidorDivision) ----------------
-    def set_divisiones(self, db: Session, medidor_id: int, division_ids: Iterable[int], actor_id: Optional[str]) -> list[int]:
+    def set_divisiones(
+        self,
+        db: Session,
+        medidor_id: int,
+        division_ids: Iterable[int],
+        actor_id: Optional[str],
+    ) -> list[int]:
         db.execute(delete(MDIV_TBL).where(MDIV_TBL.c.MedidorId == medidor_id))
         now = datetime.utcnow()
         payload = [

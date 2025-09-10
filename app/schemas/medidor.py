@@ -1,4 +1,3 @@
-# app/schemas/medidor.py
 from __future__ import annotations
 from pydantic import BaseModel
 from typing import Optional, List
@@ -54,6 +53,12 @@ class MedidorUpdate(BaseModel):
     MedidorConsumo: Optional[bool] = None
     Active: Optional[bool] = None
 
+# Página tipada para Swagger y validación
+class MedidorPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[MedidorListDTO]
 
 # ======================================
 # Medidores Inteligentes (dbo.MedidoresInteligentes)
@@ -62,7 +67,6 @@ class MedidorUpdate(BaseModel):
 class MedidorInteligenteDTO(BaseModel):
     Id: int
     ChileMedidoId: int
-    # si tus endpoints devuelven vínculos, los dejamos aquí:
     DivisionIds: List[int] = []
     EdificioIds: List[int] = []
     ServicioIds: List[int] = []
@@ -72,7 +76,6 @@ class MedidorInteligenteDTO(BaseModel):
 
 class MedidorInteligenteCreate(BaseModel):
     ChileMedidoId: int
-    # opcionalmente permitir crear con vínculos:
     DivisionIds: List[int] = []
     EdificioIds: List[int] = []
     ServicioIds: List[int] = []
@@ -80,12 +83,9 @@ class MedidorInteligenteCreate(BaseModel):
 class MedidorInteligenteUpdate(BaseModel):
     ChileMedidoId: Optional[int] = None
     Active: Optional[bool] = None
-    # si algún endpoint admite reemplazo masivo de vínculos:
     DivisionIds: Optional[List[int]] = None
     EdificioIds: Optional[List[int]] = None
     ServicioIds: Optional[List[int]] = None
 
-
-# Payload genérico para endpoints que reciben listas de Ids
 class IdsPayload(BaseModel):
     Ids: List[int] = []

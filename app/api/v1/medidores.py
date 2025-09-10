@@ -10,6 +10,7 @@ from app.schemas.medidor import (
     MedidorListDTO,
     MedidorCreate,
     MedidorUpdate,
+    MedidorPage,   # <-- tipado de página
 )
 from app.services.medidor_service import MedidorService
 
@@ -19,7 +20,7 @@ DbDep = Annotated[Session, Depends(get_db)]
 
 # ---------------- GET públicos ----------------
 
-@router.get("", response_model=dict, summary="Listado paginado de medidores")
+@router.get("", response_model=MedidorPage, summary="Listado paginado de medidores")
 def list_medidores(
     db: DbDep,
     q: str | None = Query(default=None, description="Busca por Número / Nombre cliente"),
@@ -134,7 +135,6 @@ def delete_medidor(
     svc.delete(db, medidor_id)
     return None
 
-# --- Set de divisiones explícito (opcional) ---
 @router.put("/{medidor_id}/divisiones", response_model=List[int],
             summary="(ADMINISTRADOR) Reemplaza divisiones asociadas al medidor (tabla puente)")
 def set_divisiones(

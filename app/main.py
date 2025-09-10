@@ -12,6 +12,10 @@ from app.audit import hooks   # <-- ¡IMPORTANTE!
 
 from app.db.session import engine
 
+import asyncio
+import anyio
+from starlette.responses import Response
+
 
 # CORS
 try:
@@ -131,10 +135,17 @@ async def attach_request_meta(request: Request, call_next):
         "path": request.url.path,
         "request_id": str(uuid4()),
     }
-    resp = await call_next(request)
+
+    try:
+        resp = await call_next(request)
+        request.state.audit_meta["status_code"] = resp.status_code
+        return resp
+
+    except asyncio.CancelledError:
+        request.state.audit_meta["status_code"] = 499
+        return Response(status_code=499, content=b"Client Closed Request")
     # completa metadatos con status_code una vez producido el response
-    request.state.audit_meta["status_code"] = resp.status_code
-    return resp
+
 
 # --- Health ---
 @app.get("/", tags=["Health"])
