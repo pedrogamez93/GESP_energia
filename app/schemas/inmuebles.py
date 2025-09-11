@@ -1,10 +1,35 @@
-# app/schemas/inmuebles.py
 from __future__ import annotations
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict
-from app.schemas.direcciones import DireccionDTO  # <- usar DTO central
+from app.schemas.direcciones import DireccionDTO
 
-# -------- Lecturas --------
+# -------- Unidades (forma breve, como en .NET para asociaciones) --------
+class UnidadBriefDTO(BaseModel):
+    Id: int
+    Nombre: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+# -------- Áreas / Pisos --------
+class AreaDTO(BaseModel):
+    Id: int
+    Nombre: Optional[str] = None
+    Active: bool = True
+    Superficie: Optional[float] = None
+    PisoId: Optional[int] = None
+    Unidades: List[UnidadBriefDTO] = []
+    model_config = ConfigDict(from_attributes=True)
+
+class PisoDTO(BaseModel):
+    Id: int
+    DivisionId: int
+    PisoNumero: Optional[int] = None
+    PisoNumeroNombre: Optional[str] = None  # NumeroPisos.Nombre
+    Active: bool = True
+    Areas: List[AreaDTO] = []
+    Unidades: List[UnidadBriefDTO] = []
+    model_config = ConfigDict(from_attributes=True)
+
+# -------- Lecturas: lista y detalle --------
 class InmuebleListDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
@@ -22,6 +47,15 @@ class InmuebleDTO(InmuebleListDTO):
     Superficie: Optional[float] = None
     NroRol: Optional[str] = None
     GeVersion: Optional[int] = None
+    Children: List["InmuebleDTO"] = []
+    Pisos: List[PisoDTO] = []
+    Unidades: List[UnidadBriefDTO] = []
+
+class InmueblePage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[InmuebleListDTO]
 
 # -------- Escrituras --------
 class InmuebleCreate(BaseModel):
@@ -37,7 +71,7 @@ class InmuebleCreate(BaseModel):
     AdministracionServicioId: Optional[int] = None
     ParentId: Optional[int] = None
     NroRol: Optional[str] = None
-    Direccion: Optional[DireccionDTO] = None  # <- usa DTO central
+    Direccion: Optional[DireccionDTO] = None
 
 class InmuebleUpdate(BaseModel):
     TipoInmueble: Optional[int] = None
@@ -52,10 +86,10 @@ class InmuebleUpdate(BaseModel):
     AdministracionServicioId: Optional[int] = None
     ParentId: Optional[int] = None
     NroRol: Optional[str] = None
-    Direccion: Optional[DireccionDTO] = None  # <- usa DTO central
+    Direccion: Optional[DireccionDTO] = None
     Active: Optional[bool] = None
 
-# -------- Compat: búsquedas/vínculos (como .NET) --------
+# -------- Compat: búsquedas/vínculos --------
 class InmuebleByAddressRequest(BaseModel):
     Calle: str
     Numero: str
@@ -66,3 +100,6 @@ class InmuebleUnidadRequest(BaseModel):
 
 class UnidadVinculadaDTO(BaseModel):
     UnidadId: int
+
+# Pydantic v2: forward refs
+InmuebleDTO.model_rebuild()
