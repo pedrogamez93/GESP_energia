@@ -2,8 +2,8 @@ from __future__ import annotations
 from typing import List, Optional
 from datetime import datetime
 
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
-from sqlalchemy import func, select
 from fastapi import HTTPException, status
 
 from app.db.models.division import Division
@@ -11,28 +11,72 @@ from app.db.models.piso import Piso
 from app.db.models.area import Area
 from app.db.models.usuarios_divisiones import UsuarioDivision
 from app.schemas.division import (
-    DivisionDTO, DivisionListDTO,
     ObservacionDTO, ReportaResiduosDTO, ObservacionInexistenciaDTO,
-    DivisionPatchDTO, DivisionAniosDTO
+    DivisionAniosDTO, DivisionPatchDTO
 )
-from app.services.ajuste_service import AjusteService 
+from app.services.ajuste_service import AjusteService
+
+def _order_by_nombre_nulls_last_sql() -> str:
+    # Emulación de NULLS LAST para SQL Server
+    return "CASE WHEN d.Nombre IS NULL THEN 1 ELSE 0 END, d.Nombre, d.Id"
 
 class DivisionService:
-    # --------- Listados básicos ---------
-    def list(self, db: Session, q: str | None, page: int, page_size: int) -> dict:
-        query = db.query(Division)
-        if q:
-            like = f"%{q}%"
-            query = query.filter(func.lower(Division.Direccion).like(func.lower(like)))
-        total = query.count()
-        items = (
-            query.order_by(Division.Direccion)
-                 .offset((page - 1) * page_size)
-                 .limit(page_size)
-                 .all()
-        )
-        return {"total": total, "page": page, "page_size": page_size, "items": items}
+    # --------- Listado paginado (SQL liviano) ---------
+    def list(
+        self,
+        db: Session,
+        q: str | None,
+        page: int,
+        page_size: int,
+        active: Optional[bool] = True,
+        servicio_id: Optional[int] = None,
+        region_id: Optional[int] = None,
+        comuna_id: Optional[int] = None,
+    ) -> dict:
+        size = max(1, min(200, int(page_size)))
+        offset = (int(page) - 1) * size
 
+        params = {
+            "active": active,
+            "servicio_id": servicio_id,
+            "region_id": region_id,
+            "comuna_id": comuna_id,
+            "q_like": f"%{q}%" if q else None,
+            "offset": offset,
+            "limit": size,
+        }
+
+        where_sql = """
+        1=1
+        AND (:active IS NULL OR d.Active = :active)
+        AND (:servicio_id IS NULL OR d.ServicioId = :servicio_id)
+        AND (:region_id IS NULL OR d.RegionId = :region_id)
+        AND (:comuna_id IS NULL OR d.ComunaId = :comuna_id)
+        AND (
+            :q_like IS NULL OR
+            LOWER(COALESCE(d.Direccion, '')) LIKE LOWER(:q_like) OR
+            LOWER(COALESCE(d.Nombre,    '')) LIKE LOWER(:q_like)
+        )
+        """
+
+        total = db.execute(text(f"""
+            SELECT COUNT(1)
+            FROM dbo.Divisiones d WITH (NOLOCK)
+            WHERE {where_sql}
+        """), params).scalar() or 0
+
+        rows = db.execute(text(f"""
+            SELECT d.Id, d.Nombre, d.Active, d.ServicioId, d.RegionId, d.ComunaId, d.Direccion
+            FROM dbo.Divisiones d WITH (NOLOCK)
+            WHERE {where_sql}
+            ORDER BY {_order_by_nombre_nulls_last_sql()}
+            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+        """), params).mappings().all()
+
+        items = [dict(r) for r in rows]
+        return {"total": int(total), "page": int(page), "page_size": size, "items": items}
+
+    # --------- Búsquedas simples ORM (listas sin paginar) ---------
     def get(self, db: Session, division_id: int) -> Division:
         obj = db.query(Division).filter(Division.Id == division_id).first()
         if not obj:
@@ -40,20 +84,14 @@ class DivisionService:
         return obj
 
     def by_user(self, db: Session, user_id: str) -> List[Division]:
-        ids = (
-            db.query(UsuarioDivision.DivisionId)
-              .filter(UsuarioDivision.UsuarioId == user_id)
-              .all()
-        )
+        ids = db.query(UsuarioDivision.DivisionId).filter(UsuarioDivision.UsuarioId == user_id).all()
         id_list = [r[0] for r in ids]
         if not id_list:
             return []
-        return (
-            db.query(Division)
-              .filter(Division.Id.in_(id_list))
-              .order_by(Division.Direccion)
-              .all()
-        )
+        return (db.query(Division)
+                  .filter(Division.Id.in_(id_list))
+                  .order_by(Division.Direccion)
+                  .all())
 
     def by_servicio(self, db: Session, servicio_id: int, search: Optional[str] = None) -> List[Division]:
         q = db.query(Division).filter(Division.ServicioId == servicio_id)
@@ -63,29 +101,32 @@ class DivisionService:
         return q.order_by(Division.Direccion).all()
 
     def by_edificio(self, db: Session, edificio_id: int) -> List[Division]:
-        return (
-            db.query(Division)
-              .filter(Division.EdificioId == edificio_id)
-              .order_by(Division.Direccion)
-              .all()
-        )
+        return (db.query(Division)
+                  .filter(Division.EdificioId == edificio_id)
+                  .order_by(Division.Direccion)
+                  .all())
 
     def by_region(self, db: Session, region_id: int) -> List[Division]:
-        return (
-            db.query(Division)
-              .filter(Division.RegionId == region_id)
-              .order_by(Division.Direccion)
-              .all()
-        )
+        return (db.query(Division)
+                  .filter(Division.RegionId == region_id)
+                  .order_by(Division.Direccion)
+                  .all())
 
     def list_select(self, db: Session, q: str | None, servicio_id: int | None) -> List[tuple[int, str | None]]:
-        query = db.query(Division.Id, Division.Direccion)
-        if servicio_id is not None:
-            query = query.filter(Division.ServicioId == servicio_id)
-        if q:
-            like = f"%{q}%"
-            query = query.filter(func.lower(Division.Direccion).like(func.lower(like)))
-        return query.order_by(Division.Direccion).all()
+        # Picker: mostramos Dirección como "Nombre"
+        sql = """
+        SELECT d.Id, d.Direccion
+        FROM dbo.Divisiones d WITH (NOLOCK)
+        WHERE 1=1
+          AND (:servicio_id IS NULL OR d.ServicioId = :servicio_id)
+          AND (:q_like IS NULL OR LOWER(COALESCE(d.Direccion,'')) LIKE LOWER(:q_like))
+        ORDER BY d.Direccion
+        """
+        rows = db.execute(text(sql), {
+            "servicio_id": servicio_id,
+            "q_like": f"%{q}%" if q else None
+        }).all()
+        return [(r[0], r[1]) for r in rows]
 
     # --------- Observaciones / flags ---------
     def get_observacion_papel(self, db: Session, division_id: int) -> ObservacionDTO:
@@ -112,7 +153,7 @@ class DivisionService:
         d.Version = (d.Version or 0) + 1
         db.commit()
 
-    def get_reporta_residuos(self, db: Session, division_id: int) -> ReportaResiduosDTO:
+    def get_reporta_residuos(self, db: Session, division_id: int):
         d = self.get(db, division_id)
         return ReportaResiduosDTO(
             CheckReporta=d.JustificaResiduos,
@@ -179,7 +220,6 @@ class DivisionService:
 
     def patch(self, db: Session, division_id: int, patch: DivisionPatchDTO):
         aj = AjusteService(db)
-        # Muchos paneles de PMG editan estos campos: se respeta el switch global
         if not aj.can_edit_unidad_pmg():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -194,35 +234,32 @@ class DivisionService:
         db.refresh(d)
         return d
 
-def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None):
-    aj = AjusteService(db)
-    if not aj.can_delete_unidad_pmg():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Eliminación de Unidad PMG deshabilitada por configuración (Ajustes.DeleteUnidadPMG = false)."
-        )
+    # --------- Soft delete / activar-desactivar en cascada ---------
+    def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None):
+        aj = AjusteService(db)
+        if not aj.can_delete_unidad_pmg():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Eliminación de Unidad PMG deshabilitada por configuración (Ajustes.DeleteUnidadPMG = false)."
+            )
 
-    # Verifica existencia y estado actual sin cargar toda la entidad
-    d = db.query(Division.Id, Division.Active).filter(Division.Id == division_id).first()
-    if not d:
-        raise HTTPException(status_code=404, detail="División no encontrada")
-    if not d.Active:
-        # Ya estaba inactiva; no hacemos nada (idempotente)
-        return
+        d = db.query(Division.Id, Division.Active).filter(Division.Id == division_id).first()
+        if not d:
+            raise HTTPException(status_code=404, detail="División no encontrada")
+        if not d.Active:
+            return
 
-    now = datetime.utcnow()
+        now = datetime.utcnow()
 
-    try:
-        # Una sola transacción para todo
         with db.begin():
-            # --- ÁREAS ---
-            # Subconsulta de pisos activos de la división
+            # Subconsulta de pisos activos
             piso_ids_subq = (
                 db.query(Piso.Id)
                   .filter(Piso.DivisionId == division_id, Piso.Active.is_(True))
                   .subquery()
             )
 
+            # Áreas -> inactivar
             db.query(Area).filter(
                 Area.Active.is_(True),
                 Area.PisoId.in_(select(piso_ids_subq.c.Id)),
@@ -236,7 +273,7 @@ def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None
                 synchronize_session=False,
             )
 
-            # --- PISOS ---
+            # Pisos -> inactivar
             db.query(Piso).filter(
                 Piso.DivisionId == division_id,
                 Piso.Active.is_(True),
@@ -250,7 +287,7 @@ def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None
                 synchronize_session=False,
             )
 
-            # --- DIVISIÓN ---
+            # División -> inactivar
             db.query(Division).filter(
                 Division.Id == division_id,
                 Division.Active.is_(True),
@@ -263,48 +300,38 @@ def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None
                 },
                 synchronize_session=False,
             )
-        # with db.begin() hace commit automático si no hay excepciones
-    except Exception:
-        # Por si el contexto ya hizo rollback, volvemos a elevar
-        db.rollback()
-        raise
-    
-# --- NUEVO: activar/desactivar en cascada ---
-def set_active_cascada(self, db: Session, division_id: int, active: bool, user_id: str | None):
-    aj = AjusteService(db)
-    # Usamos la misma guarda que el delete "blando" (ajústala si quieres otra política)
-    if not aj.can_delete_unidad_pmg():
-        from fastapi import HTTPException, status
-        accion = "activar" if active else "desactivar"
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"No tienes permiso para {accion} la Unidad PMG (Ajustes.DeleteUnidadPMG = false)."
-        )
 
-    d = self.get(db, division_id)
-    now = datetime.utcnow()
+    def set_active_cascada(self, db: Session, division_id: int, active: bool, user_id: str | None):
+        aj = AjusteService(db)
+        if not aj.can_delete_unidad_pmg():
+            accion = "activar" if active else "desactivar"
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No tienes permiso para {accion} la Unidad PMG (Ajustes.DeleteUnidadPMG = false)."
+            )
 
-    # Set estado división
-    d.Active = bool(active)
-    d.UpdatedAt = now
-    d.ModifiedBy = user_id
-    d.Version = (d.Version or 0) + 1
+        d = self.get(db, division_id)
+        now = datetime.utcnow()
 
-    # Cascada a Pisos y Áreas
-    pisos = db.query(Piso).filter(Piso.DivisionId == division_id).all()
-    for p in pisos:
-        p.Active = bool(active)
-        p.UpdatedAt = now
-        p.ModifiedBy = user_id
-        p.Version = (p.Version or 0) + 1
+        d.Active = bool(active)
+        d.UpdatedAt = now
+        d.ModifiedBy = user_id
+        d.Version = (d.Version or 0) + 1
 
-        areas = db.query(Area).filter(Area.PisoId == p.Id).all()
-        for a in areas:
-            a.Active = bool(active)
-            a.UpdatedAt = now
-            a.ModifiedBy = user_id
-            a.Version = (a.Version or 0) + 1
+        pisos = db.query(Piso).filter(Piso.DivisionId == division_id).all()
+        for p in pisos:
+            p.Active = bool(active)
+            p.UpdatedAt = now
+            p.ModifiedBy = user_id
+            p.Version = (p.Version or 0) + 1
 
-    db.commit()
-    db.refresh(d)
-    return d
+            areas = db.query(Area).filter(Area.PisoId == p.Id).all()
+            for a in areas:
+                a.Active = bool(active)
+                a.UpdatedAt = now
+                a.ModifiedBy = user_id
+                a.Version = (a.Version or 0) + 1
+
+        db.commit()
+        db.refresh(d)
+        return d

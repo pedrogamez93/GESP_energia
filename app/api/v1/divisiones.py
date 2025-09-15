@@ -1,4 +1,4 @@
-from typing import Annotated, List, Optional
+from typing import Annotated, List
 from fastapi import APIRouter, Depends, Query, Path, Request, Response, status
 from sqlalchemy.orm import Session
 
@@ -19,23 +19,32 @@ DbDep = Annotated[Session, Depends(get_db)]
 def _current_user_id(request: Request) -> str | None:
     return getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
 
-# ---- GET públicos (existentes) ----
+# ---- GET públicos (paginado, liviano) ----
 @router.get("", response_model=dict, summary="Listado paginado")
 def list_divisiones(
     db: DbDep,
-    q: str | None = Query(default=None),
+    q: str | None = Query(default=None, description="Busca en Dirección o Nombre"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    active: bool | None = Query(default=True),
+    ServicioId: int | None = Query(default=None),
+    RegionId: int | None = Query(default=None),
+    ComunaId: int | None = Query(default=None),
 ):
-    return svc.list(db, q, page, page_size)
+    """
+    Devuelve { total, page, page_size, items[] }.
+    items: dicts planos (sin ORM), para evitar 'loading' en Swagger.
+    """
+    return svc.list(db, q, page, page_size, active, ServicioId, RegionId, ComunaId)
 
 @router.get("/select", response_model=List[DivisionSelectDTO], summary="(picker) Id/Dirección")
 def select_divisiones(
     db: DbDep,
-    q: str | None = Query(default=None),
+    q: str | None = Query(default=None, description="Busca en Dirección"),
     ServicioId: int | None = Query(default=None),
 ):
     rows = svc.list_select(db, q, ServicioId)
+    # Nota: usamos el campo 'Nombre' del DTO para mostrar 'Dirección' en el picker
     return [DivisionSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
 @router.get("/{division_id}", response_model=DivisionDTO, summary="Detalle")
@@ -82,7 +91,7 @@ def get_divisiones_by_user(
     return [DivisionListDTO.model_validate(x) for x in items]
 
 # ---------------------------
-# NUEVO: paridad con .NET
+# Paridad con .NET (observaciones / flags / años)
 # ---------------------------
 
 # Observación/justificación de papel
@@ -104,7 +113,7 @@ def put_obs_papel(
 def get_obs_residuos(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_observacion_residuos(db, division_id)
 
-@router.put("/observa-residuos/{division_id}", response_model=OkMessage)
+@router.put("/observacion-residuos/{division_id}", response_model=OkMessage)
 def put_obs_residuos(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: ObservacionDTO,
@@ -194,7 +203,6 @@ def delete_division(
 ):
     svc.delete_soft_cascada(db, division_id, _current_user_id(request))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
 
 # --- Activar / Desactivar (soft) ---
 @router.put("/{division_id}/activar", response_model=DivisionDTO, summary="Activar división (soft, en cascada)")
