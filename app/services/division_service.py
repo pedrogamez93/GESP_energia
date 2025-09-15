@@ -1,82 +1,109 @@
+# app/services/division_service.py
 from __future__ import annotations
-from typing import List, Optional
 from datetime import datetime
+from typing import List, Optional
 
-from sqlalchemy import func, select, text
-from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
+from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
 
 from app.db.models.division import Division
 from app.db.models.piso import Piso
 from app.db.models.area import Area
 from app.db.models.usuarios_divisiones import UsuarioDivision
+from app.db.models.direccion import Direccion
 from app.schemas.division import (
+    DivisionDTO, DivisionListDTO,
     ObservacionDTO, ReportaResiduosDTO, ObservacionInexistenciaDTO,
-    DivisionAniosDTO, DivisionPatchDTO
+    DivisionPatchDTO, DivisionAniosDTO,
 )
 from app.services.ajuste_service import AjusteService
 
-def _order_by_nombre_nulls_last_sql() -> str:
-    # Emulación de NULLS LAST para SQL Server
-    return "CASE WHEN d.Nombre IS NULL THEN 1 ELSE 0 END, d.Nombre, d.Id"
 
 class DivisionService:
-    # --------- Listado paginado (SQL liviano) ---------
+    # --------- Listado (paginado, items planos) ---------
     def list(
         self,
         db: Session,
-        q: str | None,
+        q: Optional[str],
         page: int,
         page_size: int,
         active: Optional[bool] = True,
         servicio_id: Optional[int] = None,
         region_id: Optional[int] = None,
+        provincia_id: Optional[int] = None,
         comuna_id: Optional[int] = None,
+        **_: object,  # tolera kwargs extra
     ) -> dict:
-        size = max(1, min(200, int(page_size)))
-        offset = (int(page) - 1) * size
-
-        params = {
-            "active": active,
-            "servicio_id": servicio_id,
-            "region_id": region_id,
-            "comuna_id": comuna_id,
-            "q_like": f"%{q}%" if q else None,
-            "offset": offset,
-            "limit": size,
-        }
-
-        where_sql = """
-        1=1
-        AND (:active IS NULL OR d.Active = :active)
-        AND (:servicio_id IS NULL OR d.ServicioId = :servicio_id)
-        AND (:region_id IS NULL OR d.RegionId = :region_id)
-        AND (:comuna_id IS NULL OR d.ComunaId = :comuna_id)
-        AND (
-            :q_like IS NULL OR
-            LOWER(COALESCE(d.Direccion, '')) LIKE LOWER(:q_like) OR
-            LOWER(COALESCE(d.Nombre,    '')) LIKE LOWER(:q_like)
-        )
         """
+        Devuelve dicts planos aplicando COALESCE con Direcciones:
+        - RegionId/ProvinciaId/ComunaId/Direccion se toman de Direcciones si en Divisiones vienen NULL.
+        - Filtros por Servicio/Región/Provincia/Comuna operan sobre ambos orígenes.
+        - Búsqueda por Nombre/Dirección insensible a mayúsculas.
+        """
+        qy = (
+            db.query(
+                Division.Id.label("Id"),
+                Division.Nombre.label("Nombre"),
+                Division.Active.label("Active"),
+                Division.ServicioId.label("ServicioId"),
+                func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
+                func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
+                func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
+                func.coalesce(Division.Direccion, Direccion.DireccionCompleta).label("Direccion"),
+            )
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+        )
 
-        total = db.execute(text(f"""
-            SELECT COUNT(1)
-            FROM dbo.Divisiones d WITH (NOLOCK)
-            WHERE {where_sql}
-        """), params).scalar() or 0
+        if active is not None:
+            qy = qy.filter(Division.Active == active)
+        if servicio_id is not None:
+            qy = qy.filter(Division.ServicioId == servicio_id)
+        if region_id is not None:
+            qy = qy.filter(or_(Division.RegionId == region_id, Direccion.RegionId == region_id))
+        if provincia_id is not None:
+            qy = qy.filter(or_(Division.ProvinciaId == provincia_id, Direccion.ProvinciaId == provincia_id))
+        if comuna_id is not None:
+            qy = qy.filter(or_(Division.ComunaId == comuna_id, Direccion.ComunaId == comuna_id))
 
-        rows = db.execute(text(f"""
-            SELECT d.Id, d.Nombre, d.Active, d.ServicioId, d.RegionId, d.ComunaId, d.Direccion
-            FROM dbo.Divisiones d WITH (NOLOCK)
-            WHERE {where_sql}
-            ORDER BY {_order_by_nombre_nulls_last_sql()}
-            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
-        """), params).mappings().all()
+        if q:
+            like = f"%{q}%"
+            qy = qy.filter(
+                or_(
+                    func.lower(func.coalesce(Division.Nombre, "")).like(func.lower(like)),
+                    func.lower(func.coalesce(Division.Direccion, "")).like(func.lower(like)),
+                    func.lower(func.coalesce(Direccion.DireccionCompleta, "")).like(func.lower(like)),
+                )
+            )
 
-        items = [dict(r) for r in rows]
-        return {"total": int(total), "page": int(page), "page_size": size, "items": items}
+        total = qy.count()
+        size = max(1, min(200, page_size))
+        rows = (
+            qy.order_by(
+                func.coalesce(Division.Direccion, Direccion.DireccionCompleta).asc(),
+                Division.Id.asc(),
+            )
+            .offset((page - 1) * size)
+            .limit(size)
+            .all()
+        )
 
-    # --------- Búsquedas simples ORM (listas sin paginar) ---------
+        items = [
+            {
+                "Id": r.Id,
+                "Nombre": r.Nombre,
+                "Active": r.Active,
+                "ServicioId": r.ServicioId,
+                "RegionId": r.RegionId,
+                "ProvinciaId": r.ProvinciaId,
+                "ComunaId": r.ComunaId,
+                "Direccion": r.Direccion,
+            }
+            for r in rows
+        ]
+        return {"total": total, "page": page, "page_size": size, "items": items}
+
+    # --------- GET/SELECT y filtros simples ---------
     def get(self, db: Session, division_id: int) -> Division:
         obj = db.query(Division).filter(Division.Id == division_id).first()
         if not obj:
@@ -88,45 +115,48 @@ class DivisionService:
         id_list = [r[0] for r in ids]
         if not id_list:
             return []
-        return (db.query(Division)
-                  .filter(Division.Id.in_(id_list))
-                  .order_by(Division.Direccion)
-                  .all())
+        return (
+            db.query(Division)
+            .filter(Division.Id.in_(id_list))
+            .order_by(Division.Direccion)
+            .all()
+        )
 
     def by_servicio(self, db: Session, servicio_id: int, search: Optional[str] = None) -> List[Division]:
-        q = db.query(Division).filter(Division.ServicioId == servicio_id)
+        qy = db.query(Division).filter(Division.ServicioId == servicio_id)
         if search:
             like = f"%{search}%"
-            q = q.filter(func.lower(Division.Direccion).like(func.lower(like)))
-        return q.order_by(Division.Direccion).all()
+            qy = qy.filter(func.lower(Division.Direccion).like(func.lower(like)))
+        return qy.order_by(Division.Direccion).all()
 
     def by_edificio(self, db: Session, edificio_id: int) -> List[Division]:
-        return (db.query(Division)
-                  .filter(Division.EdificioId == edificio_id)
-                  .order_by(Division.Direccion)
-                  .all())
+        return (
+            db.query(Division)
+            .filter(Division.EdificioId == edificio_id)
+            .order_by(Division.Direccion)
+            .all()
+        )
 
     def by_region(self, db: Session, region_id: int) -> List[Division]:
-        return (db.query(Division)
-                  .filter(Division.RegionId == region_id)
-                  .order_by(Division.Direccion)
-                  .all())
+        return (
+            db.query(Division)
+            .filter(Division.RegionId == region_id)
+            .order_by(Division.Direccion)
+            .all()
+        )
 
-    def list_select(self, db: Session, q: str | None, servicio_id: int | None) -> List[tuple[int, str | None]]:
-        # Picker: mostramos Dirección como "Nombre"
-        sql = """
-        SELECT d.Id, d.Direccion
-        FROM dbo.Divisiones d WITH (NOLOCK)
-        WHERE 1=1
-          AND (:servicio_id IS NULL OR d.ServicioId = :servicio_id)
-          AND (:q_like IS NULL OR LOWER(COALESCE(d.Direccion,'')) LIKE LOWER(:q_like))
-        ORDER BY d.Direccion
-        """
-        rows = db.execute(text(sql), {
-            "servicio_id": servicio_id,
-            "q_like": f"%{q}%" if q else None
-        }).all()
-        return [(r[0], r[1]) for r in rows]
+    def list_select(self, db: Session, q: Optional[str], servicio_id: int | None) -> List[tuple[int, str | None]]:
+        DirPreferida = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
+        qy = (
+            db.query(Division.Id, DirPreferida.label("Nombre"))
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+        )
+        if servicio_id is not None:
+            qy = qy.filter(Division.ServicioId == servicio_id)
+        if q:
+            like = f"%{q}%"
+            qy = qy.filter(func.lower(DirPreferida).like(func.lower(like)))
+        return qy.order_by(DirPreferida.asc(), Division.Id.asc()).all()
 
     # --------- Observaciones / flags ---------
     def get_observacion_papel(self, db: Session, division_id: int) -> ObservacionDTO:
@@ -153,13 +183,13 @@ class DivisionService:
         d.Version = (d.Version or 0) + 1
         db.commit()
 
-    def get_reporta_residuos(self, db: Session, division_id: int):
+    def get_reporta_residuos(self, db: Session, division_id: int) -> ReportaResiduosDTO:
         d = self.get(db, division_id)
         return ReportaResiduosDTO(
             CheckReporta=d.JustificaResiduos,
             Justificacion=d.JustificacionResiduos,
             CheckReportaNoReciclados=d.JustificaResiduosNoReciclados,
-            JustificacionNoReciclados=d.JustificacionResiduosNoReciclados
+            JustificacionNoReciclados=d.JustificacionResiduosNoReciclados,
         )
 
     def set_reporta_residuos(self, db: Session, division_id: int, payload: ReportaResiduosDTO):
@@ -207,7 +237,7 @@ class DivisionService:
         if not aj.can_edit_unidad_pmg():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Edición de Unidad PMG deshabilitada por configuración (Ajustes.EditUnidadPMG = false)."
+                detail="Edición de Unidad PMG deshabilitada por configuración (Ajustes.EditUnidadPMG = false).",
             )
         d = self.get(db, payload.Id)
         if set_gestion:
@@ -223,7 +253,7 @@ class DivisionService:
         if not aj.can_edit_unidad_pmg():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Edición de Unidad PMG deshabilitada por configuración."
+                detail="Edición de Unidad PMG deshabilitada por configuración.",
             )
         d = self.get(db, division_id)
         for k, v in patch.model_dump(exclude_unset=True).items():
@@ -234,13 +264,13 @@ class DivisionService:
         db.refresh(d)
         return d
 
-    # --------- Soft delete / activar-desactivar en cascada ---------
+    # --- Soft delete en cascada ---
     def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None):
         aj = AjusteService(db)
         if not aj.can_delete_unidad_pmg():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Eliminación de Unidad PMG deshabilitada por configuración (Ajustes.DeleteUnidadPMG = false)."
+                detail="Eliminación de Unidad PMG deshabilitada por configuración (Ajustes.DeleteUnidadPMG = false).",
             )
 
         d = db.query(Division.Id, Division.Active).filter(Division.Id == division_id).first()
@@ -250,64 +280,64 @@ class DivisionService:
             return
 
         now = datetime.utcnow()
+        try:
+            with db.begin():
+                piso_ids_subq = (
+                    db.query(Piso.Id)
+                    .filter(Piso.DivisionId == division_id, Piso.Active.is_(True))
+                    .subquery()
+                )
 
-        with db.begin():
-            # Subconsulta de pisos activos
-            piso_ids_subq = (
-                db.query(Piso.Id)
-                  .filter(Piso.DivisionId == division_id, Piso.Active.is_(True))
-                  .subquery()
-            )
+                db.query(Area).filter(
+                    Area.Active.is_(True),
+                    Area.PisoId.in_(select(piso_ids_subq.c.Id)),
+                ).update(
+                    {
+                        Area.Active: False,
+                        Area.UpdatedAt: now,
+                        Area.ModifiedBy: user_id,
+                        Area.Version: func.coalesce(Area.Version, 0) + 1,
+                    },
+                    synchronize_session=False,
+                )
 
-            # Áreas -> inactivar
-            db.query(Area).filter(
-                Area.Active.is_(True),
-                Area.PisoId.in_(select(piso_ids_subq.c.Id)),
-            ).update(
-                {
-                    Area.Active: False,
-                    Area.UpdatedAt: now,
-                    Area.ModifiedBy: user_id,
-                    Area.Version: func.coalesce(Area.Version, 0) + 1,
-                },
-                synchronize_session=False,
-            )
+                db.query(Piso).filter(
+                    Piso.DivisionId == division_id,
+                    Piso.Active.is_(True),
+                ).update(
+                    {
+                        Piso.Active: False,
+                        Piso.UpdatedAt: now,
+                        Piso.ModifiedBy: user_id,
+                        Piso.Version: func.coalesce(Piso.Version, 0) + 1,
+                    },
+                    synchronize_session=False,
+                )
 
-            # Pisos -> inactivar
-            db.query(Piso).filter(
-                Piso.DivisionId == division_id,
-                Piso.Active.is_(True),
-            ).update(
-                {
-                    Piso.Active: False,
-                    Piso.UpdatedAt: now,
-                    Piso.ModifiedBy: user_id,
-                    Piso.Version: func.coalesce(Piso.Version, 0) + 1,
-                },
-                synchronize_session=False,
-            )
+                db.query(Division).filter(
+                    Division.Id == division_id,
+                    Division.Active.is_(True),
+                ).update(
+                    {
+                        Division.Active: False,
+                        Division.UpdatedAt: now,
+                        Division.ModifiedBy: user_id,
+                        Division.Version: func.coalesce(Division.Version, 0) + 1,
+                    },
+                    synchronize_session=False,
+                )
+        except Exception:
+            db.rollback()
+            raise
 
-            # División -> inactivar
-            db.query(Division).filter(
-                Division.Id == division_id,
-                Division.Active.is_(True),
-            ).update(
-                {
-                    Division.Active: False,
-                    Division.UpdatedAt: now,
-                    Division.ModifiedBy: user_id,
-                    Division.Version: func.coalesce(Division.Version, 0) + 1,
-                },
-                synchronize_session=False,
-            )
-
+    # --- Activar/Desactivar en cascada ---
     def set_active_cascada(self, db: Session, division_id: int, active: bool, user_id: str | None):
         aj = AjusteService(db)
         if not aj.can_delete_unidad_pmg():
             accion = "activar" if active else "desactivar"
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"No tienes permiso para {accion} la Unidad PMG (Ajustes.DeleteUnidadPMG = false)."
+                detail=f"No tienes permiso para {accion} la Unidad PMG (Ajustes.DeleteUnidadPMG = false).",
             )
 
         d = self.get(db, division_id)

@@ -1,4 +1,4 @@
-from typing import Annotated, List
+from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, Query, Path, Request, Response, status
 from sqlalchemy.orm import Session
 
@@ -17,34 +17,49 @@ svc = DivisionService()
 DbDep = Annotated[Session, Depends(get_db)]
 
 def _current_user_id(request: Request) -> str | None:
+    # Permite venir desde middleware (request.state.user_id) o cabecera explícita
     return getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
 
 # ---- GET públicos (paginado, liviano) ----
 @router.get("", response_model=dict, summary="Listado paginado")
 def list_divisiones(
     db: DbDep,
-    q: str | None = Query(default=None, description="Busca en Dirección o Nombre"),
+    q: Optional[str] = Query(None, description="Busca en Dirección o Nombre (case-insensitive)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    active: bool | None = Query(default=True),
-    ServicioId: int | None = Query(default=None),
-    RegionId: int | None = Query(default=None),
-    ComunaId: int | None = Query(default=None),
+    active: Optional[bool] = Query(True),
+    ServicioId: Optional[int] = Query(None),
+    RegionId: Optional[int] = Query(None),
+    ProvinciaId: Optional[int] = Query(None),
+    ComunaId: Optional[int] = Query(None),
 ):
     """
-    Devuelve { total, page, page_size, items[] }.
-    items: dicts planos (sin ORM), para evitar 'loading' en Swagger.
+    Devuelve `{ total, page, page_size, items[] }`.
+
+    Los campos `RegionId/ProvinciaId/ComunaId/Direccion` se **derivan desde Direcciones**
+    cuando en Divisiones vienen `NULL` (COALESCE). Así replicamos el comportamiento de .NET
+    y evitamos “loading” en Swagger.
     """
-    return svc.list(db, q, page, page_size, active, ServicioId, RegionId, ComunaId)
+    return svc.list(
+        db=db,
+        q=q,
+        page=page,
+        page_size=page_size,
+        active=active,
+        servicio_id=ServicioId,
+        region_id=RegionId,
+        provincia_id=ProvinciaId,
+        comuna_id=ComunaId,
+    )
 
 @router.get("/select", response_model=List[DivisionSelectDTO], summary="(picker) Id/Dirección")
 def select_divisiones(
     db: DbDep,
-    q: str | None = Query(default=None, description="Busca en Dirección"),
-    ServicioId: int | None = Query(default=None),
+    q: Optional[str] = Query(None, description="Busca en Dirección"),
+    ServicioId: Optional[int] = Query(None),
 ):
     rows = svc.list_select(db, q, ServicioId)
-    # Nota: usamos el campo 'Nombre' del DTO para mostrar 'Dirección' en el picker
+    # En el picker usamos 'Nombre' para mostrar la Dirección
     return [DivisionSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
 @router.get("/{division_id}", response_model=DivisionDTO, summary="Detalle")
@@ -58,7 +73,7 @@ def get_division(
 def get_divisiones_by_servicio(
     servicio_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    searchText: str | None = Query(default=None),
+    searchText: Optional[str] = Query(None),
 ):
     items = svc.by_servicio(db, servicio_id, searchText)
     return [DivisionListDTO.model_validate(x) for x in items]
