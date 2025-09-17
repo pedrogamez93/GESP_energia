@@ -1,18 +1,15 @@
-# app/audit/hooks.py
-
 import json
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
-
-from app.db.models.audit import AuditLog
-
+from app.db.models.audit import AuditLog  # <-- ruta correcta
 
 @event.listens_for(Session, "after_flush")
 def audit_after_flush(session: Session, flush_context):
     meta = session.info.get("request_meta", {}) or {}
-    actor = session.info.get("actor")  # p.ej. {"id": "...", "username": "..."}
+    actor = session.info.get("actor")  # {"id": "...", "username": "..."}
+
     def log(action: str, obj, changes: dict | None):
-        if isinstance(obj, AuditLog):  # evita recursión
+        if isinstance(obj, AuditLog):
             return
         session.add(AuditLog(
             action=action,
@@ -28,12 +25,19 @@ def audit_after_flush(session: Session, flush_context):
             ip=meta.get("ip"),
             user_agent=meta.get("user_agent"),
             changes_json=(json.dumps(changes) if changes else None),
+            request_body_sha256=meta.get("request_body_sha256"),
+            request_body_json=meta.get("request_body_json"),
         ))
-    for obj in session.new:     log("create", obj, None)
-    for obj in session.deleted: log("delete", obj, None)
+
+    for obj in session.new:
+        log("create", obj, None)
+
+    for obj in session.deleted:
+        log("delete", obj, None)
+
     for obj in session.dirty:
         state = inspect(obj)
-        if not state.modified: 
+        if not state.modified:
             continue
         changes = {}
         for attr in state.mapper.column_attrs:

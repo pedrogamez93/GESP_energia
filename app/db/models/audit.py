@@ -21,3 +21,4 @@ class AuditLog(Base):
     user_agent: Mapped[str | None] = mapped_column(String(512))
     changes_json: Mapped[str | None] = mapped_column()
     request_body_sha256: Mapped[str | None] = mapped_column(String(64))
+    request_body_json: Mapped[str | None] = mapped_column()  # <--- NUEVO
