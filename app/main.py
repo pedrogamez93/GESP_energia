@@ -5,17 +5,16 @@ from sqlalchemy import text
 from uuid import uuid4
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from starlette.responses import Response
+import asyncio
+import json
+from hashlib import sha256
+from urllib.parse import parse_qs
+
 from app.db.session import engine
 
 # ⬇️ importa y registra los listeners de auditoría al boot
 from app.audit import hooks   # <-- ¡IMPORTANTE!
-
-from app.db.session import engine
-
-import asyncio
-import anyio
-from starlette.responses import Response
-
 
 # CORS
 try:
@@ -113,7 +112,6 @@ tags_metadata = [
 app = FastAPI(title="API GESP", version="1.0.0", openapi_tags=tags_metadata)
 
 # Respeta X-Forwarded-For / X-Forwarded-Proto si estás detrás de Nginx/ALB
-# (añadido)
 app.add_middleware(ProxyHeadersMiddleware)
 
 app.add_middleware(
@@ -124,7 +122,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Middleware de request: adjunta metadatos a request.state.audit_meta (añadido) ---
+# ====== Auditoría: captura body en métodos de escritura, con redacción ======
+SENSITIVE_KEYS = {
+    "password", "pass", "contrasena", "contraseña",
+    "token", "access_token", "refresh_token", "authorization",
+    "api_key", "secret", "client_secret", "clave", "key"
+}
+MAX_BODY_LOG = 64 * 1024  # 64 KB
+EXCLUDED_PATHS = {"/api/v1/auth/login"}  # evita guardar credenciales en login
+
+def _redact(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float, bool)):
+        return value
+    s = str(value)
+    return s if len(s) <= 2 else s[:2] + "***" + s[-2:]
+
+def _redact_json(obj):
+    if isinstance(obj, dict):
+        return {k: ("***" if k.lower() in SENSITIVE_KEYS else _redact_json(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_json(v) for v in obj]
+    return obj
+
+# --- Middleware de request: adjunta metadatos + body redacted a request.state.audit_meta ---
 @app.middleware("http")
 async def attach_request_meta(request: Request, call_next):
     xff = request.headers.get("x-forwarded-for")
@@ -137,16 +159,62 @@ async def attach_request_meta(request: Request, call_next):
         "request_id": str(uuid4()),
     }
 
+    capture_body = (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.url.path not in EXCLUDED_PATHS
+    )
+
+    body_json_str = None
+    body_hash = None
+
+    if capture_body:
+        body_bytes = await request.body()
+
+        # Reinyecta el body para que el endpoint pueda leerlo normalmente
+        async def _receive():
+            return {"type": "http.request", "body": body_bytes, "more_body": False}
+        request._receive = _receive  # Starlette pattern
+
+        if body_bytes:
+            sample = body_bytes[:MAX_BODY_LOG]
+            body_hash = sha256(body_bytes).hexdigest()
+            ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+
+            try:
+                if "application/json" in ctype:
+                    parsed = json.loads(sample.decode("utf-8"))
+                    redacted = _redact_json(parsed)
+                    body_json_str = json.dumps(redacted, ensure_ascii=False)
+                elif "application/x-www-form-urlencoded" in ctype:
+                    parsed_raw = parse_qs(sample.decode("utf-8"))
+                    parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_raw.items()}
+                    redacted = _redact_json(parsed)
+                    body_json_str = json.dumps(redacted, ensure_ascii=False)
+                else:
+                    # multipart/form-data, text/plain, etc.: guarda una vista previa segura
+                    body_json_str = json.dumps(
+                        {"_raw_preview": sample.decode("utf-8", errors="ignore")},
+                        ensure_ascii=False
+                    )
+            except Exception:
+                # Si falla el parseo, guarda preview segura
+                body_json_str = json.dumps(
+                    {"_raw_preview": sample.decode("utf-8", errors="ignore")},
+                    ensure_ascii=False
+                )
+
+    # Deja disponibles en hooks
+    request.state.audit_meta["request_body_json"] = body_json_str
+    request.state.audit_meta["request_body_sha256"] = body_hash
+
     try:
         resp = await call_next(request)
         request.state.audit_meta["status_code"] = resp.status_code
         return resp
-
     except asyncio.CancelledError:
+        # 499: Client Closed Request (convención Nginx)
         request.state.audit_meta["status_code"] = 499
         return Response(status_code=499, content=b"Client Closed Request")
-    # completa metadatos con status_code una vez producido el response
-
 
 # --- Health ---
 @app.get("/", tags=["Health"])
