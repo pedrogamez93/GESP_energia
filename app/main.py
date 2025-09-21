@@ -25,6 +25,7 @@ except Exception:
     ALLOW_ORIGINS = ["*"]
 
 # --- Importa routers explícitamente desde cada submódulo ---
+from app.api.v1 import debug
 from app.api.v1.auth import router as auth_router
 from app.api.v1.users import router as users_router
 from app.api.v1.usuarios import router as usuarios_router
@@ -166,6 +167,7 @@ def health_db():
         raise HTTPException(status_code=503, detail="DB unavailable")
 
 # --- Routers ---
+app.include_router(debug.dbg)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(usuarios_router)
