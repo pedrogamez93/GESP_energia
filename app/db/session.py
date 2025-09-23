@@ -1,28 +1,32 @@
 # app/db/session.py
 from __future__ import annotations
 
+from typing import Generator
 import os
+
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker, Session as SASession
+from sqlalchemy.orm import sessionmaker, Session
 
 from app.core.config import settings
-from app.audit.context import current_request_meta  # <-- contextvar con metadatos de request
 
-# Flags por variables de entorno (opcionales)
-READ_UNCOMMITTED = os.getenv("DB_READ_UNCOMMITTED", "1") == "1"
-LOCK_TIMEOUT_MS  = int(os.getenv("DB_LOCK_TIMEOUT_MS", "5000"))
+# Flags por variables de entorno (opcionales; si no existen, no pasa nada raro)
+READ_UNCOMMITTED = os.getenv("DB_READ_UNCOMMITTED", "1") == "1"   # por defecto ON
+LOCK_TIMEOUT_MS  = int(os.getenv("DB_LOCK_TIMEOUT_MS", "5000"))   # por defecto 5000 ms
 
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,        # detecta conexiones muertas
     fast_executemany=True,     # mejora inserts masivos
     pool_recycle=1800,         # recicla conexiones viejas
-    future=True,
+    future=True,               # requerido por tu SQLAlchemy
 )
 
 @event.listens_for(engine, "connect")
 def _set_session_pragmas(dbapi_connection, connection_record):
-    """Aplica timeout y aislamiento en cada conexión (best-effort)."""
+    """
+    Aplica timeout y aislamiento de lectura liviana en CADA conexión.
+    Envuelto en try/except para jamás tumbar la app si el driver no soporta los SET.
+    """
     try:
         cursor = dbapi_connection.cursor()
         if LOCK_TIMEOUT_MS and LOCK_TIMEOUT_MS > 0:
@@ -31,20 +35,14 @@ def _set_session_pragmas(dbapi_connection, connection_record):
             cursor.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;")
         cursor.close()
     except Exception:
+        # Si falla, seguimos con valores por defecto
         pass
 
-class RequestAwareSession(SASession):
-    """Session que hereda metadatos del request automáticamente (vía contextvar)."""
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        try:
-            self.info["request_meta"] = current_request_meta.get({})
-        except Exception:
-            self.info["request_meta"] = {}
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
-SessionLocal = sessionmaker(
-    bind=engine,
-    autocommit=False,
-    autoflush=False,
-    class_=RequestAwareSession,  # <-- clave: cualquier Session ve request_meta
-)
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

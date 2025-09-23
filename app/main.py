@@ -69,8 +69,6 @@ from app.api.v1.frontis import router as frontis_router
 from app.api.v1.reportes import router as reportes_router
 from app.api.v1.parametros_medicion import router as parametros_medicion_router
 
-from app.audit.context import current_request_meta
-
 # --- OpenAPI tags (opcional, añade los que quieras mostrar en Swagger) ---
 tags_metadata = [
     {"name": "Health", "description": "Endpoints de verificación."},
@@ -151,11 +149,6 @@ def _redact_json(obj):
 # --- Middleware de request: adjunta metadatos + body redacted a request.state.audit_meta ---
 @app.middleware("http")
 async def attach_request_meta(request: Request, call_next):
-     # ... (tu código de meta y captura de body)
-    request.state.audit_meta["status_code"] = 200  # default para evitar NULL
-    # deja body_json / body_sha ya seteados...
-    current_request_meta.set(request.state.audit_meta)  # <-- ¡esta línea es clave!
-
     xff = request.headers.get("x-forwarded-for")
     ip = (xff.split(",")[0].strip() if xff else request.client.host)
     request.state.audit_meta = {
