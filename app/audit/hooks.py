@@ -1,24 +1,13 @@
 import json
 from typing import Any
-
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
-
 from app.db.models.audit import AuditLog  # ruta correcta
 
-
 def _to_json_safe(value: Any) -> str:
-    """
-    Convierte dict/list/obj a JSON serializable:
-      - datetime/date -> ISO 8601
-      - UUID -> str
-      - Decimal -> float (o str según encoder por defecto)
-      - Objetos ORM -> dict básico si aplica
-    Nunca lanza excepción (fallback a str(value)).
-    """
     try:
-        enc = jsonable_encoder(value)  # maneja datetime/uuid/decimal, etc.
+        enc = jsonable_encoder(value)
         return json.dumps(enc, ensure_ascii=False)
     except Exception:
         try:
@@ -26,23 +15,31 @@ def _to_json_safe(value: Any) -> str:
         except Exception:
             return '""'
 
+def _get_resource_id(obj) -> str | None:
+    """Obtiene la PK aunque no se llame 'id'. Soporta PK compuesta."""
+    try:
+        state = inspect(obj)
+        if state.identity:
+            return "|".join(str(v) for v in state.identity if v is not None)
+        # fallback: nombres típicos
+        for name in ("id", "Id", "ID", f"{obj.__class__.__name__}Id"):
+            if hasattr(obj, name):
+                val = getattr(obj, name)
+                return None if val is None else str(val)
+    except Exception:
+        pass
+    return None
 
 @event.listens_for(Session, "after_flush")
 def audit_after_flush(session: Session, flush_context):
-    # Metadatos inyectados por middleware o endpoint (si existen)
     meta = session.info.get("request_meta") or {}
-    actor = session.info.get("actor") or {}  # {"id": "...", "username": "..."}
+    actor = session.info.get("actor") or {}
 
     def log(action: str, obj, changes: dict | None):
-        # Evita auditar la propia tabla de auditoría
         if isinstance(obj, AuditLog):
             return
-
         try:
-            # Serializa los "changes" de manera segura
             changes_json = _to_json_safe(changes) if changes else None
-
-            # Serializa body (si viene como dict/list). Si ya es str, lo respetamos.
             rbj = meta.get("request_body_json")
             if isinstance(rbj, (dict, list)):
                 rbj = _to_json_safe(rbj)
@@ -51,8 +48,7 @@ def audit_after_flush(session: Session, flush_context):
                 AuditLog(
                     action=action,
                     resource_type=obj.__class__.__name__,
-                    # si tu PK no es 'id', ajusta aquí
-                    resource_id=str(getattr(obj, "id", None)),
+                    resource_id=_get_resource_id(obj),
                     http_method=meta.get("method"),
                     path=meta.get("path"),
                     status_code=meta.get("status_code"),
@@ -68,37 +64,29 @@ def audit_after_flush(session: Session, flush_context):
                 )
             )
         except Exception as e:
-            # La auditoría JAMÁS debe romper la transacción principal
-            # Guardamos el error en session.info para inspección si hace falta.
             session.info["audit_error"] = f"{type(e).__name__}: {e}"
 
-    # Altas
+    # create
     for obj in session.new:
         log("create", obj, None)
 
-    # Bajas
+    # delete
     for obj in session.deleted:
         log("delete", obj, None)
 
-    # Modificaciones
+    # update
     for obj in session.dirty:
         state = inspect(obj)
         if not state.modified:
             continue
-
         changes = {}
         for attr in state.mapper.column_attrs:
             hist = state.attrs[attr.key].history
             if not hist.has_changes():
                 continue
-
             old = hist.deleted[0] if hist.deleted else None
-            # Preferimos el valor agregado; si no, el actual del objeto
             new = hist.added[0] if hist.added else getattr(obj, attr.key)
-
-            # Evita ruido si SQLA considera cambio sin diferencia real
             if old != new:
                 changes[attr.key] = {"old": old, "new": new}
-
         if changes:
             log("update", obj, changes)

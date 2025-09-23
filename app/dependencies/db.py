@@ -1,15 +1,17 @@
 # app/dependencies/db.py
-from typing import Generator
+from typing import Generator, Optional
 from fastapi import Request
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 
-def get_db(request: Request) -> Generator[Session, None, None]:
-    db = SessionLocal()
-    # Copia segura: si no hay middleware, queda {}
-    db.info["request_meta"] = getattr(request.state, "audit_meta", {}) or {}
-    # Opcional: aquí puedes inyectar el actor autenticado en db.info["actor"]
+def get_db(request: Optional[Request] = None) -> Generator[Session, None, None]:
+    db: Session = SessionLocal()
     try:
+        meta = {}
+        if request is not None:
+            # copia segura: si el middleware no corrió, queda {}
+            meta = getattr(request.state, "audit_meta", {}) or {}
+        db.info["request_meta"] = meta
         yield db
     finally:
         db.close()
