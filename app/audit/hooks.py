@@ -1,22 +1,13 @@
 # app/audit/hooks.py
 import json
-import re
 from typing import Any
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
-from app.db.models.audit import AuditLog
+from app.db.models.audit import AuditLog  # ruta correcta
 
-ACTION_MAP = {
-    "create": "crear",
-    "update": "actualizar",
-    "delete": "eliminar",
-    "login": "ingreso",
-    "logout": "salida",
-}
-
-# Extrae id numérico o UUID al final de la ruta si hace falta
-UUID_OR_ID_RE = re.compile(r"/([0-9a-fA-F-]{8,}|[0-9]+)(?:$|[/?#])")
+# Si luego quieres rótulos en español para UI, úsalo fuera de DB.
+# PRESENTATION_MAP = {"create": "crear", "update": "actualizar", "delete": "eliminar", "login": "ingreso", "logout": "salida"}
 
 def _to_json_safe(value: Any) -> str:
     try:
@@ -38,42 +29,28 @@ def _spanish_changes(changes: dict[str, Any]) -> dict[str, Any]:
             out[k] = v
     return out
 
-def _resource_id_from_mapper(obj) -> list[str | None]:
-    vals: list[str | None] = []
+def _get_resource_id(obj) -> str | None:
+    """Obtiene la PK aunque no se llame 'id'. Soporta PK compuesta."""
     try:
         state = inspect(obj)
-        if state.identity:
-            return [str(v) if v is not None else None for v in state.identity]
+        if state.identity:  # valores de PK ya cargados
+            return "|".join(str(v) for v in state.identity if v is not None)
         if state.mapper is not None and state.mapper.primary_key:
+            pks = []
             for col in state.mapper.primary_key:
-                v = None
-                if hasattr(obj, col.key):
-                    v = getattr(obj, col.key)
-                elif hasattr(obj, col.name):
-                    v = getattr(obj, col.name)
-                vals.append(None if v is None else str(v))
+                try:
+                    pks.append(getattr(obj, col.key))
+                except Exception:
+                    pks.append(None)
+            if any(v is not None for v in pks):
+                return "|".join("NULL" if v is None else str(v) for v in pks)
+        for name in ("id", "Id", "ID", f"{obj.__class__.__name__}Id"):
+            if hasattr(obj, name):
+                val = getattr(obj, name)
+                return None if val is None else str(val)
     except Exception:
         pass
-    return vals
-
-def _id_from_path(meta: dict) -> str | None:
-    path = (meta or {}).get("path") or ""
-    m = UUID_OR_ID_RE.search(path)
-    return m.group(1) if m else None
-
-def _compute_resource_id(obj, meta: dict) -> str | None:
-    # 1) Identity / PK declaradas
-    pk_vals = _resource_id_from_mapper(obj)
-    if pk_vals and any(v is not None for v in pk_vals):
-        return "|".join("NULL" if v is None else v for v in pk_vals)
-    # 2) Nombres frecuentes
-    for name in ("id", "Id", "ID", f"{obj.__class__.__name__}Id"):
-        if hasattr(obj, name):
-            val = getattr(obj, name)
-            if val is not None:
-                return str(val)
-    # 3) Fallback desde la URL
-    return _id_from_path(meta)
+    return None
 
 @event.listens_for(Session, "after_flush")
 def audit_after_flush(session: Session, flush_context):
@@ -81,9 +58,11 @@ def audit_after_flush(session: Session, flush_context):
     actor = session.info.get("actor") or {}
 
     def log(action: str, obj, changes: dict | None):
+        # ⚠️ No romper por recursión
         if isinstance(obj, AuditLog):
             return
         try:
+            # cambios en español
             changes_es = _spanish_changes(changes) if changes else None
             changes_json = _to_json_safe(changes_es) if changes_es else None
 
@@ -93,12 +72,13 @@ def audit_after_flush(session: Session, flush_context):
 
             session.add(
                 AuditLog(
-                    action=ACTION_MAP.get(action, action),
+                    # ⬇️ IMPORTANTE: guardar en inglés para pasar el CHECK de SQL Server
+                    action=action,  # "create" | "update" | "delete" | "login" | "logout" | "read"
                     resource_type=obj.__class__.__name__,
-                    resource_id=_compute_resource_id(obj, meta),
+                    resource_id=_get_resource_id(obj),
                     http_method=meta.get("method"),
                     path=meta.get("path"),
-                    status_code=meta.get("status_code"),  # por defecto 200 en el middleware
+                    status_code=meta.get("status_code"),
                     actor_id=actor.get("id"),
                     actor_username=actor.get("username"),
                     session_id=meta.get("session_id"),
@@ -113,20 +93,20 @@ def audit_after_flush(session: Session, flush_context):
         except Exception as e:
             session.info["audit_error"] = f"{type(e).__name__}: {e}"
 
-    # crear
+    # create
     for obj in session.new:
         log("create", obj, None)
 
-    # eliminar
+    # delete
     for obj in session.deleted:
         log("delete", obj, None)
 
-    # actualizar
+    # update con diff
     for obj in session.dirty:
         state = inspect(obj)
         if not state.modified:
             continue
-        changes: dict[str, Any] = {}
+        changes = {}
         for attr in state.mapper.column_attrs:
             hist = state.attrs[attr.key].history
             if not hist.has_changes():
