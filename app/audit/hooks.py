@@ -1,3 +1,4 @@
+# app/audit/hooks.py
 import json
 from typing import Any
 from fastapi.encoders import jsonable_encoder
@@ -5,17 +6,13 @@ from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
 from app.db.models.audit import AuditLog  # ruta correcta
 
-
-
 ACTION_MAP = {
     "create": "crear",
     "update": "actualizar",
     "delete": "eliminar",
     "login": "ingreso",
-    "logout": "salida"
+    "logout": "salida",
 }
-
-
 
 def _to_json_safe(value: Any) -> str:
     try:
@@ -27,21 +24,46 @@ def _to_json_safe(value: Any) -> str:
         except Exception:
             return '""'
 
-
+def _spanish_changes(changes: dict[str, Any]) -> dict[str, Any]:
+    """Convierte {"old": x, "new": y} -> {"anterior": x, "nuevo": y}."""
+    out: dict[str, Any] = {}
+    for k, v in (changes or {}).items():
+        if isinstance(v, dict) and "old" in v or "new" in v:
+            out[k] = {"anterior": v.get("old"), "nuevo": v.get("new")}
+        else:
+            out[k] = v
+    return out
 
 def _get_resource_id(obj) -> str | None:
+    """
+    Obtiene la PK aunque no se llame 'id'. Soporta PK compuesta.
+    1) usa state.identity (si ya está),
+    2) si no, lee columnas PK del mapper,
+    3) fallback a nombres comunes.
+    """
     try:
         state = inspect(obj)
-        if state.identity:  # valores de PK cargados por SQLAlchemy
+        # 1) Identity si ya existe (tras flush en inserts o siempre en updates)
+        if state.identity:
             return "|".join(str(v) for v in state.identity if v is not None)
+        # 2) PKs desde el mapper (útil si identity aún no está poblado)
+        if state.mapper is not None and state.mapper.primary_key:
+            pks = []
+            for col in state.mapper.primary_key:
+                try:
+                    pks.append(getattr(obj, col.key))
+                except Exception:
+                    pks.append(None)
+            if any(v is not None for v in pks):
+                return "|".join("NULL" if v is None else str(v) for v in pks)
+        # 3) Fallback por nombres típicos
         for name in ("id", "Id", "ID", f"{obj.__class__.__name__}Id"):
             if hasattr(obj, name):
                 val = getattr(obj, name)
-                return str(val) if val is not None else None
+                return None if val is None else str(val)
     except Exception:
         pass
     return None
-
 
 @event.listens_for(Session, "after_flush")
 def audit_after_flush(session: Session, flush_context):
@@ -52,7 +74,10 @@ def audit_after_flush(session: Session, flush_context):
         if isinstance(obj, AuditLog):
             return
         try:
-            changes_json = _to_json_safe(changes) if changes else None
+            # españoliza cambios
+            changes_es = _spanish_changes(changes) if changes else None
+            changes_json = _to_json_safe(changes_es) if changes_es else None
+
             rbj = meta.get("request_body_json")
             if isinstance(rbj, (dict, list)):
                 rbj = _to_json_safe(rbj)
@@ -60,11 +85,11 @@ def audit_after_flush(session: Session, flush_context):
             session.add(
                 AuditLog(
                     action=ACTION_MAP.get(action, action),
-                    resource_type=obj.__class__.__name__,
+                    resource_type=obj.__class__.__name__,   # traduce con un map si quieres
                     resource_id=_get_resource_id(obj),
                     http_method=meta.get("method"),
                     path=meta.get("path"),
-                    status_code=meta.get("status_code"),
+                    status_code=meta.get("status_code"),    # puede ser None (ver nota abajo)
                     actor_id=actor.get("id"),
                     actor_username=actor.get("username"),
                     session_id=meta.get("session_id"),
@@ -79,15 +104,15 @@ def audit_after_flush(session: Session, flush_context):
         except Exception as e:
             session.info["audit_error"] = f"{type(e).__name__}: {e}"
 
-    # create
+    # crear
     for obj in session.new:
         log("create", obj, None)
 
-    # delete
+    # eliminar
     for obj in session.deleted:
         log("delete", obj, None)
 
-    # update
+    # actualizar
     for obj in session.dirty:
         state = inspect(obj)
         if not state.modified:
