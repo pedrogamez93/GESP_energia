@@ -4,10 +4,7 @@ from typing import Any
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
-from app.db.models.audit import AuditLog  # ruta correcta
-
-# Si luego quieres rótulos en español para UI, úsalo fuera de DB.
-# PRESENTATION_MAP = {"create": "crear", "update": "actualizar", "delete": "eliminar", "login": "ingreso", "logout": "salida"}
+from app.db.models.audit import AuditLog  # ¡asegúrate de que esta ruta sea correcta!
 
 def _to_json_safe(value: Any) -> str:
     try:
@@ -33,7 +30,7 @@ def _get_resource_id(obj) -> str | None:
     """Obtiene la PK aunque no se llame 'id'. Soporta PK compuesta."""
     try:
         state = inspect(obj)
-        if state.identity:  # valores de PK ya cargados
+        if state.identity:
             return "|".join(str(v) for v in state.identity if v is not None)
         if state.mapper is not None and state.mapper.primary_key:
             pks = []
@@ -58,11 +55,11 @@ def audit_after_flush(session: Session, flush_context):
     actor = session.info.get("actor") or {}
 
     def log(action: str, obj, changes: dict | None):
-        # ⚠️ No romper por recursión
+        # evita recursión
         if isinstance(obj, AuditLog):
             return
         try:
-            # cambios en español
+            # cambios a español
             changes_es = _spanish_changes(changes) if changes else None
             changes_json = _to_json_safe(changes_es) if changes_es else None
 
@@ -72,8 +69,8 @@ def audit_after_flush(session: Session, flush_context):
 
             session.add(
                 AuditLog(
-                    # ⬇️ IMPORTANTE: guardar en inglés para pasar el CHECK de SQL Server
-                    action=action,  # "create" | "update" | "delete" | "login" | "logout" | "read"
+                    # ⚠️ Guardar SIEMPRE en INGLÉS para pasar el CHECK de SQL Server
+                    action=action,  # "create"|"update"|"delete"|"login"|"logout"|"read"
                     resource_type=obj.__class__.__name__,
                     resource_id=_get_resource_id(obj),
                     http_method=meta.get("method"),
@@ -101,7 +98,7 @@ def audit_after_flush(session: Session, flush_context):
     for obj in session.deleted:
         log("delete", obj, None)
 
-    # update con diff
+    # update (con diff)
     for obj in session.dirty:
         state = inspect(obj)
         if not state.modified:
