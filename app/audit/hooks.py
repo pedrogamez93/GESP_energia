@@ -5,6 +5,18 @@ from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
 from app.db.models.audit import AuditLog  # ruta correcta
 
+
+
+ACTION_MAP = {
+    "create": "crear",
+    "update": "actualizar",
+    "delete": "eliminar",
+    "login": "ingreso",
+    "logout": "salida"
+}
+
+
+
 def _to_json_safe(value: Any) -> str:
     try:
         enc = jsonable_encoder(value)
@@ -15,20 +27,21 @@ def _to_json_safe(value: Any) -> str:
         except Exception:
             return '""'
 
+
+
 def _get_resource_id(obj) -> str | None:
-    """Obtiene la PK aunque no se llame 'id'. Soporta PK compuesta."""
     try:
         state = inspect(obj)
-        if state.identity:
+        if state.identity:  # valores de PK cargados por SQLAlchemy
             return "|".join(str(v) for v in state.identity if v is not None)
-        # fallback: nombres típicos
         for name in ("id", "Id", "ID", f"{obj.__class__.__name__}Id"):
             if hasattr(obj, name):
                 val = getattr(obj, name)
-                return None if val is None else str(val)
+                return str(val) if val is not None else None
     except Exception:
         pass
     return None
+
 
 @event.listens_for(Session, "after_flush")
 def audit_after_flush(session: Session, flush_context):
@@ -46,7 +59,7 @@ def audit_after_flush(session: Session, flush_context):
 
             session.add(
                 AuditLog(
-                    action=action,
+                    action=ACTION_MAP.get(action, action),
                     resource_type=obj.__class__.__name__,
                     resource_id=_get_resource_id(obj),
                     http_method=meta.get("method"),

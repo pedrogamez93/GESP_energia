@@ -11,7 +11,7 @@ def get_db(request: Optional[Request] = None) -> Generator[Session, None, None]:
         if request is not None:
             # copia segura: si el middleware no corrió, queda {}
             meta = getattr(request.state, "audit_meta", {}) or {}
-        db.info["request_meta"] = meta
+        db.info["request_meta"] = getattr(request.state, "audit_meta", {}) or {}
         yield db
     finally:
         db.close()
