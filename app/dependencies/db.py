@@ -1,17 +1,15 @@
 # app/dependencies/db.py
-from typing import Generator, Optional
-from fastapi import Request
+from typing import Generator
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 
-def get_db(request: Optional[Request] = None) -> Generator[Session, None, None]:
+def get_db() -> Generator[Session, None, None]:
+    """
+    Devuelve una Session que ya viene con info['request_meta']
+    (inyectada por RequestAwareSession vía contextvar).
+    """
     db: Session = SessionLocal()
     try:
-        meta = {}
-        if request is not None:
-            # copia segura: si el middleware no corrió, queda {}
-            meta = getattr(request.state, "audit_meta", {}) or {}
-        db.info["request_meta"] = meta  # <-- USAR 'meta' (antes leías de request.state de nuevo)
         yield db
     finally:
         db.close()

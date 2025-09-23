@@ -1,11 +1,11 @@
-
 # app/audit/hooks.py
 import json
+import re
 from typing import Any
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
-from app.db.models.audit import AuditLog  # ruta correcta
+from app.db.models.audit import AuditLog
 
 ACTION_MAP = {
     "create": "crear",
@@ -14,6 +14,9 @@ ACTION_MAP = {
     "login": "ingreso",
     "logout": "salida",
 }
+
+# /.../xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx o números al final de la ruta
+UUID_OR_ID_RE = re.compile(r"/([0-9a-fA-F-]{8,}|[0-9]+)(?:$|[/?#])")
 
 def _to_json_safe(value: Any) -> str:
     try:
@@ -29,42 +32,48 @@ def _spanish_changes(changes: dict[str, Any]) -> dict[str, Any]:
     """Convierte {"old": x, "new": y} -> {"anterior": x, "nuevo": y}."""
     out: dict[str, Any] = {}
     for k, v in (changes or {}).items():
-        if isinstance(v, dict) and "old" in v or "new" in v:
+        if isinstance(v, dict) and ("old" in v or "new" in v):
             out[k] = {"anterior": v.get("old"), "nuevo": v.get("new")}
         else:
             out[k] = v
     return out
 
-def _get_resource_id(obj) -> str | None:
-    """
-    Obtiene la PK aunque no se llame 'id'. Soporta PK compuesta.
-    1) usa state.identity (si ya está),
-    2) si no, lee columnas PK del mapper,
-    3) fallback a nombres comunes.
-    """
+def _resource_id_from_mapper(obj) -> list[str | None]:
+    vals: list[str | None] = []
     try:
         state = inspect(obj)
-        # 1) Identity si ya existe (tras flush en inserts o siempre en updates)
         if state.identity:
-            return "|".join(str(v) for v in state.identity if v is not None)
-        # 2) PKs desde el mapper (útil si identity aún no está poblado)
+            return [str(v) if v is not None else None for v in state.identity]
         if state.mapper is not None and state.mapper.primary_key:
-            pks = []
             for col in state.mapper.primary_key:
-                try:
-                    pks.append(getattr(obj, col.key))
-                except Exception:
-                    pks.append(None)
-            if any(v is not None for v in pks):
-                return "|".join("NULL" if v is None else str(v) for v in pks)
-        # 3) Fallback por nombres típicos
-        for name in ("id", "Id", "ID", f"{obj.__class__.__name__}Id"):
-            if hasattr(obj, name):
-                val = getattr(obj, name)
-                return None if val is None else str(val)
+                v = None
+                if hasattr(obj, col.key):
+                    v = getattr(obj, col.key)
+                elif hasattr(obj, col.name):
+                    v = getattr(obj, col.name)
+                vals.append(None if v is None else str(v))
     except Exception:
         pass
-    return None
+    return vals
+
+def _id_from_path(meta: dict) -> str | None:
+    path = (meta or {}).get("path") or ""
+    m = UUID_OR_ID_RE.search(path)
+    return m.group(1) if m else None
+
+def _compute_resource_id(obj, meta: dict) -> str | None:
+    # 1) Identity / PK declaradas
+    pk_vals = _resource_id_from_mapper(obj)
+    if pk_vals and any(v is not None for v in pk_vals):
+        return "|".join("NULL" if v is None else v for v in pk_vals)
+    # 2) Nombres frecuentes
+    for name in ("id", "Id", "ID", f"{obj.__class__.__name__}Id"):
+        if hasattr(obj, name):
+            val = getattr(obj, name)
+            if val is not None:
+                return str(val)
+    # 3) Fallback desde la URL
+    return _id_from_path(meta)
 
 @event.listens_for(Session, "after_flush")
 def audit_after_flush(session: Session, flush_context):
@@ -75,7 +84,6 @@ def audit_after_flush(session: Session, flush_context):
         if isinstance(obj, AuditLog):
             return
         try:
-            # españoliza cambios
             changes_es = _spanish_changes(changes) if changes else None
             changes_json = _to_json_safe(changes_es) if changes_es else None
 
@@ -86,11 +94,11 @@ def audit_after_flush(session: Session, flush_context):
             session.add(
                 AuditLog(
                     action=ACTION_MAP.get(action, action),
-                    resource_type=obj.__class__.__name__,   # traduce con un map si quieres
-                    resource_id=_get_resource_id(obj),
+                    resource_type=obj.__class__.__name__,
+                    resource_id=_compute_resource_id(obj, meta),
                     http_method=meta.get("method"),
                     path=meta.get("path"),
-                    status_code=meta.get("status_code"),    # puede ser None (ver nota abajo)
+                    status_code=meta.get("status_code"),  # en main.py pon default=200 antes de call_next
                     actor_id=actor.get("id"),
                     actor_username=actor.get("username"),
                     session_id=meta.get("session_id"),
@@ -118,7 +126,7 @@ def audit_after_flush(session: Session, flush_context):
         state = inspect(obj)
         if not state.modified:
             continue
-        changes = {}
+        changes: dict[str, Any] = {}
         for attr in state.mapper.column_attrs:
             hist = state.attrs[attr.key].history
             if not hist.has_changes():
