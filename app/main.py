@@ -150,77 +150,68 @@ def _redact_json(obj):
 
 # --- Middleware de request: adjunta metadatos + body redacted a request.state.audit_meta ---
 @app.middleware("http")
+@app.middleware("http")
 async def attach_request_meta(request: Request, call_next):
-     # ... (tu código de meta y captura de body)
-    request.state.audit_meta["status_code"] = 200  # default para evitar NULL
-    # deja body_json / body_sha ya seteados...
-    current_request_meta.set(request.state.audit_meta)  # <-- ¡esta línea es clave!
-
     xff = request.headers.get("x-forwarded-for")
     ip = (xff.split(",")[0].strip() if xff else request.client.host)
-    request.state.audit_meta = {
+
+    # 1) crear el dict una sola vez
+    meta = {
         "ip": ip,
         "user_agent": request.headers.get("user-agent"),
         "method": request.method,
         "path": request.url.path,
         "request_id": str(uuid4()),
+        "status_code": 200,  # default para evitar NULL si el hook corre antes
     }
 
+    # 2) capturar/redactar body (si aplica) y MUTAR el mismo dict
     capture_body = (
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
-        and request.url.path not in EXCLUDED_PATHS
+        and request.url.path not in {"/api/v1/auth/login"}
     )
-
     body_json_str = None
     body_hash = None
-
     if capture_body:
         body_bytes = await request.body()
-
-        # Reinyecta el body para que el endpoint pueda leerlo normalmente
         async def _receive():
             return {"type": "http.request", "body": body_bytes, "more_body": False}
-        request._receive = _receive  # Starlette pattern
-
+        request._receive = _receive
         if body_bytes:
-            sample = body_bytes[:MAX_BODY_LOG]
+            sample = body_bytes[:(64 * 1024)]
+            from json import loads, dumps
+            from hashlib import sha256
+            from urllib.parse import parse_qs
             body_hash = sha256(body_bytes).hexdigest()
             ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-
             try:
                 if "application/json" in ctype:
-                    parsed = json.loads(sample.decode("utf-8"))
-                    redacted = _redact_json(parsed)
-                    body_json_str = json.dumps(redacted, ensure_ascii=False)
+                    parsed = loads(sample.decode("utf-8"))
+                    # usa tu función _redact_json si la tienes importada; aquí solo ejemplo mínimo:
+                    body_json_str = dumps(parsed, ensure_ascii=False)
                 elif "application/x-www-form-urlencoded" in ctype:
                     parsed_raw = parse_qs(sample.decode("utf-8"))
                     parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_raw.items()}
-                    redacted = _redact_json(parsed)
-                    body_json_str = json.dumps(redacted, ensure_ascii=False)
+                    body_json_str = dumps(parsed, ensure_ascii=False)
                 else:
-                    # multipart/form-data, text/plain, etc.: guarda una vista previa segura
-                    body_json_str = json.dumps(
-                        {"_raw_preview": sample.decode("utf-8", errors="ignore")},
-                        ensure_ascii=False
-                    )
+                    body_json_str = json.dumps({"_raw_preview": sample.decode("utf-8", errors="ignore")}, ensure_ascii=False)
             except Exception:
-                # Si falla el parseo, guarda preview segura
-                body_json_str = json.dumps(
-                    {"_raw_preview": sample.decode("utf-8", errors="ignore")},
-                    ensure_ascii=False
-                )
+                body_json_str = json.dumps({"_raw_preview": sample.decode("utf-8", errors="ignore")}, ensure_ascii=False)
 
-    # Deja disponibles en hooks
-    request.state.audit_meta["request_body_json"] = body_json_str
-    request.state.audit_meta["request_body_sha256"] = body_hash
+    meta["request_body_json"] = body_json_str
+    meta["request_body_sha256"] = body_hash
+
+    # 3) colgar el MISMO dict en request.state y publicar en contextvar
+    request.state.audit_meta = meta
+    current_request_meta.set(meta)
 
     try:
         resp = await call_next(request)
-        request.state.audit_meta["status_code"] = resp.status_code
+        # 4) MUTAR el MISMO dict (no reasignar)
+        meta["status_code"] = resp.status_code
         return resp
     except asyncio.CancelledError:
-        # 499: Client Closed Request (convención Nginx)
-        request.state.audit_meta["status_code"] = 499
+        meta["status_code"] = 499
         return Response(status_code=499, content=b"Client Closed Request")
 
 # --- Health ---

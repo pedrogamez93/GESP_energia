@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session as SASession
 
 from app.core.config import settings
-from app.audit.context import current_request_meta  # <-- contextvar con metadatos de request
+from app.audit.context import current_request_meta  # <-- contextvar con metadatos del request
 
 # Flags por variables de entorno (opcionales)
 READ_UNCOMMITTED = os.getenv("DB_READ_UNCOMMITTED", "1") == "1"
@@ -38,6 +38,7 @@ class RequestAwareSession(SASession):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         try:
+            # ¡No copiamos un dict nuevo! Guardamos la referencia para que luego pueda mutarse (status_code).
             self.info["request_meta"] = current_request_meta.get({})
         except Exception:
             self.info["request_meta"] = {}

@@ -15,7 +15,7 @@ ACTION_MAP = {
     "logout": "salida",
 }
 
-# /.../xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx o números al final de la ruta
+# Extrae id numérico o UUID al final de la ruta si hace falta
 UUID_OR_ID_RE = re.compile(r"/([0-9a-fA-F-]{8,}|[0-9]+)(?:$|[/?#])")
 
 def _to_json_safe(value: Any) -> str:
@@ -98,7 +98,7 @@ def audit_after_flush(session: Session, flush_context):
                     resource_id=_compute_resource_id(obj, meta),
                     http_method=meta.get("method"),
                     path=meta.get("path"),
-                    status_code=meta.get("status_code"),  # en main.py pon default=200 antes de call_next
+                    status_code=meta.get("status_code"),  # por defecto 200 en el middleware
                     actor_id=actor.get("id"),
                     actor_username=actor.get("username"),
                     session_id=meta.get("session_id"),
