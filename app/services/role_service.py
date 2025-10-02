@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func, delete
 from fastapi import HTTPException
 from typing import Iterable, Set
+from uuid import uuid4
 
 from app.db.models.identity import AspNetUser, AspNetRole, AspNetUserRole
 from app.core import roles as R
@@ -43,8 +44,15 @@ class RoleService:
         if self.get_role_by_name(db, name):
             raise HTTPException(status_code=409, detail="El rol ya existe")
         norm = _norm(name)
-        role = AspNetRole(Name=name.strip(), NormalizedName=norm, Nombre=_nombre_amigable(norm))
-        db.add(role); db.commit(); db.refresh(role)
+        role = AspNetRole(
+            Id=str(uuid4()),  # generar PK aquí
+            Name=name.strip(),
+            NormalizedName=norm,
+            Nombre=_nombre_amigable(norm),
+        )
+        db.add(role)
+        db.commit()
+        db.refresh(role)
         return role
 
     def rename_role(self, db: Session, role_id: str, new_name: str) -> AspNetRole:
@@ -53,13 +61,16 @@ class RoleService:
             raise HTTPException(status_code=404, detail="Rol no encontrado")
         if not new_name or not new_name.strip():
             raise HTTPException(status_code=400, detail="Name requerido")
+
         exists = self.get_role_by_name(db, new_name)
-        if exists and str(exists.Id) != str(role_id):
+        if exists and str(exists.Id) != str(role_id):  # asegurar comparación como string
             raise HTTPException(status_code=409, detail="Ya existe un rol con ese nombre")
+
         role.Name = new_name.strip()
         role.NormalizedName = _norm(new_name)
         role.Nombre = _nombre_amigable(role.NormalizedName)
-        db.commit(); db.refresh(role)
+        db.commit()
+        db.refresh(role)
         return role
 
     def delete_role(self, db: Session, role_id: str) -> None:
@@ -67,7 +78,8 @@ class RoleService:
         if not role:
             raise HTTPException(status_code=404, detail="Rol no encontrado")
         db.execute(delete(AspNetUserRole).where(AspNetUserRole.RoleId == role_id))
-        db.delete(role); db.commit()
+        db.delete(role)
+        db.commit()
 
     # ---------- User ↔ Roles ----------
     def list_user_roles(self, db: Session, user_id: str) -> list[str]:
@@ -182,7 +194,7 @@ class RoleService:
 
     def available_roles_for_user(self, db: Session, target_user_id: str, current_user_id: str) -> list[AspNetRole]:
         assignable = self.assignable_roles_for_current_user(db, current_user_id)
-        assignable_norms = { _norm(x.NormalizedName or x.Name or "") for x in assignable }
+        assignable_norms = {_norm(x.NormalizedName or x.Name or "") for x in assignable}
         target_norms = {
             _norm(r[0]) for r in (
                 db.query(AspNetRole.Name)
@@ -199,9 +211,12 @@ class RoleService:
         creados = []
         for norm in R.ALL_ROLES:
             if not self.get_role_by_name(db, norm):
-                db.add(AspNetRole(Name=norm.title().replace("_", " "),
-                                  NormalizedName=norm,
-                                  Nombre=_nombre_amigable(norm)))
+                db.add(AspNetRole(
+                    Id=str(uuid4()),  # generar PK en seed también
+                    Name=norm.title().replace("_", " "),
+                    NormalizedName=norm,
+                    Nombre=_nombre_amigable(norm),
+                ))
                 creados.append(norm)
         db.commit()
         return creados
