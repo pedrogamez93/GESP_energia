@@ -1,12 +1,12 @@
+# app/services/unidad_medida_service.py
 from __future__ import annotations
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 from fastapi import HTTPException
 
 from app.db.models.unidad_medida import UnidadMedida
 from app.schemas.unidad_medida import UnidadMedidaCreate, UnidadMedidaUpdate
-
 
 class UnidadMedidaService:
     # Listado con búsqueda y paginación
@@ -15,9 +15,13 @@ class UnidadMedidaService:
 
         if q:
             like = f"%{q}%"
-            query = query.filter(func.lower(UnidadMedida.Nombre).like(func.lower(like)))
+            query = query.filter(
+                or_(
+                    func.lower(UnidadMedida.Nombre).like(func.lower(like)),
+                    func.lower(UnidadMedida.Abrv).like(func.lower(like)),  # <-- buscar también por Abrv
+                )
+            )
 
-        # total: usando subquery para que no afecten offset/limit
         total = db.scalar(select(func.count()).select_from(query.subquery()))
 
         items = (
@@ -28,11 +32,16 @@ class UnidadMedidaService:
         )
         return {"total": total or 0, "data": items}
 
-    def list_select(self, db: Session, q: str | None = None) -> list[tuple[int, str | None]]:
-        query = db.query(UnidadMedida.Id, UnidadMedida.Nombre)
+    def list_select(self, db: Session, q: str | None = None) -> list[tuple[int, str | None, str | None]]:
+        query = db.query(UnidadMedida.Id, UnidadMedida.Nombre, UnidadMedida.Abrv)  # <-- incluye Abrv
         if q:
             like = f"%{q}%"
-            query = query.filter(func.lower(UnidadMedida.Nombre).like(func.lower(like)))
+            query = query.filter(
+                or_(
+                    func.lower(UnidadMedida.Nombre).like(func.lower(like)),
+                    func.lower(UnidadMedida.Abrv).like(func.lower(like)),
+                )
+            )
         return query.order_by(UnidadMedida.Nombre).all()
 
     def get(self, db: Session, um_id: int) -> UnidadMedida:
@@ -45,7 +54,8 @@ class UnidadMedidaService:
         name = (payload.Nombre or "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="Nombre requerido")
-        obj = UnidadMedida(Nombre=name)
+        abrv = (payload.Abrv or "").strip() or None  # <-- opcional
+        obj = UnidadMedida(Nombre=name, Abrv=abrv)   # <-- guarda abreviatura
         db.add(obj)
         db.commit()
         db.refresh(obj)
@@ -56,7 +66,9 @@ class UnidadMedidaService:
         name = (payload.Nombre or "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="Nombre requerido")
+        abrv = (payload.Abrv or "").strip() or None  # <-- opcional
         obj.Nombre = name
+        obj.Abrv = abrv                              # <-- actualiza abreviatura
         db.commit()
         db.refresh(obj)
         return obj
