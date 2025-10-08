@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Tuple, List
 
-from sqlalchemy import text, bindparam
+from sqlalchemy import text, bindparam, true, false
 from sqlalchemy.orm import Session
 
 from app.db.models.division import Division
@@ -14,8 +14,11 @@ from app.schemas.inmuebles import (
 )
 from app.schemas.direcciones import DireccionDTO
 
+
 def _order_by_nombre_nulls_last_sql() -> str:
+    # MSSQL: CASE para empujar NULLs al final
     return "CASE WHEN dv.Nombre IS NULL THEN 1 ELSE 0 END, dv.Nombre, dv.Id"
+
 
 class InmuebleService:
     def __init__(self, db: Session):
@@ -49,9 +52,15 @@ class InmuebleService:
 
     def _to_detail_base(self, d: Division, dir_: Direccion | None) -> InmuebleDTO:
         base = InmuebleListDTO(
-            Id=d.Id, Nombre=d.Nombre, TipoInmueble=d.TipoInmueble, ParentId=d.ParentId,
-            ServicioId=d.ServicioId, Active=bool(d.Active), RegionId=d.RegionId,
-            ComunaId=d.ComunaId, Direccion=DireccionDTO.model_validate(dir_) if dir_ else None
+            Id=d.Id,
+            Nombre=d.Nombre,
+            TipoInmueble=d.TipoInmueble,
+            ParentId=d.ParentId,
+            ServicioId=d.ServicioId,
+            Active=bool(d.Active),
+            RegionId=d.RegionId,
+            ComunaId=d.ComunaId,
+            Direccion=DireccionDTO.model_validate(dir_) if dir_ else None,
         )
         return InmuebleDTO(
             **base.model_dump(),
@@ -80,17 +89,23 @@ class InmuebleService:
         where_parts: List[str] = ["1=1"]
         params: dict = {}
         if active is not None:
-            where_parts.append("dv.Active = :active"); params["active"] = 1 if active else 0
+            where_parts.append("dv.Active = :active")
+            params["active"] = 1 if active else 0
         if gev is not None:
-            where_parts.append("dv.GeVersion = :gev"); params["gev"] = gev
+            where_parts.append("dv.GeVersion = :gev")
+            params["gev"] = gev
         if servicio_id is not None:
-            where_parts.append("dv.ServicioId = :servicio_id"); params["servicio_id"] = servicio_id
+            where_parts.append("dv.ServicioId = :servicio_id")
+            params["servicio_id"] = servicio_id
         if region_id is not None:
-            where_parts.append("dv.RegionId = :region_id"); params["region_id"] = region_id
+            where_parts.append("dv.RegionId = :region_id")
+            params["region_id"] = region_id
         if comuna_id is not None:
-            where_parts.append("dv.ComunaId = :comuna_id"); params["comuna_id"] = comuna_id
+            where_parts.append("dv.ComunaId = :comuna_id")
+            params["comuna_id"] = comuna_id
         if tipo_inmueble is not None:
-            where_parts.append("dv.TipoInmueble = :tipo_inmueble"); params["tipo_inmueble"] = tipo_inmueble
+            where_parts.append("dv.TipoInmueble = :tipo_inmueble")
+            params["tipo_inmueble"] = tipo_inmueble
 
         join_dir_for_filter = ""
         if direccion:
@@ -135,16 +150,28 @@ class InmuebleService:
             ORDER BY {_order_by_nombre_nulls_last_sql()}
             OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
         """
-        rows_params = dict(params); rows_params.update({"offset": offset, "size": size})
-        items = [self._to_list_dto_row(r) for r in self.db.execute(text(rows_sql), rows_params).mappings().all()]
+        rows_params = dict(params)
+        rows_params.update({"offset": offset, "size": size})
+        items = [
+            self._to_list_dto_row(r)
+            for r in self.db.execute(text(rows_sql), rows_params).mappings().all()
+        ]
         return total, items
 
     # --------------- detalle (árbol + pisos/áreas + unidades) ---------------
     def get(self, inmueble_id: int) -> InmuebleDTO | None:
-        root = self.db.query(Division).filter(Division.Id == inmueble_id, Division.Active.is_(True)).first()
+        # MSSQL: evitar IS 1 => usar true() para BIT
+        root = (
+            self.db.query(Division)
+            .filter(Division.Id == inmueble_id, Division.Active == true())
+            .first()
+        )
         if not root:
             return None
-        dir_ = self.db.query(Direccion).filter(Direccion.Id == root.DireccionInmuebleId).first() if root.DireccionInmuebleId else None
+        dir_ = (
+            self.db.query(Direccion).filter(Direccion.Id == root.DireccionInmuebleId).first()
+            if root.DireccionInmuebleId else None
+        )
         dto = self._to_detail_base(root, dir_)
         dto.Unidades = self._fetch_unidades_por_inmueble(root.Id)
         dto.Pisos = self._fetch_pisos_for_division(root.Id)
@@ -152,10 +179,17 @@ class InmuebleService:
         return dto
 
     def _fetch_children_tree(self, parent_id: int) -> list[InmuebleDTO]:
-        childs = self.db.query(Division).filter(Division.ParentId == parent_id, Division.Active.is_(True)).all()
+        childs = (
+            self.db.query(Division)
+            .filter(Division.ParentId == parent_id, Division.Active == true())
+            .all()
+        )
         result: list[InmuebleDTO] = []
         for ch in childs:
-            dir_ = self.db.query(Direccion).filter(Direccion.Id == ch.DireccionInmuebleId).first() if ch.DireccionInmuebleId else None
+            dir_ = (
+                self.db.query(Direccion).filter(Direccion.Id == ch.DireccionInmuebleId).first()
+                if ch.DireccionInmuebleId else None
+            )
             child = self._to_detail_base(ch, dir_)
             child.Unidades = self._fetch_unidades_por_inmueble(ch.Id)
             child.Pisos = self._fetch_pisos_for_division(ch.Id)
@@ -264,9 +298,12 @@ class InmuebleService:
             return parent.DireccionInmuebleId
         if payload:
             dir_ = Direccion(
-                Calle=payload.Calle, Numero=payload.Numero,
-                RegionId=payload.RegionId or 0, ProvinciaId=payload.ProvinciaId or 0,
-                ComunaId=payload.ComunaId or 0, DireccionCompleta=payload.DireccionCompleta,
+                Calle=payload.Calle,
+                Numero=payload.Numero,
+                RegionId=payload.RegionId or 0,
+                ProvinciaId=payload.ProvinciaId or 0,
+                ComunaId=payload.ComunaId or 0,
+                DireccionCompleta=payload.DireccionCompleta,
             )
             self.db.add(dir_); self.db.flush()
             return dir_.Id
@@ -315,20 +352,34 @@ class InmuebleService:
             return None
         if not obj.Active:
             return self.get(inmueble_id)
-        obj.Active = False; obj.UpdatedAt = datetime.utcnow(); obj.ModifiedBy = modified_by; obj.Version = (obj.Version or 0) + 1
+        obj.Active = False
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
+        obj.Version = (obj.Version or 0) + 1
+
         if obj.TipoInmueble == 1:
-            self.db.query(Division).filter(Division.ParentId == inmueble_id, Division.Active.is_(True)).update({Division.Active: False}, synchronize_session=False)
+            # MSSQL: evitar IS 1 en el WHERE del update en cascada
+            self.db.query(Division).filter(
+                Division.ParentId == inmueble_id,
+                Division.Active == true()
+            ).update({Division.Active: False}, synchronize_session=False)
+
         self.db.commit()
         return self.get(inmueble_id)
 
     # --------------- compat .NET V1 ---------------
     def get_by_address(self, req: InmuebleByAddressRequest) -> List[InmuebleListDTO]:
         dir_ = self.db.query(Direccion).filter(
-            Direccion.Calle == req.Calle, Direccion.Numero == req.Numero, Direccion.ComunaId == req.ComunaId
+            Direccion.Calle == req.Calle,
+            Direccion.Numero == req.Numero,
+            Direccion.ComunaId == req.ComunaId
         ).first()
         if not dir_:
             return []
-        inmuebles = self.db.query(Division).filter(Division.DireccionInmuebleId == dir_.Id, Division.Active.is_(True)).all()
+        inmuebles = self.db.query(Division).filter(
+            Division.DireccionInmuebleId == dir_.Id,
+            Division.Active == true()
+        ).all()
         return [self._to_list_dto_row({
             "Id": i.Id, "Nombre": i.Nombre, "TipoInmueble": i.TipoInmueble,
             "ParentId": i.ParentId, "ServicioId": i.ServicioId, "Active": i.Active,
@@ -341,13 +392,17 @@ class InmuebleService:
     # --------------- vínculos Unidad <-> Inmueble ---------------
     def add_unidad(self, inmueble_id: int, unidad_id: int) -> None:
         exists = self.db.query(UnidadInmueble).filter(
-            UnidadInmueble.InmuebleId == inmueble_id, UnidadInmueble.UnidadId == unidad_id
+            UnidadInmueble.InmuebleId == inmueble_id,
+            UnidadInmueble.UnidadId == unidad_id
         ).first()
-        if exists: return
-        self.db.add(UnidadInmueble(InmuebleId=inmueble_id, UnidadId=unidad_id)); self.db.commit()
+        if exists:
+            return
+        self.db.add(UnidadInmueble(InmuebleId=inmueble_id, UnidadId=unidad_id))
+        self.db.commit()
 
     def remove_unidad(self, inmueble_id: int, unidad_id: int) -> None:
         self.db.query(UnidadInmueble).filter(
-            UnidadInmueble.InmuebleId == inmueble_id, UnidadInmueble.UnidadId == unidad_id
+            UnidadInmueble.InmuebleId == inmueble_id,
+            UnidadInmueble.UnidadId == unidad_id
         ).delete(synchronize_session=False)
         self.db.commit()
