@@ -201,10 +201,10 @@ class InmuebleService:
         try:
             sql = text("""
                 SELECT u.Id, u.Nombre
-                FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)
+                FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)   -- <- PLURAL/PLURAL
                 JOIN dbo.Unidades u WITH (NOLOCK) ON u.Id = ui.UnidadId
                 WHERE ui.InmuebleId = :iid
-                ORDER BY u.Nombre, u.Id
+                ORDER BY CASE WHEN u.Nombre IS NULL THEN 1 ELSE 0 END, u.Nombre, u.Id
             """)
             return [dict(r) for r in self.db.execute(sql, {"iid": inmueble_id}).mappings().all()]
         except Exception:

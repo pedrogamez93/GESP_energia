@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.direcciones import DireccionDTO
 
 # -------- Unidades (forma breve, como en .NET para asociaciones) --------
@@ -96,6 +96,7 @@ class InmuebleByAddressRequest(BaseModel):
     ComunaId: int
 
 class InmuebleUnidadRequest(BaseModel):
+    UnidadId: int = Field(..., gt=0)
     UnidadId: int
 
 class UnidadVinculadaDTO(BaseModel):
