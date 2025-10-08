@@ -68,7 +68,7 @@ from app.api.v1.ajustes import router as ajustes_router
 from app.api.v1.frontis import router as frontis_router
 from app.api.v1.reportes import router as reportes_router
 from app.api.v1.parametros_medicion import router as parametros_medicion_router
-from app.api.v1.provincias import router as provincias_router
+from app.api.v1.provincia import router as provincias_router
 
 from app.audit.context import current_request_meta
 
