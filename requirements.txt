@@ -3,7 +3,8 @@ uvicorn[standard]
 sqlalchemy
 pydantic
 python-jose
-passlib[bcrypt]
+passlib[bcrypt]==1.7.4
 pydantic-settings
 email-validator
 pyodbc
+bcrypt==4.1.2
