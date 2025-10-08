@@ -8,10 +8,10 @@ class ProvinciaBase(BaseModel):
     RegionId: int
     Nombre: str
 
-class ProvinciaDTO(ProvinciaBase):
+class ProvinciaDTO(BaseModel):
     Id: int
-    Region: Optional[RegionDTO] = None
-    Comunas: List[ComunaDTO] = []
+    RegionId: int
+    Nombre: str
 
     class Config:
         orm_mode = True
