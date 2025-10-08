@@ -1,13 +1,16 @@
-# app/db/models/provincia.py
-from __future__ import annotations
-from sqlalchemy import BigInteger, Text
-from sqlalchemy.orm import Mapped, mapped_column
-from app.db.base import Base
+from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy.orm import relationship
+from app.db.base_class import Base
 
 class Provincia(Base):
     __tablename__ = "Provincias"
-    __table_args__ = {"schema": "dbo"}
 
-    Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    RegionId: Mapped[int] = mapped_column(BigInteger)
-    Nombre: Mapped[str | None] = mapped_column(Text)
+    Id = Column(Integer, primary_key=True, index=True)
+    RegionId = Column(Integer, ForeignKey("Regiones.Id"), nullable=False)
+    Nombre = Column(String, nullable=False)
+
+    # Relaciones
+    Region = relationship("Region", back_populates="Provincias")
+    Comunas = relationship("Comuna", back_populates="Provincia")
+    Inmuebles = relationship("Division", back_populates="Provincia")
+    Direcciones = relationship("Direccion", back_populates="Provincia")
