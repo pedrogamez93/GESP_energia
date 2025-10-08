@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import Annotated, List
+
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Query, Path
 from sqlalchemy.orm import Session
 
@@ -16,8 +18,10 @@ from app.services.direccion_service import DireccionService
 from app.db.models.division import Division
 from app.db.models.unidad_inmueble import UnidadInmueble
 
+
 router = APIRouter(prefix="/api/v1/inmuebles", tags=["Inmuebles"])
 DbDep = Annotated[Session, Depends(get_db)]
+
 
 @router.get("", response_model=InmueblePage, summary="Listado paginado de inmuebles")
 def listar_inmuebles(
@@ -40,12 +44,14 @@ def listar_inmuebles(
     )
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
+
 @router.get("/{inmueble_id}", response_model=InmuebleDTO, summary="Detalle de inmueble (con árbol/pisos/áreas/unidades)")
 def obtener_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDep):
     obj = InmuebleService(db).get(inmueble_id)
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return obj
+
 
 @router.post("", response_model=InmuebleDTO, status_code=status.HTTP_201_CREATED, summary="(ADMIN) Crear inmueble")
 def crear_inmueble(
@@ -54,6 +60,7 @@ def crear_inmueble(
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     return InmuebleService(db).create(data, created_by=current_user.id)
+
 
 @router.put("/{inmueble_id}", response_model=InmuebleDTO, summary="(ADMIN) Actualizar inmueble")
 def actualizar_inmueble(
@@ -67,6 +74,7 @@ def actualizar_inmueble(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return updated
 
+
 @router.delete("/{inmueble_id}", response_model=InmuebleDTO, summary="(ADMIN) Eliminar inmueble (soft-delete)")
 def eliminar_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -78,10 +86,12 @@ def eliminar_inmueble(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return deleted
 
+
 # Compat .NET V1: búsqueda por dirección exacta
 @router.post("/by-address", response_model=List[InmuebleListDTO], summary="Buscar por dirección exacta")
 def inmuebles_por_direccion(req: InmuebleByAddressRequest, db: DbDep):
     return InmuebleService(db).get_by_address(req)
+
 
 # Compat .NET V1: vínculos Unidad <-> Inmueble
 @router.post("/{inmueble_id}/unidades", status_code=status.HTTP_204_NO_CONTENT, summary="Vincular unidad a inmueble")
@@ -92,7 +102,9 @@ def add_unidad_a_inmueble(
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     InmuebleService(db).add_unidad(inmueble_id, body.UnidadId)
+    # Se mantiene 204 para compatibilidad .NET V1
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 @router.delete("/{inmueble_id}/unidades/{unidad_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Desvincular unidad de inmueble")
 def remove_unidad_de_inmueble(
@@ -104,6 +116,7 @@ def remove_unidad_de_inmueble(
     InmuebleService(db).remove_unidad(inmueble_id, unidad_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 # Dirección del inmueble
 @router.get("/{inmueble_id}/direccion", response_model=DireccionDTO | None, summary="Dirección del inmueble (si existe)")
 def obtener_direccion_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDep):
@@ -112,6 +125,7 @@ def obtener_direccion_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDe
         return None
     dir_ = DireccionService(db).get(d.DireccionInmuebleId)
     return DireccionDTO.model_validate(dir_) if dir_ else None
+
 
 @router.put("/{inmueble_id}/direccion", response_model=DireccionDTO, summary="(ADMIN) Reemplazar/crear dirección del inmueble")
 def actualizar_direccion_inmueble(
@@ -136,7 +150,9 @@ def actualizar_direccion_inmueble(
         db.commit()
         return DireccionDTO.model_validate(created)
 
+
 @router.get("/{inmueble_id}/unidades", response_model=List[UnidadVinculadaDTO], summary="Unidades vinculadas al inmueble")
 def listar_unidades_de_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDep):
+    # Devuelve solo los IDs vinculados (DTO ligero para compatibilidad V1)
     rows = db.query(UnidadInmueble.UnidadId).filter(UnidadInmueble.InmuebleId == inmueble_id).all()
     return [UnidadVinculadaDTO(UnidadId=r[0]) for r in rows]

@@ -1,8 +1,9 @@
 from __future__ import annotations
+
 from datetime import datetime
 from typing import Optional, Tuple, List
 
-from sqlalchemy import text, bindparam, true, false
+from sqlalchemy import text, bindparam, true
 from sqlalchemy.orm import Session
 
 from app.db.models.division import Division
@@ -198,10 +199,14 @@ class InmuebleService:
         return result
 
     def _fetch_unidades_por_inmueble(self, inmueble_id: int) -> list[dict]:
+        """
+        Devuelve [{Id, Nombre}] de las unidades vinculadas al inmueble.
+        Consulta directa a tablas físicas para no depender de relaciones ORM.
+        """
         try:
             sql = text("""
                 SELECT u.Id, u.Nombre
-                FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)   -- <- PLURAL/PLURAL
+                FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)
                 JOIN dbo.Unidades u WITH (NOLOCK) ON u.Id = ui.UnidadId
                 WHERE ui.InmuebleId = :iid
                 ORDER BY CASE WHEN u.Nombre IS NULL THEN 1 ELSE 0 END, u.Nombre, u.Id
@@ -305,7 +310,8 @@ class InmuebleService:
                 ComunaId=payload.ComunaId or 0,
                 DireccionCompleta=payload.DireccionCompleta,
             )
-            self.db.add(dir_); self.db.flush()
+            self.db.add(dir_)
+            self.db.flush()
             return dir_.Id
         return None
 
@@ -322,7 +328,9 @@ class InmuebleService:
             AdministracionServicioId=data.AdministracionServicioId, ParentId=data.ParentId, NroRol=data.NroRol,
             DireccionInmuebleId=dir_id,
         )
-        self.db.add(obj); self.db.commit(); self.db.refresh(obj)
+        self.db.add(obj)
+        self.db.commit()
+        self.db.refresh(obj)
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
@@ -341,8 +349,11 @@ class InmuebleService:
                 obj.DireccionInmuebleId = self._ensure_direccion(data.Direccion, parent)
         for k, v in data.model_dump(exclude_unset=True, exclude={"Direccion"}).items():
             setattr(obj, k, v)
-        obj.UpdatedAt = datetime.utcnow(); obj.ModifiedBy = modified_by; obj.Version = (obj.Version or 0) + 1
-        self.db.commit(); self.db.refresh(obj)
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
+        obj.Version = (obj.Version or 0) + 1
+        self.db.commit()
+        self.db.refresh(obj)
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
