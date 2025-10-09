@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from datetime import datetime
 from typing import Optional, Tuple, List
 
@@ -17,7 +16,6 @@ from app.schemas.direcciones import DireccionDTO
 
 
 def _order_by_nombre_nulls_last_sql() -> str:
-    # MSSQL: CASE para empujar NULLs al final
     return "CASE WHEN dv.Nombre IS NULL THEN 1 ELSE 0 END, dv.Nombre, dv.Id"
 
 
@@ -82,9 +80,9 @@ class InmuebleService:
         region_id: Optional[int] = None,
         comuna_id: Optional[int] = None,
         tipo_inmueble: Optional[int] = None,
-        direccion: Optional[str] = None,  # Calle/Numero (compat .NET)
-        search: Optional[str] = None,     # Nombre/NroRol/DirecciónCompleta
-        gev: Optional[int] = 3,           # default .NET
+        direccion: Optional[str] = None,
+        search: Optional[str] = None,
+        gev: Optional[int] = 3,
     ) -> Tuple[int, List[InmuebleListDTO]]:
 
         where_parts: List[str] = ["1=1"]
@@ -161,7 +159,6 @@ class InmuebleService:
 
     # --------------- detalle (árbol + pisos/áreas + unidades) ---------------
     def get(self, inmueble_id: int) -> InmuebleDTO | None:
-        # MSSQL: evitar IS 1 => usar true() para BIT
         root = (
             self.db.query(Division)
             .filter(Division.Id == inmueble_id, Division.Active == true())
@@ -199,10 +196,6 @@ class InmuebleService:
         return result
 
     def _fetch_unidades_por_inmueble(self, inmueble_id: int) -> list[dict]:
-        """
-        Devuelve [{Id, Nombre}] de las unidades vinculadas al inmueble.
-        Consulta directa a tablas físicas para no depender de relaciones ORM.
-        """
         try:
             sql = text("""
                 SELECT u.Id, u.Nombre
@@ -310,8 +303,7 @@ class InmuebleService:
                 ComunaId=payload.ComunaId or 0,
                 DireccionCompleta=payload.DireccionCompleta,
             )
-            self.db.add(dir_)
-            self.db.flush()
+            self.db.add(dir_); self.db.flush()
             return dir_.Id
         return None
 
@@ -328,9 +320,7 @@ class InmuebleService:
             AdministracionServicioId=data.AdministracionServicioId, ParentId=data.ParentId, NroRol=data.NroRol,
             DireccionInmuebleId=dir_id,
         )
-        self.db.add(obj)
-        self.db.commit()
-        self.db.refresh(obj)
+        self.db.add(obj); self.db.commit(); self.db.refresh(obj)
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
@@ -349,11 +339,8 @@ class InmuebleService:
                 obj.DireccionInmuebleId = self._ensure_direccion(data.Direccion, parent)
         for k, v in data.model_dump(exclude_unset=True, exclude={"Direccion"}).items():
             setattr(obj, k, v)
-        obj.UpdatedAt = datetime.utcnow()
-        obj.ModifiedBy = modified_by
-        obj.Version = (obj.Version or 0) + 1
-        self.db.commit()
-        self.db.refresh(obj)
+        obj.UpdatedAt = datetime.utcnow(); obj.ModifiedBy = modified_by; obj.Version = (obj.Version or 0) + 1
+        self.db.commit(); self.db.refresh(obj)
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
@@ -369,7 +356,6 @@ class InmuebleService:
         obj.Version = (obj.Version or 0) + 1
 
         if obj.TipoInmueble == 1:
-            # MSSQL: evitar IS 1 en el WHERE del update en cascada
             self.db.query(Division).filter(
                 Division.ParentId == inmueble_id,
                 Division.Active == true()

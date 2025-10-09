@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from typing import Annotated, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Query, Path
@@ -18,7 +17,6 @@ from app.services.direccion_service import DireccionService
 from app.db.models.division import Division
 from app.db.models.unidad_inmueble import UnidadInmueble
 
-
 router = APIRouter(prefix="/api/v1/inmuebles", tags=["Inmuebles"])
 DbDep = Annotated[Session, Depends(get_db)]
 
@@ -33,9 +31,9 @@ def listar_inmuebles(
     region_id: Annotated[int | None, Query()] = None,
     comuna_id: Annotated[int | None, Query()] = None,
     tipo_inmueble: Annotated[int | None, Query()] = None,
-    direccion: Annotated[str | None, Query()] = None,  # Calle/Numero (compat .NET V2)
-    search: Annotated[str | None, Query()] = None,     # Nombre/NroRol/DirecciónCompleta
-    gev: Annotated[int | None, Query()] = 3,           # default .NET: Active && GeVersion==3
+    direccion: Annotated[str | None, Query()] = None,
+    search: Annotated[str | None, Query()] = None,
+    gev: Annotated[int | None, Query()] = 3,
 ):
     total, items = InmuebleService(db).list_paged(
         page=page, page_size=page_size, active=active,
@@ -87,13 +85,11 @@ def eliminar_inmueble(
     return deleted
 
 
-# Compat .NET V1: búsqueda por dirección exacta
 @router.post("/by-address", response_model=List[InmuebleListDTO], summary="Buscar por dirección exacta")
 def inmuebles_por_direccion(req: InmuebleByAddressRequest, db: DbDep):
     return InmuebleService(db).get_by_address(req)
 
 
-# Compat .NET V1: vínculos Unidad <-> Inmueble
 @router.post("/{inmueble_id}/unidades", status_code=status.HTTP_204_NO_CONTENT, summary="Vincular unidad a inmueble")
 def add_unidad_a_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -102,7 +98,6 @@ def add_unidad_a_inmueble(
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     InmuebleService(db).add_unidad(inmueble_id, body.UnidadId)
-    # Se mantiene 204 para compatibilidad .NET V1
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -117,7 +112,6 @@ def remove_unidad_de_inmueble(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# Dirección del inmueble
 @router.get("/{inmueble_id}/direccion", response_model=DireccionDTO | None, summary="Dirección del inmueble (si existe)")
 def obtener_direccion_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDep):
     d = db.query(Division).filter(Division.Id == inmueble_id).first()
@@ -153,6 +147,5 @@ def actualizar_direccion_inmueble(
 
 @router.get("/{inmueble_id}/unidades", response_model=List[UnidadVinculadaDTO], summary="Unidades vinculadas al inmueble")
 def listar_unidades_de_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDep):
-    # Devuelve solo los IDs vinculados (DTO ligero para compatibilidad V1)
     rows = db.query(UnidadInmueble.UnidadId).filter(UnidadInmueble.InmuebleId == inmueble_id).all()
     return [UnidadVinculadaDTO(UnidadId=r[0]) for r in rows]
