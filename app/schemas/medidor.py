@@ -1,6 +1,10 @@
 from __future__ import annotations
-from pydantic import BaseModel
+
+from datetime import datetime
 from typing import Optional, List
+
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
+
 
 # =========================
 # Medidores (dbo.Medidores)
@@ -20,13 +24,21 @@ class MedidorListDTO(BaseModel):
     MedidorConsumo: bool = False
     Active: bool = True
 
-    class Config:
-        from_attributes = True
+    # Pydantic v2: habilita lectura desde ORM/SA
+    model_config = ConfigDict(from_attributes=True)
+
 
 class MedidorDTO(MedidorListDTO):
-    CreatedAt: Optional[str] = None
-    UpdatedAt: Optional[str] = None
+    # 🔧 Cambio clave: usar datetime en vez de str para que no falle la validación
+    CreatedAt: Optional[datetime] = None
+    UpdatedAt: Optional[datetime] = None
     Version: Optional[int] = None
+
+    # Serializa a ISO-8601 en JSON (por si el frontend espera string)
+    @field_serializer("CreatedAt", "UpdatedAt", when_used="json")
+    def _ser_dt(self, v: Optional[datetime]):
+        return v.isoformat() if v else None
+
 
 class MedidorCreate(BaseModel):
     Numero: Optional[str] = None
@@ -39,6 +51,7 @@ class MedidorCreate(BaseModel):
     Chilemedido: bool = False
     DeviceId: Optional[int] = None
     MedidorConsumo: bool = False
+
 
 class MedidorUpdate(BaseModel):
     Numero: Optional[str] = None
@@ -53,12 +66,14 @@ class MedidorUpdate(BaseModel):
     MedidorConsumo: Optional[bool] = None
     Active: Optional[bool] = None
 
+
 # Página tipada para Swagger y validación
 class MedidorPage(BaseModel):
     total: int
     page: int
     page_size: int
     items: List[MedidorListDTO]
+
 
 # ======================================
 # Medidores Inteligentes (dbo.MedidoresInteligentes)
@@ -67,18 +82,20 @@ class MedidorPage(BaseModel):
 class MedidorInteligenteDTO(BaseModel):
     Id: int
     ChileMedidoId: int
-    DivisionIds: List[int] = []
-    EdificioIds: List[int] = []
-    ServicioIds: List[int] = []
+    # ❗️Evitar defaults mutables
+    DivisionIds: List[int] = Field(default_factory=list)
+    EdificioIds: List[int] = Field(default_factory=list)
+    ServicioIds: List[int] = Field(default_factory=list)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
 
 class MedidorInteligenteCreate(BaseModel):
     ChileMedidoId: int
-    DivisionIds: List[int] = []
-    EdificioIds: List[int] = []
-    ServicioIds: List[int] = []
+    DivisionIds: List[int] = Field(default_factory=list)
+    EdificioIds: List[int] = Field(default_factory=list)
+    ServicioIds: List[int] = Field(default_factory=list)
+
 
 class MedidorInteligenteUpdate(BaseModel):
     ChileMedidoId: Optional[int] = None
@@ -87,5 +104,6 @@ class MedidorInteligenteUpdate(BaseModel):
     EdificioIds: Optional[List[int]] = None
     ServicioIds: Optional[List[int]] = None
 
+
 class IdsPayload(BaseModel):
-    Ids: List[int] = []
+    Ids: List[int] = Field(default_factory=list)
