@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Iterable, List
 
 from sqlalchemy.orm import Session
-from sqlalchemy import delete, asc, nulls_last  # <- importamos asc y nulls_last
+from sqlalchemy import delete, asc, case
 
 from app.db.models.medidor import Medidor
 from app.db.models.medidor_division import MedidorDivision
@@ -18,27 +18,31 @@ class MedidorVinculoService:
         """
         Retorna los medidores vinculados a una división, ordenados por Numero (NULL al final) y luego por Id.
         """
-        # Subconsulta de IDs para evitar traerlos a memoria si fueran muchos
         subq = (
             db.query(MedidorDivision.MedidorId)
             .filter(MedidorDivision.DivisionId == division_id)
             .subquery()
         )
 
-        # Si no hay filas, devolvemos rápido para evitar el SELECT principal
-        # (nota: .first() sobre la subconsulta es costoso; mejor un exists(),
-        # pero mantenerlo simple: si no hay vínculos no habrá resultados abajo)
-        has_any = db.query(MedidorDivision).filter(MedidorDivision.DivisionId == division_id).first()
-        if not has_any:
+        # Si no hay vínculos, devolvemos vacío sin hacer el SELECT principal
+        exists_row = (
+            db.query(MedidorDivision.MedidorId)
+            .filter(MedidorDivision.DivisionId == division_id)
+            .first()
+        )
+        if not exists_row:
             return []
+
+        # Orden: primero NO-NULL (0), luego NULL (1); después Numero ASC y por último Id
+        nulls_last_key = case((Medidor.Numero.is_(None), 1), else_=0)
 
         return (
             db.query(Medidor)
             .filter(Medidor.Id.in_(subq))
-            # ✅ Emulación portable de "NULLS LAST" en SQL Server
             .order_by(
-                nulls_last(asc(Medidor.Numero)),
-                Medidor.Id,
+                nulls_last_key,          # fuerza NULL al final en SQL Server
+                asc(Medidor.Numero),     # luego orden natural por Numero
+                Medidor.Id,              # desempate estable
             )
             .all()
         )
@@ -47,12 +51,14 @@ class MedidorVinculoService:
         """
         Retorna los medidores por NumeroClienteId, ordenados por Numero (NULL al final) y luego por Id.
         """
+        nulls_last_key = case((Medidor.Numero.is_(None), 1), else_=0)
+
         return (
             db.query(Medidor)
             .filter(Medidor.NumeroClienteId == num_cliente_id)
-            # ✅ Igual corrección aquí
             .order_by(
-                nulls_last(asc(Medidor.Numero)),
+                nulls_last_key,
+                asc(Medidor.Numero),
                 Medidor.Id,
             )
             .all()
