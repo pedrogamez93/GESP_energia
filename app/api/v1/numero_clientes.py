@@ -6,7 +6,8 @@ from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 from app.schemas.numero_cliente import (
-    NumeroClienteDTO, NumeroClienteListDTO, NumeroClienteCreate, NumeroClienteUpdate
+    NumeroClienteDTO, NumeroClienteListDTO, NumeroClienteCreate,
+    NumeroClienteUpdate, NumeroClientePage,   # <- importa el nuevo
 )
 from app.services.numero_cliente_service import NumeroClienteService
 
@@ -14,7 +15,11 @@ router = APIRouter(prefix="/api/v1/numero-clientes", tags=["NúmeroClientes"])
 svc = NumeroClienteService()
 DbDep = Annotated[Session, Depends(get_db)]
 
-@router.get("", response_model=dict, summary="Listado paginado de número de clientes")
+@router.get(
+    "",
+    response_model=NumeroClientePage,   # <- antes: dict
+    summary="Listado paginado de número de clientes",
+)
 def list_numero_clientes(
     db: DbDep,
     q: str | None = Query(default=None, description="Busca en Nº/NombreCliente"),
@@ -23,9 +28,12 @@ def list_numero_clientes(
     EmpresaDistribuidoraId: int | None = Query(default=None),
     TipoTarifaId: int | None = Query(default=None),
     DivisionId: int | None = Query(default=None),
-    active: bool | None = Query(default=True),  # <- NUEVO
+    active: bool | None = Query(default=True),
 ):
-    return svc.list(db, q, page, page_size, EmpresaDistribuidoraId, TipoTarifaId, DivisionId, active)
+    return svc.list(
+        db, q, page, page_size,
+        EmpresaDistribuidoraId, TipoTarifaId, DivisionId, active
+    )
 
 @router.get("/{num_cliente_id}", response_model=NumeroClienteDTO, summary="Detalle")
 def get_numero_cliente(
