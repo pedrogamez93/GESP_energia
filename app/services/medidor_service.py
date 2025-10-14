@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, Iterable
 
 from fastapi import HTTPException
-from sqlalchemy import func, case, delete
+from sqlalchemy import func, case, delete, true
 from sqlalchemy.orm import Session
 
 from app.db.models.medidor import Medidor
@@ -115,12 +115,13 @@ class MedidorService:
     def for_compra_by_numcliente_division(
         self, db: Session, numero_cliente_id: int, division_id: int
     ):
+        # ⚠️ MSSQL: usar == true() o == True (NO .is_(True)) para que compile a "= 1"
         return (
             db.query(Medidor)
             .filter(
                 Medidor.NumeroClienteId == numero_cliente_id,
                 Medidor.DivisionId == division_id,
-                Medidor.Active.is_(True),
+                Medidor.Active == true(),   # << fix principal para MSSQL
             )
             .order_by(*_order_by_numero_nulls_last())
             .all()
