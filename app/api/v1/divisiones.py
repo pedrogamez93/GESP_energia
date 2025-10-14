@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, Query, Path, Request, Response, status
 from sqlalchemy.orm import Session
@@ -8,7 +9,7 @@ from app.schemas.auth import UserPublic
 from app.schemas.division import (
     DivisionDTO, DivisionListDTO, DivisionSelectDTO,
     ObservacionDTO, ReportaResiduosDTO, ObservacionInexistenciaDTO,
-    DivisionPatchDTO, DivisionAniosDTO, OkMessage
+    DivisionPatchDTO, DivisionAniosDTO, OkMessage, DivisionPage
 )
 from app.services.division_service import DivisionService
 
@@ -21,7 +22,7 @@ def _current_user_id(request: Request) -> str | None:
     return getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
 
 # ---- GET públicos (paginado, liviano) ----
-@router.get("", response_model=dict, summary="Listado paginado")
+@router.get("", response_model=DivisionPage, summary="Listado paginado")
 def list_divisiones(
     db: DbDep,
     q: Optional[str] = Query(None, description="Busca en Dirección o Nombre (case-insensitive)"),
@@ -36,9 +37,8 @@ def list_divisiones(
     """
     Devuelve `{ total, page, page_size, items[] }`.
 
-    Los campos `RegionId/ProvinciaId/ComunaId/Direccion` se **derivan desde Direcciones**
-    cuando en Divisiones vienen `NULL` (COALESCE). Así replicamos el comportamiento de .NET
-    y evitamos “loading” en Swagger.
+    Los campos Region/Provincia/Comuna/Direccion pueden derivarse de Direcciones
+    cuando en Divisiones vengan NULL (COALESCE) para replicar .NET.
     """
     return svc.list(
         db=db,
@@ -67,7 +67,8 @@ def get_division(
     division_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
 ):
-    return DivisionDTO.model_validate(svc.get(db, division_id))
+    # Devolvemos la instancia ORM; FastAPI + Pydantic v2 serializan por from_attributes
+    return svc.get(db, division_id)
 
 @router.get("/servicio/{servicio_id}", response_model=List[DivisionListDTO], summary="Por servicio")
 def get_divisiones_by_servicio(
@@ -75,24 +76,21 @@ def get_divisiones_by_servicio(
     db: DbDep,
     searchText: Optional[str] = Query(None),
 ):
-    items = svc.by_servicio(db, servicio_id, searchText)
-    return [DivisionListDTO.model_validate(x) for x in items]
+    return svc.by_servicio(db, servicio_id, searchText)
 
 @router.get("/edificio/{edificio_id}", response_model=List[DivisionListDTO], summary="Por edificio")
 def get_divisiones_by_edificio(
     edificio_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
 ):
-    items = svc.by_edificio(db, edificio_id)
-    return [DivisionListDTO.model_validate(x) for x in items]
+    return svc.by_edificio(db, edificio_id)
 
 @router.get("/region/{region_id}", response_model=List[DivisionListDTO], summary="Por región")
 def get_divisiones_by_region(
     region_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
 ):
-    items = svc.by_region(db, region_id)
-    return [DivisionListDTO.model_validate(x) for x in items]
+    return svc.by_region(db, region_id)
 
 # ---- Por usuario (ADMIN) ----
 @router.get("/usuario/{user_id}", response_model=List[DivisionListDTO],
@@ -102,8 +100,7 @@ def get_divisiones_by_user(
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
     db: DbDep,
 ):
-    items = svc.by_user(db, user_id)
-    return [DivisionListDTO.model_validate(x) for x in items]
+    return svc.by_user(db, user_id)
 
 # ---------------------------
 # Paridad con .NET (observaciones / flags / años)
@@ -188,7 +185,7 @@ def put_inexistencia_eyv(
     svc.set_inexistencia_eyv(db, division_id, payload)
     return OkMessage()
 
-# Años de inicio (equivalente a SetInicioGestion / SetRestoItems)
+# Años de inicio
 @router.post("/set-inicio-gestion", status_code=status.HTTP_204_NO_CONTENT)
 def set_inicio_gestion(payload: DivisionAniosDTO, db: DbDep):
     svc.set_anios(db, payload, set_gestion=True)
@@ -199,15 +196,14 @@ def set_resto_items(payload: DivisionAniosDTO, db: DbDep):
     svc.set_anios(db, payload, set_gestion=False)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-# Patch de campos varios (equiv. JsonPatch de .NET -> DTO dedicado)
+# Patch de campos varios
 @router.patch("/{division_id}", response_model=DivisionDTO)
 def patch_division(
     division_id: Annotated[int, Path(..., ge=1)],
     patch: DivisionPatchDTO,
     db: DbDep
 ):
-    obj = svc.patch(db, division_id, patch)
-    return DivisionDTO.model_validate(obj)
+    return svc.patch(db, division_id, patch)
 
 # Delete cascada (soft)
 @router.delete("/delete/{division_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -226,8 +222,7 @@ def activar_division(
     db: DbDep,
     request: Request,
 ):
-    obj = svc.set_active_cascada(db, division_id, active=True, user_id=_current_user_id(request))
-    return DivisionDTO.model_validate(obj)
+    return svc.set_active_cascada(db, division_id, active=True, user_id=_current_user_id(request))
 
 @router.put("/{division_id}/desactivar", response_model=DivisionDTO, summary="Desactivar división (soft, en cascada)")
 def desactivar_division(
@@ -235,5 +230,4 @@ def desactivar_division(
     db: DbDep,
     request: Request,
 ):
-    obj = svc.set_active_cascada(db, division_id, active=False, user_id=_current_user_id(request))
-    return DivisionDTO.model_validate(obj)
+    return svc.set_active_cascada(db, division_id, active=False, user_id=_current_user_id(request))
