@@ -1,23 +1,34 @@
 # app/services/division_service.py
 from __future__ import annotations
+
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Iterable
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session
 
+from app.db.models.area import Area
+from app.db.models.direccion import Direccion
 from app.db.models.division import Division
 from app.db.models.piso import Piso
-from app.db.models.area import Area
 from app.db.models.usuarios_divisiones import UsuarioDivision
-from app.db.models.direccion import Direccion
 from app.schemas.division import (
-    DivisionDTO, DivisionListDTO,
-    ObservacionDTO, ReportaResiduosDTO, ObservacionInexistenciaDTO,
-    DivisionPatchDTO, DivisionAniosDTO,
+    DivisionAniosDTO,
+    DivisionDTO,
+    DivisionListDTO,
+    DivisionPatchDTO,
+    ObservacionDTO,
+    ObservacionInexistenciaDTO,
+    ReportaResiduosDTO,
 )
 from app.services.ajuste_service import AjusteService
+
+
+# --------- utilidades internas ---------
+def _any_key_in(keys: Iterable[str], payload_keys: Iterable[str]) -> bool:
+    pl = {k.lower() for k in payload_keys}
+    return any(k.lower() in pl for k in keys)
 
 
 class DivisionService:
@@ -33,7 +44,7 @@ class DivisionService:
         region_id: Optional[int] = None,
         provincia_id: Optional[int] = None,
         comuna_id: Optional[int] = None,
-        **_: object,  # tolera kwargs extra
+        **_: object,
     ) -> dict:
         """
         Devuelve dicts planos aplicando COALESCE con Direcciones:
@@ -115,12 +126,7 @@ class DivisionService:
         id_list = [r[0] for r in ids]
         if not id_list:
             return []
-        return (
-            db.query(Division)
-            .filter(Division.Id.in_(id_list))
-            .order_by(Division.Direccion)
-            .all()
-        )
+        return db.query(Division).filter(Division.Id.in_(id_list)).order_by(Division.Direccion).all()
 
     def by_servicio(self, db: Session, servicio_id: int, search: Optional[str] = None) -> List[Division]:
         qy = db.query(Division).filter(Division.ServicioId == servicio_id)
@@ -130,26 +136,15 @@ class DivisionService:
         return qy.order_by(Division.Direccion).all()
 
     def by_edificio(self, db: Session, edificio_id: int) -> List[Division]:
-        return (
-            db.query(Division)
-            .filter(Division.EdificioId == edificio_id)
-            .order_by(Division.Direccion)
-            .all()
-        )
+        return db.query(Division).filter(Division.EdificioId == edificio_id).order_by(Division.Direccion).all()
 
     def by_region(self, db: Session, region_id: int) -> List[Division]:
-        return (
-            db.query(Division)
-            .filter(Division.RegionId == region_id)
-            .order_by(Division.Direccion)
-            .all()
-        )
+        return db.query(Division).filter(Division.RegionId == region_id).order_by(Division.Direccion).all()
 
     def list_select(self, db: Session, q: Optional[str], servicio_id: int | None) -> List[tuple[int, str | None]]:
         DirPreferida = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
-        qy = (
-            db.query(Division.Id, DirPreferida.label("Nombre"))
-            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+        qy = db.query(Division.Id, DirPreferida.label("Nombre")).outerjoin(
+            Direccion, Direccion.Id == Division.DireccionInmuebleId
         )
         if servicio_id is not None:
             qy = qy.filter(Division.ServicioId == servicio_id)
@@ -234,6 +229,7 @@ class DivisionService:
     # --------- Reglas con Ajustes ---------
     def set_anios(self, db: Session, payload: DivisionAniosDTO, set_gestion: bool):
         aj = AjusteService(db)
+        # Este endpoint SIEMPRE modifica años (campo sensible) -> requiere flag
         if not aj.can_edit_unidad_pmg():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -249,15 +245,30 @@ class DivisionService:
         db.commit()
 
     def patch(self, db: Session, division_id: int, patch: DivisionPatchDTO):
+        """
+        Aplica parches parciales. Si el payload toca campos sensibles (años/UnidadPMG),
+        exige el flag de edición de Unidad PMG.
+        """
         aj = AjusteService(db)
-        if not aj.can_edit_unidad_pmg():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Edición de Unidad PMG deshabilitada por configuración.",
-            )
+        # Campos que consideramos "sensibles" a nivel de PMG
+        campos_sensibles = {
+            "AnioInicioGestionEnergetica",
+            "AnioInicioRestoItems",
+            "UnidadPMG",  # por si existe el campo en tu modelo/esquema
+        }
+        payload = patch.model_dump(exclude_unset=True)
+
+        if _any_key_in(campos_sensibles, payload.keys()):
+            if not aj.can_edit_unidad_pmg():
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Edición de Unidad PMG deshabilitada por configuración.",
+                )
+
         d = self.get(db, division_id)
-        for k, v in patch.model_dump(exclude_unset=True).items():
+        for k, v in payload.items():
             setattr(d, k, v)
+
         d.UpdatedAt = datetime.utcnow()
         d.Version = (d.Version or 0) + 1
         db.commit()

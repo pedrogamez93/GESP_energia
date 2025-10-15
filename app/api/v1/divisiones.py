@@ -1,15 +1,25 @@
+# app/api/v1/divisiones.py
 from __future__ import annotations
+
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, Query, Path, Request, Response, status
+
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
 from app.core.security import require_roles
+from app.db.session import get_db
 from app.schemas.auth import UserPublic
 from app.schemas.division import (
-    DivisionDTO, DivisionListDTO, DivisionSelectDTO,
-    ObservacionDTO, ReportaResiduosDTO, ObservacionInexistenciaDTO,
-    DivisionPatchDTO, DivisionAniosDTO, OkMessage, DivisionPage
+    DivisionAniosDTO,
+    DivisionDTO,
+    DivisionListDTO,
+    DivisionPage,
+    DivisionPatchDTO,
+    DivisionSelectDTO,
+    ObservacionDTO,
+    ObservacionInexistenciaDTO,
+    OkMessage,
+    ReportaResiduosDTO,
 )
 from app.services.division_service import DivisionService
 
@@ -17,9 +27,11 @@ router = APIRouter(prefix="/api/v1/divisiones", tags=["Divisiones"])
 svc = DivisionService()
 DbDep = Annotated[Session, Depends(get_db)]
 
+
 def _current_user_id(request: Request) -> str | None:
-    # Permite venir desde middleware (request.state.user_id) o cabecera explícita
+    # Permite venir desde middleware (request.state.user_id) o cabecera explícita.
     return getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
+
 
 # ---- GET públicos (paginado, liviano) ----
 @router.get("", response_model=DivisionPage, summary="Listado paginado")
@@ -52,6 +64,7 @@ def list_divisiones(
         comuna_id=ComunaId,
     )
 
+
 @router.get("/select", response_model=List[DivisionSelectDTO], summary="(picker) Id/Dirección")
 def select_divisiones(
     db: DbDep,
@@ -62,13 +75,12 @@ def select_divisiones(
     # En el picker usamos 'Nombre' para mostrar la Dirección
     return [DivisionSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
+
 @router.get("/{division_id}", response_model=DivisionDTO, summary="Detalle")
-def get_division(
-    division_id: Annotated[int, Path(..., ge=1)],
-    db: DbDep,
-):
+def get_division(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     # Devolvemos la instancia ORM; FastAPI + Pydantic v2 serializan por from_attributes
     return svc.get(db, division_id)
+
 
 @router.get("/servicio/{servicio_id}", response_model=List[DivisionListDTO], summary="Por servicio")
 def get_divisiones_by_servicio(
@@ -78,29 +90,30 @@ def get_divisiones_by_servicio(
 ):
     return svc.by_servicio(db, servicio_id, searchText)
 
+
 @router.get("/edificio/{edificio_id}", response_model=List[DivisionListDTO], summary="Por edificio")
-def get_divisiones_by_edificio(
-    edificio_id: Annotated[int, Path(..., ge=1)],
-    db: DbDep,
-):
+def get_divisiones_by_edificio(edificio_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.by_edificio(db, edificio_id)
 
+
 @router.get("/region/{region_id}", response_model=List[DivisionListDTO], summary="Por región")
-def get_divisiones_by_region(
-    region_id: Annotated[int, Path(..., ge=1)],
-    db: DbDep,
-):
+def get_divisiones_by_region(region_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.by_region(db, region_id)
 
+
 # ---- Por usuario (ADMIN) ----
-@router.get("/usuario/{user_id}", response_model=List[DivisionListDTO],
-            summary="Por usuario (vía UsuariosDivisiones)")
+@router.get(
+    "/usuario/{user_id}",
+    response_model=List[DivisionListDTO],
+    summary="Por usuario (vía UsuariosDivisiones)",
+)
 def get_divisiones_by_user(
     user_id: Annotated[str, Path(...)],
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
     db: DbDep,
 ):
     return svc.by_user(db, user_id)
+
 
 # ---------------------------
 # Paridad con .NET (observaciones / flags / años)
@@ -111,79 +124,90 @@ def get_divisiones_by_user(
 def get_obs_papel(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_observacion_papel(db, division_id)
 
+
 @router.put("/observacion-papel/{division_id}", response_model=OkMessage)
 def put_obs_papel(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: ObservacionDTO,
-    db: DbDep
+    db: DbDep,
 ):
     svc.set_observacion_papel(db, division_id, payload)
     return OkMessage()
+
 
 # Observación residuos
 @router.get("/observacion-residuos/{division_id}", response_model=ObservacionDTO)
 def get_obs_residuos(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_observacion_residuos(db, division_id)
 
+
 @router.put("/observacion-residuos/{division_id}", response_model=OkMessage)
 def put_obs_residuos(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: ObservacionDTO,
-    db: DbDep
+    db: DbDep,
 ):
     svc.set_observacion_residuos(db, division_id, payload)
     return OkMessage()
+
 
 # Reporta residuos / no reciclados
 @router.get("/reporta-residuos/{division_id}", response_model=ReportaResiduosDTO)
 def get_rep_residuos(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_reporta_residuos(db, division_id)
 
+
 @router.put("/reporta-residuos/{division_id}", response_model=OkMessage)
 def put_rep_residuos(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: ReportaResiduosDTO,
-    db: DbDep
+    db: DbDep,
 ):
     svc.set_reporta_residuos(db, division_id, payload)
     return OkMessage()
+
 
 @router.put("/reporta-residuos-no-reciclados/{division_id}", response_model=OkMessage)
 def put_rep_residuos_no_rec(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: ReportaResiduosDTO,
-    db: DbDep
+    db: DbDep,
 ):
     svc.set_reporta_residuos_no_reciclados(db, division_id, payload)
     return OkMessage()
+
 
 # Observación/justificación de agua
 @router.get("/observacion-agua/{division_id}", response_model=ObservacionDTO)
 def get_obs_agua(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_observacion_agua(db, division_id)
 
+
 @router.put("/justifica-agua/{division_id}", response_model=OkMessage)
 def put_obs_agua(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: ObservacionDTO,
-    db: DbDep
+    db: DbDep,
 ):
     svc.set_observacion_agua(db, division_id, payload)
     return OkMessage()
+
 
 # Inexistencia E&V
 @router.get("/inexistencia-eyv/{division_id}", response_model=ObservacionInexistenciaDTO)
 def get_inexistencia_eyv(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_inexistencia_eyv(db, division_id)
 
+
 @router.put("/inexistencia-eyv/{division_id}", response_model=OkMessage)
 def put_inexistencia_eyv(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: ObservacionInexistenciaDTO,
-    db: DbDep
+    db: DbDep,
 ):
     svc.set_inexistencia_eyv(db, division_id, payload)
     return OkMessage()
+
 
 # Años de inicio
 @router.post("/set-inicio-gestion", status_code=status.HTTP_204_NO_CONTENT)
@@ -191,29 +215,33 @@ def set_inicio_gestion(payload: DivisionAniosDTO, db: DbDep):
     svc.set_anios(db, payload, set_gestion=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 @router.post("/set-resto-items", status_code=status.HTTP_204_NO_CONTENT)
 def set_resto_items(payload: DivisionAniosDTO, db: DbDep):
     svc.set_anios(db, payload, set_gestion=False)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 # Patch de campos varios
-@router.patch("/{division_id}", response_model=DivisionDTO)
+@router.patch("/{division_id}", response_model=DivisionDTO, summary="Patch parcial de división")
 def patch_division(
     division_id: Annotated[int, Path(..., ge=1)],
     patch: DivisionPatchDTO,
-    db: DbDep
+    db: DbDep,
 ):
     return svc.patch(db, division_id, patch)
+
 
 # Delete cascada (soft)
 @router.delete("/delete/{division_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_division(
     division_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    request: Request
+    request: Request,
 ):
     svc.delete_soft_cascada(db, division_id, _current_user_id(request))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 # --- Activar / Desactivar (soft) ---
 @router.put("/{division_id}/activar", response_model=DivisionDTO, summary="Activar división (soft, en cascada)")
@@ -223,6 +251,7 @@ def activar_division(
     request: Request,
 ):
     return svc.set_active_cascada(db, division_id, active=True, user_id=_current_user_id(request))
+
 
 @router.put("/{division_id}/desactivar", response_model=DivisionDTO, summary="Desactivar división (soft, en cascada)")
 def desactivar_division(
