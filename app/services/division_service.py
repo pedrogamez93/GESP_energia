@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Iterable, List, Optional, Dict, Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select, text, cast, Integer
 from sqlalchemy.orm import Session
 
 from app.db.models.area import Area
@@ -50,7 +50,7 @@ class DivisionService:
         Devuelve dicts planos aplicando COALESCE con Direcciones:
         - RegionId/ProvinciaId/ComunaId/Direccion se toman de Direcciones si en Divisiones vienen NULL.
         - Filtros por Servicio/Región/Provincia/Comuna operan sobre ambos orígenes.
-        - Búsqueda por Nombre/Dirección sin LOWER/UPPER (no requiere cambios de BD).
+        - Búsqueda por Nombre/Dirección sin LOWER/UPPER (no requiere cambios en la BD).
         """
         DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
 
@@ -68,9 +68,9 @@ class DivisionService:
             .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
         )
 
-        # Filtros directos (aprovechan índices si existen)
+        # Filtros directos (forzando booleanos a 1/0 para SQL Server)
         if active is not None:
-            base = base.filter(Division.Active.is_(bool(active)))
+            base = base.filter(cast(Division.Active, Integer) == (1 if active else 0))
         if servicio_id is not None:
             base = base.filter(Division.ServicioId == servicio_id)
         if region_id is not None:
@@ -80,23 +80,22 @@ class DivisionService:
         if comuna_id is not None:
             base = base.filter(or_(Division.ComunaId == comuna_id, Direccion.ComunaId == comuna_id))
 
-        # Búsqueda: SIN LOWER()/UPPER() para no romper posibles índices.
-        # En SQL Server, si tu collation es case-insensitive (lo usual), LIKE ya ignora mayúsculas.
+        # Búsqueda SIN LOWER() para no romper índices (SQL Server suele ser case-insensitive)
         if q:
             like = f"%{q}%"
             base = base.filter(
                 or_(
-                    func.coalesce(Division.Nombre, "") .like(like),
-                    func.coalesce(Division.Direccion, "") .like(like),
-                    func.coalesce(Direccion.DireccionCompleta, "") .like(like),
+                    func.coalesce(Division.Nombre, "").like(like),
+                    func.coalesce(Division.Direccion, "").like(like),
+                    func.coalesce(Direccion.DireccionCompleta, "").like(like),
                 )
             )
 
-        # Conteo eficiente sobre subquery de IDs (evita contar todo el join + columnas grandes)
+        # Conteo eficiente sobre subquery de IDs
         id_subq = base.with_entities(Division.Id).distinct().subquery()
         total = db.query(func.count()).select_from(id_subq).scalar() or 0
 
-        # Paginación por IDs (barata) y luego fetch ordenado
+        # Paginación por IDs y luego fetch ordenado
         size = max(1, min(200, page_size))
         page = max(1, page)
 
@@ -263,6 +262,7 @@ class DivisionService:
     # --------- Reglas con Ajustes ---------
     def set_anios(self, db: Session, payload: DivisionAniosDTO, set_gestion: bool) -> None:
         aj = AjusteService(db)
+        # Este endpoint SIEMPRE modifica años -> requiere flag
         if not aj.can_edit_unidad_pmg():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -286,7 +286,7 @@ class DivisionService:
         campos_sensibles = {
             "AnioInicioGestionEnergetica",
             "AnioInicioRestoItems",
-            "UnidadPMG",  # si existiera
+            "UnidadPMG",  # si existiera en tu esquema
         }
         payload = patch.model_dump(exclude_unset=True)
 
@@ -327,12 +327,12 @@ class DivisionService:
             with db.begin():
                 piso_ids_subq = (
                     db.query(Piso.Id)
-                    .filter(Piso.DivisionId == division_id, Piso.Active.is_(True))
+                    .filter(Piso.DivisionId == division_id, cast(Piso.Active, Integer) == 1)
                     .subquery()
                 )
 
                 db.query(Area).filter(
-                    Area.Active.is_(True),
+                    cast(Area.Active, Integer) == 1,
                     Area.PisoId.in_(select(piso_ids_subq.c.Id)),
                 ).update(
                     {
@@ -346,7 +346,7 @@ class DivisionService:
 
                 db.query(Piso).filter(
                     Piso.DivisionId == division_id,
-                    Piso.Active.is_(True),
+                    cast(Piso.Active, Integer) == 1,
                 ).update(
                     {
                         Piso.Active: False,
@@ -359,7 +359,7 @@ class DivisionService:
 
                 db.query(Division).filter(
                     Division.Id == division_id,
-                    Division.Active.is_(True),
+                    cast(Division.Active, Integer) == 1,
                 ).update(
                     {
                         Division.Active: False,
