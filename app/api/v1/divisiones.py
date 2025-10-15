@@ -38,19 +38,13 @@ def list_divisiones(
     db: DbDep,
     q: Optional[str] = Query(None, description="Busca en Dirección o Nombre (case-insensitive)"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),  # puedes bajar a 25 si quieres aún más ágil
+    page_size: int = Query(15, ge=1, le=200),   # ← aquí cambié el default de 50 a 15
     active: Optional[bool] = Query(True),
     ServicioId: Optional[int] = Query(None),
     RegionId: Optional[int] = Query(None),
     ProvinciaId: Optional[int] = Query(None),
     ComunaId: Optional[int] = Query(None),
 ):
-    """
-    Devuelve `{ total, page, page_size, items[] }`.
-
-    Los campos Region/Provincia/Comuna/Direccion pueden derivarse de Direcciones
-    cuando en Divisiones vengan NULL (COALESCE) para replicar .NET.
-    """
     return svc.list(
         db=db,
         q=q,
