@@ -25,6 +25,7 @@ from app.schemas.division import (
 )
 from app.services.ajuste_service import AjusteService
 
+# Logger dedicado para este servicio
 log = logging.getLogger("divisiones")
 
 
@@ -58,6 +59,10 @@ class DivisionService:
         """
         import time
         t0 = time.perf_counter()
+        log.debug(
+            "DIVISIONES.list → params q=%r page=%s size=%s active=%s srv=%s reg=%s prov=%s com=%s",
+            q, page, page_size, active, servicio_id, region_id, provincia_id, comuna_id
+        )
 
         DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta).label("DirPref")
 
@@ -99,8 +104,10 @@ class DivisionService:
             )
 
         # ---- TOTAL ----
+        t_total = time.perf_counter()
         total_subq = base.with_entities(Division.Id).subquery()
         total = db.query(func.count()).select_from(total_subq).scalar() or 0
+        log.debug("DIVISIONES.list → total=%s (%.1f ms hasta total)", total, (time.perf_counter() - t_total) * 1000)
 
         # ---- PAGINACIÓN CON ROW_NUMBER() ----
         size = max(1, min(200, page_size))
@@ -124,6 +131,7 @@ class DivisionService:
             )
         ).subquery()
 
+        t_page = time.perf_counter()
         rows = (
             db.query(
                 ranked.c.Id,
@@ -138,6 +146,10 @@ class DivisionService:
             .filter(ranked.c.rn.between(start, end))
             .order_by(ranked.c.rn.asc())
             .all()
+        )
+        log.debug(
+            "DIVISIONES.list → page=%s size=%s fetched=%s (%.1f ms desde rank)",
+            page, size, len(rows), (time.perf_counter() - t_page) * 1000
         )
 
         items = [
@@ -154,10 +166,9 @@ class DivisionService:
             for r in rows
         ]
 
-        t1 = time.perf_counter()
         log.debug(
-            "Divisiones.list q=%r page=%s size=%s total=%s -> %s items en %.1f ms",
-            q, page, size, total, len(items), (t1 - t0) * 1000
+            "DIVISIONES.list → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
+            total, page, size, len(items), (time.perf_counter() - t0) * 1000
         )
 
         return {"total": total, "page": page, "page_size": size, "items": items}
