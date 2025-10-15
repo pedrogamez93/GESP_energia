@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Iterable, List, Optional, Dict, Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, cast, Integer
+from sqlalchemy import func, or_, select, cast, Integer, text
 from sqlalchemy.orm import Session
 
 from app.db.models.area import Area
@@ -25,7 +25,7 @@ from app.schemas.division import (
 )
 from app.services.ajuste_service import AjusteService
 
-# Logger dedicado para este servicio
+# Logger dedicado para este servicio (actívalo con LOG_LEVEL=DEBUG)
 log = logging.getLogger("divisiones")
 
 
@@ -54,18 +54,99 @@ class DivisionService:
         Devuelve dicts planos aplicando COALESCE con Direcciones:
         - RegionId/ProvinciaId/ComunaId/Direccion se toman de Direcciones si en Divisiones vienen NULL.
         - Filtros por Servicio/Región/Provincia/Comuna operan sobre ambos orígenes.
-        - Búsqueda por Nombre/Dirección sin LOWER/UPPER (no requiere cambios en la BD).
-        Paginación mediante ROW_NUMBER() para evitar DISTINCT/ordenamientos costosos.
+        - Búsqueda por Nombre/Dirección sin LOWER/UPPER (SQL Server suele ser case-insensitive).
+        - Paginación:
+            * Fast-path (sin q ni filtros territoriales): contar y recortar IDs solo en Divisiones (sin JOIN),
+              luego JOIN para la página y ordenar la página por Dirección preferida + Id.
+            * Slow-path: ROW_NUMBER() sobre Dirección preferida + Id (orden global pero más costoso).
+        Logs: tiempos de total, fetch de página y total global del request.
         """
         import time
         t0 = time.perf_counter()
+        size = max(1, min(200, page_size))
+        page = max(1, page)
+
+        # Dirección preferida (Division.Direccion o Direccion.DireccionCompleta)
+        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
+
         log.debug(
             "DIVISIONES.list → params q=%r page=%s size=%s active=%s srv=%s reg=%s prov=%s com=%s",
-            q, page, page_size, active, servicio_id, region_id, provincia_id, comuna_id
+            q, page, size, active, servicio_id, region_id, provincia_id, comuna_id
         )
 
-        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta).label("DirPref")
+        # --- ¿Podemos usar fast-path? (sin q ni filtros por Direcciones) ---
+        fast_path = (not q) and (region_id is None) and (provincia_id is None) and (comuna_id is None)
+        # En fast-path aplicamos solo filtros en Divisiones (Active/ServicioId) sin JOIN.
+        # El resultado JSON es el mismo; solo cambia la estrategia interna para ser más rápida.
+        if fast_path:
+            t_total = time.perf_counter()
+            log.debug("DIVISIONES.list → FAST-PATH habilitado (sin q ni filtros territoriales)")
 
+            base_ids = db.query(Division.Id)
+            if active is not None:
+                base_ids = base_ids.filter(cast(Division.Active, Integer) == (1 if active else 0))
+            if servicio_id is not None:
+                base_ids = base_ids.filter(Division.ServicioId == servicio_id)
+
+            # TOTAL sin JOIN
+            total = db.query(func.count()).select_from(base_ids.subquery()).scalar() or 0
+            log.debug("DIVISIONES.list[FAST] → total=%s (%.1f ms hasta total)",
+                      total, (time.perf_counter() - t_total) * 1000)
+
+            # IDs de la página por Id ASC (rápido); luego JOIN solo para esos IDs
+            t_page = time.perf_counter()
+            page_ids = (
+                base_ids.order_by(Division.Id.asc())
+                .offset((page - 1) * size)
+                .limit(size)
+                .all()
+            )
+            ids = [r.Id for r in page_ids]
+            log.debug("DIVISIONES.list[FAST] → page=%s size=%s ids=%s (%.1f ms ids)",
+                      page, size, len(ids), (time.perf_counter() - t_page) * 1000)
+
+            rows = []
+            if ids:
+                # JOIN solo para la página y ordenar la página por Dirección preferida + Id
+                rows = (
+                    db.query(
+                        Division.Id.label("Id"),
+                        Division.Nombre.label("Nombre"),
+                        Division.Active.label("Active"),
+                        Division.ServicioId.label("ServicioId"),
+                        func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
+                        func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
+                        func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
+                        DirPref.label("Direccion"),
+                    )
+                    .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+                    .filter(Division.Id.in_(ids))
+                    .order_by(DirPref.asc(), Division.Id.asc())
+                    .all()
+                )
+
+            items = [
+                {
+                    "Id": r.Id,
+                    "Nombre": r.Nombre,
+                    "Active": r.Active,
+                    "ServicioId": r.ServicioId,
+                    "RegionId": r.RegionId,
+                    "ProvinciaId": r.ProvinciaId,
+                    "ComunaId": r.ComunaId,
+                    "Direccion": r.Direccion,
+                }
+                for r in rows
+            ]
+
+            log.debug(
+                "DIVISIONES.list[FAST] → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
+                total, page, size, len(items), (time.perf_counter() - t0) * 1000
+            )
+            return {"total": total, "page": page, "page_size": size, "items": items}
+
+        # --- Slow-path (orden global por Dirección preferida) ---
+        t_build = time.perf_counter()
         base = (
             db.query(
                 Division.Id.label("Id"),
@@ -75,12 +156,11 @@ class DivisionService:
                 func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
                 func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                 func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
-                DirPref,  # dirección preferida (puede venir de Divisiones o Direcciones)
+                DirPref.label("DirPref"),
             )
             .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
         )
 
-        # Filtros (forzando booleanos a 1/0 para SQL Server)
         if active is not None:
             base = base.filter(cast(Division.Active, Integer) == (1 if active else 0))
         if servicio_id is not None:
@@ -92,7 +172,6 @@ class DivisionService:
         if comuna_id is not None:
             base = base.filter(or_(Division.ComunaId == comuna_id, Direccion.ComunaId == comuna_id))
 
-        # Búsqueda sin LOWER()/UPPER()
         if q:
             like = f"%{q}%"
             base = base.filter(
@@ -103,19 +182,19 @@ class DivisionService:
                 )
             )
 
-        # ---- TOTAL ----
+        log.debug("DIVISIONES.list[SLOW] → base listo (%.1f ms)", (time.perf_counter() - t_build) * 1000)
+
+        # ---- TOTAL sobre subquery de Ids (con JOIN aplicado) ----
         t_total = time.perf_counter()
         total_subq = base.with_entities(Division.Id).subquery()
         total = db.query(func.count()).select_from(total_subq).scalar() or 0
-        log.debug("DIVISIONES.list → total=%s (%.1f ms hasta total)", total, (time.perf_counter() - t_total) * 1000)
+        log.debug("DIVISIONES.list[SLOW] → total=%s (%.1f ms hasta total)",
+                  total, (time.perf_counter() - t_total) * 1000)
 
-        # ---- PAGINACIÓN CON ROW_NUMBER() ----
-        size = max(1, min(200, page_size))
-        page = max(1, page)
-        start = (page - 1) * size + 1
-        end = page * size
-
-        rn = func.row_number().over(order_by=(func.isnull(DirPref, "").asc(), Division.Id.asc())).label("rn")
+        # ---- PAGINACIÓN GLOBAL por Dirección preferida + Id (ROW_NUMBER) ----
+        rn = func.row_number().over(
+            order_by=(func.isnull(base.c.DirPref, "").asc(), Division.Id.asc())
+        ).label("rn")
 
         ranked = (
             base.with_entities(
@@ -126,10 +205,13 @@ class DivisionService:
                 func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
                 func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                 func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
-                DirPref.label("Direccion"),
+                base.c.DirPref.label("Direccion"),
                 rn,
             )
         ).subquery()
+
+        start = (page - 1) * size + 1
+        end = page * size
 
         t_page = time.perf_counter()
         rows = (
@@ -148,7 +230,7 @@ class DivisionService:
             .all()
         )
         log.debug(
-            "DIVISIONES.list → page=%s size=%s fetched=%s (%.1f ms desde rank)",
+            "DIVISIONES.list[SLOW] → page=%s size=%s fetched=%s (%.1f ms desde rank)",
             page, size, len(rows), (time.perf_counter() - t_page) * 1000
         )
 
@@ -167,7 +249,7 @@ class DivisionService:
         ]
 
         log.debug(
-            "DIVISIONES.list → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
+            "DIVISIONES.list[SLOW] → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
             total, page, size, len(items), (time.perf_counter() - t0) * 1000
         )
 
@@ -185,7 +267,6 @@ class DivisionService:
         id_list = [r[0] for r in ids]
         if not id_list:
             return []
-        # Orden por dirección preferida (igual criterio)
         DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
         return (
             db.query(Division)
