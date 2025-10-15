@@ -2,12 +2,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Float, Integer, Text, String, ForeignKey
+    BigInteger, Boolean, DateTime, Float, Integer, Text, ForeignKey
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-
+from app.db.models.tipo_propiedad import TipoPropiedad   # IMPORTA la clase
 
 class Division(Base):
     __tablename__ = "Divisiones"
@@ -24,43 +24,44 @@ class Division(Base):
     ModifiedBy: Mapped[str | None] = mapped_column(Text)
     CreatedBy:  Mapped[str | None] = mapped_column(Text)
 
-    # Datos base obligatorios en DDL
-    Funcionarios:       Mapped[int]        = mapped_column(Integer, nullable=False)
-    Nombre:             Mapped[str | None] = mapped_column(Text)
-    ReportaPMG:         Mapped[bool]       = mapped_column(Boolean, nullable=False, default=False)
-    AnyoConstruccion:   Mapped[int]        = mapped_column(Integer, nullable=False)
+    # Datos base obligatorios
+    Funcionarios:     Mapped[int]        = mapped_column(Integer, nullable=False)
+    Nombre:           Mapped[str | None] = mapped_column(Text)
+    ReportaPMG:       Mapped[bool]       = mapped_column(Boolean, nullable=False, default=False)
+    AnyoConstruccion: Mapped[int]        = mapped_column(Integer, nullable=False)
 
-    # Geo/vínculos
-    Latitud:    Mapped[float | None] = mapped_column(Float)
-    Longitud:   Mapped[float | None] = mapped_column(Float)
+    # Geo
+    Latitud:  Mapped[float | None] = mapped_column(Float)
+    Longitud: Mapped[float | None] = mapped_column(Float)
 
-    # FKs principales (asegúrate que existan esas tablas en dbo)
+    # FKs principales (revisa tipos reales de Edificios/Servicios; si sus PKs son INT, cámbialos a Integer)
     EdificioId: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("dbo.Edificios.Id", ondelete="CASCADE"), nullable=False
     )
     ServicioId: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("dbo.Servicios.Id", ondelete="CASCADE"), nullable=False
     )
+    # >>> tu tabla TipoPropiedades.Id es INT -> usa Integer aquí para que no haya desajuste
     TipoPropiedadId: Mapped[int] = mapped_column(
-        BigInteger,
+        Integer,
         ForeignKey("dbo.TipoPropiedades.Id", name="FK_Divisiones_TipoPropiedades"),
         nullable=False,
     )
 
-    # Relación ORM hacia TipoPropiedades
-    tipo_propiedad: Mapped["TipoPropiedad"] = relationship(
-        "TipoPropiedad",
+    # Relación ORM (usa la clase, no string)
+    tipo_propiedad: Mapped[TipoPropiedad] = relationship(
+        TipoPropiedad,
         back_populates="divisiones",
-        lazy="joined",  # para tener el nombre disponible sin otro query
+        lazy="joined",
         foreign_keys="Division.TipoPropiedadId",
     )
 
-    # Resto de referencias (opcionales; sin FKs explícitas porque en la BD ya existen)
+    # --- resto de columnas (igual que tenías) ---
     TipoUnidadId:       Mapped[int | None] = mapped_column(BigInteger)
     Superficie:         Mapped[float | None] = mapped_column(Float)
     Pisos:              Mapped[str | None] = mapped_column(Text)
     TipoUsoId:          Mapped[int | None] = mapped_column(BigInteger)
-    NroRol:             Mapped[str | None] = mapped_column(Text)  # nvarchar(255)
+    NroRol:             Mapped[str | None] = mapped_column(Text)
     Direccion:          Mapped[str | None] = mapped_column(Text)
 
     ComparteMedidorElectricidad: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -165,5 +166,5 @@ class Division(Base):
     IndicadorEnegia: Mapped[float | None] = mapped_column(Float)
     ObsInexistenciaEyV: Mapped[str | None] = mapped_column(Text)
 
-    def __repr__(self) -> str:  # útil para logs
+    def __repr__(self) -> str:
         return f"<Division Id={self.Id} Nombre={self.Nombre!r} Active={self.Active}>"
