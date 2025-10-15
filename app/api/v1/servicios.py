@@ -1,5 +1,9 @@
+# app/api/v1/servicios.py
+from __future__ import annotations
+
 from typing import List, Annotated
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Path, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select
@@ -15,28 +19,45 @@ from app.schemas.servicios import (
 )
 from app.schemas.auth import UserPublic
 from app.core.app_validation import is_app_validate
-from app.core.security import require_roles  # retorna UserPublic
+from app.core.security import require_roles  # retorna UserPublic autenticado
 
 DbDep = Annotated[Session, Depends(get_db)]
 router = APIRouter(prefix="/api/v1/servicios", tags=["Servicios"])
-ADMIN_ROLE_NAME = "ADMINISTRADOR"
+
+# Aceptamos variaciones del nombre del rol admin para distintas BDs
+ADMIN_ROLE_NAMES = {"ADMINISTRADOR", "ADMINISTRADORR", "Administrador"}
+
 
 def _current_user_id(request: Request) -> str:
-    # Se mantiene para endpoints no-ADMIN que ya lo usan
+    """
+    Compatibilidad para endpoints legacy / pruebas: toma el user_id desde
+    request.state.user_id (middleware) o header X-User-Id.
+    Si no viene, lanza 401.
+    """
     uid = getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
     if not uid:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="userId no presente")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Falta userId")
     return uid
 
+
 def _is_user_admin(db: Session, user_id: str) -> bool:
+    """
+    Chequea si el usuario tiene rol administrador. Considera Name y NormalizedName,
+    ambos case-insensitive, y varias variantes conocidas del nombre del rol.
+    """
+    names_up = {n.upper() for n in ADMIN_ROLE_NAMES}
     stmt = (
-        select(AspNetRole.Name)
+        select(AspNetRole.Id)
         .join(AspNetUserRole, AspNetUserRole.RoleId == AspNetRole.Id)
         .where(AspNetUserRole.UserId == user_id)
-        .where(AspNetRole.Name == ADMIN_ROLE_NAME)
+        .where(
+            (func.upper(AspNetRole.Name).in_(names_up))
+            | (func.upper(AspNetRole.NormalizedName).in_(names_up))
+        )
         .limit(1)
     )
     return db.execute(stmt).first() is not None
+
 
 # ---------------------------
 # Públicos / Compatibles (ya existentes)
@@ -45,7 +66,7 @@ def _is_user_admin(db: Session, user_id: str) -> bool:
 @router.get(
     "/institucion/{institucion_id}/usuario/{user_id}",
     response_model=List[ServicioDTO],
-    summary="Servicios por institución y usuario (respeta rol ADMINISTRADOR)",
+    summary="Servicios por institución y usuario (respeta rol ADMIN)",
 )
 @router.get(  # alias legacy (OCULTO en Swagger)
     "/getByInstitucionIdAndUserId/{institucion_id}/{user_id}",
@@ -58,17 +79,19 @@ def get_by_institucion_and_user(
     db: DbDep,
 ) -> List[ServicioDTO]:
     admin = _is_user_admin(db, user_id)
-    q = db.query(Servicio).filter(Servicio.Active == True, Servicio.InstitucionId == institucion_id)
+    q = db.query(Servicio).filter(Servicio.Active.is_(True), Servicio.InstitucionId == institucion_id)
     if not admin:
-        q = q.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id).filter(UsuarioServicio.UsuarioId == user_id)
+        q = q.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id)\
+             .filter(UsuarioServicio.UsuarioId == user_id)
     servicios = q.order_by(Servicio.Nombre).all()
     return [ServicioDTO.model_validate(x) for x in servicios]
+
 
 @router.get(
     "/lista/institucion/{institucion_id}",
     response_model=List[ServicioListDTO],
-    summary="Lista ligera de servicios por institución (AllowAnonymous)",
-    description="Valida app y devuelve (Id, Nombre) ordenado."
+    summary="Lista ligera de servicios por institución (AllowAnonymous condicional)",
+    description="Valida app (headers/clave) y devuelve (Id, Nombre) ordenado.",
 )
 @router.get(  # alias legacy (OCULTO en Swagger)
     "/getlist-by-institucionid/{institucion_id}",
@@ -78,22 +101,24 @@ def get_by_institucion_and_user(
 def get_list_by_institucionid(
     institucion_id: Annotated[int, Path(..., ge=1)],
     request: Request,
-    db: DbDep
+    db: DbDep,
 ) -> List[ServicioListDTO]:
+    # Si no envías los headers que espera is_app_validate -> 401
     if not is_app_validate(request):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized (app signature)")
     servicios = (
         db.query(Servicio)
-          .filter(Servicio.Active == True, Servicio.InstitucionId == institucion_id)
+          .filter(Servicio.Active.is_(True), Servicio.InstitucionId == institucion_id)
           .order_by(Servicio.Nombre)
           .all()
     )
     return [ServicioListDTO.model_validate(x) for x in servicios]
 
+
 @router.get(
     "/usuario/{user_id}",
     response_model=ServicioResponse,
-    summary="Servicios asociados a un user_id (respeta rol ADMINISTRADOR)",
+    summary="Servicios asociados a un user_id (respeta rol ADMIN)",
 )
 @router.get(  # alias legacy (OCULTO en Swagger)
     "/getByUserId/{user_id}",
@@ -102,23 +127,22 @@ def get_list_by_institucionid(
 )
 def get_by_user_id(
     user_id: Annotated[str, Path(...)],
-    db: DbDep
+    db: DbDep,
 ) -> ServicioResponse:
     admin = _is_user_admin(db, user_id)
-    q = db.query(Servicio).filter(Servicio.Active == True)
+    q = db.query(Servicio).filter(Servicio.Active.is_(True))
     if not admin:
-        q = (
-            q.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id)
+        q = q.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id)\
              .filter(UsuarioServicio.UsuarioId == user_id)
-        )
     servicios = q.order_by(Servicio.Nombre).all()
     return ServicioResponse(Ok=True, Servicios=[ServicioDTO.model_validate(s) for s in servicios])
+
 
 @router.get(
     "/usuario",
     response_model=ServicioResponse,
-    summary="Servicios paginados del usuario autenticado (respeta rol ADMINISTRADOR)",
-    description="Lee el user_id de request.state.user_id (o header X-User-Id para pruebas).",
+    summary="Servicios paginados del usuario autenticado (token) (respeta rol ADMIN)",
+    description="Lee el user_id del token (dependencia de auth).",
 )
 @router.get(  # alias legacy (OCULTO en Swagger)
     "/getByUserIdPagin",
@@ -128,16 +152,17 @@ def get_by_user_id(
 def get_by_user_id_pagin(
     response: Response,
     db: DbDep,
-    request: Request,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 10,
     InstitucionId: Annotated[int | None, Query()] = None,
     Pmg: Annotated[bool, Query()] = False,
+    # Solo autenticación (no exige rol específico). Si quieres exigir ADMIN, pasa "ADMINISTRADOR".
+    current_user: Annotated[UserPublic, Depends(require_roles())] = None,
 ) -> ServicioResponse:
-    current_user_id = _current_user_id(request)
+    current_user_id = current_user.id
     admin = _is_user_admin(db, current_user_id)
 
-    base = db.query(Servicio).filter(Servicio.Active == True)
+    base = db.query(Servicio).filter(Servicio.Active.is_(True))
     if not admin:
         base = (
             base.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id)
@@ -148,7 +173,7 @@ def get_by_user_id_pagin(
         base = base.filter(Servicio.InstitucionId == InstitucionId)
 
     if Pmg:
-        base = base.filter(Servicio.ReportaPMG == True)
+        base = base.filter(Servicio.ReportaPMG.is_(True))
 
     id_query = base.with_entities(Servicio.Id).distinct()
     total = db.query(func.count()).select_from(id_query.subquery()).scalar()
@@ -181,6 +206,7 @@ def get_by_user_id_pagin(
 
     return ServicioResponse(Ok=True, Servicios=[ServicioDTO.model_validate(s) for s in items])
 
+
 # ---------------------------
 # Escrituras existentes
 # ---------------------------
@@ -200,6 +226,7 @@ def set_justificacion(model: ServicioDTO, db: DbDep):
     ServicioService(db).save_justificacion(model)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 @router.patch(
     "/{servicio_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -211,11 +238,12 @@ def patch_servicio(
     db: DbDep,
     request: Request,
 ):
+    # Este endpoint sigue usando compat por header X-User-Id (útil en scripts / pruebas)
+    current_user_id = _current_user_id(request)
+
     srv = db.query(Servicio).filter(Servicio.Id == servicio_id).first()
     if not srv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
-
-    current_user_id = _current_user_id(request)
 
     srv.UpdatedAt = datetime.utcnow()
     srv.ModifiedBy = current_user_id
@@ -228,6 +256,7 @@ def patch_servicio(
 
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 # ---------------------------
 # Diagnóstico
@@ -245,10 +274,11 @@ def patch_servicio(
 )
 def get_diagnostico(
     servicio_id: Annotated[int, Path(..., ge=1)],
-    db: DbDep
+    db: DbDep,
 ) -> DiagnosticoDTO:
     from app.services.servicio_service import ServicioService
     return ServicioService(db).get_diagnostico(servicio_id)
+
 
 # ---------------------------
 # CRUD ADMIN
@@ -269,6 +299,7 @@ def crear_servicio(
     srv = ServicioService(db).create(data, created_by=current_user.id)
     return ServicioDTO.model_validate(srv)
 
+
 @router.put(
     "/{servicio_id}",
     response_model=ServicioDTO,
@@ -286,7 +317,6 @@ def actualizar_servicio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
 
-# ---- NUEVO: activar/desactivar ----
 
 @router.patch(
     "/{servicio_id}/estado",
@@ -305,6 +335,7 @@ def set_estado_servicio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
 
+
 @router.patch(
     "/{servicio_id}/reactivar",
     response_model=ServicioDTO,
@@ -320,6 +351,7 @@ def reactivar_servicio(
     if not srv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
+
 
 @router.delete(
     "/{servicio_id}",
