@@ -1,10 +1,13 @@
 from __future__ import annotations
 from datetime import datetime
+
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, Float, Integer, Text, String, ForeignKey
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.db.base import Base
+
 
 class Division(Base):
     __tablename__ = "Divisiones"
@@ -31,7 +34,7 @@ class Division(Base):
     Latitud:    Mapped[float | None] = mapped_column(Float)
     Longitud:   Mapped[float | None] = mapped_column(Float)
 
-    # FKs (principales con las reglas de tu DDL)
+    # FKs principales (asegúrate que existan esas tablas en dbo)
     EdificioId: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("dbo.Edificios.Id", ondelete="CASCADE"), nullable=False
     )
@@ -39,10 +42,20 @@ class Division(Base):
         BigInteger, ForeignKey("dbo.Servicios.Id", ondelete="CASCADE"), nullable=False
     )
     TipoPropiedadId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.TipoPropiedades.Id", ondelete="CASCADE"), nullable=False
+        BigInteger,
+        ForeignKey("dbo.TipoPropiedades.Id", name="FK_Divisiones_TipoPropiedades"),
+        nullable=False,
     )
 
-    # Resto de referencias (opcionales; sin ondelete específico en tu script)
+    # Relación ORM hacia TipoPropiedades
+    tipo_propiedad: Mapped["TipoPropiedad"] = relationship(
+        "TipoPropiedad",
+        back_populates="divisiones",
+        lazy="joined",  # para tener el nombre disponible sin otro query
+        foreign_keys="Division.TipoPropiedadId",
+    )
+
+    # Resto de referencias (opcionales; sin FKs explícitas porque en la BD ya existen)
     TipoUnidadId:       Mapped[int | None] = mapped_column(BigInteger)
     Superficie:         Mapped[float | None] = mapped_column(Float)
     Pisos:              Mapped[str | None] = mapped_column(Text)
@@ -151,3 +164,6 @@ class Division(Base):
     CargaPosteriorT: Mapped[bool]         = mapped_column(Boolean, nullable=False, default=False)
     IndicadorEnegia: Mapped[float | None] = mapped_column(Float)
     ObsInexistenciaEyV: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:  # útil para logs
+        return f"<Division Id={self.Id} Nombre={self.Nombre!r} Active={self.Active}>"
