@@ -72,6 +72,9 @@ from app.api.v1.provincia import router as provincias_router
 
 from app.audit.context import current_request_meta
 
+from app.api.v1 import division_sistemas                      
+from app.api.v1 import tipo_equipo_calefaccion_energeticos
+
 # --- OpenAPI tags (opcional, añade los que quieras mostrar en Swagger) ---
 tags_metadata = [
     {"name": "Health", "description": "Endpoints de verificación."},
@@ -279,3 +282,5 @@ app.include_router(frontis_router)
 app.include_router(reportes_router)
 app.include_router(parametros_medicion_router)
 app.include_router(provincias_router)
+app.include_router(division_sistemas.router)                 
+app.include_router(tipo_equipo_calefaccion_energeticos.router) 
