@@ -1,11 +1,12 @@
 # app/services/division_service.py
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Iterable, List, Optional, Dict, Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, text, cast, Integer
+from sqlalchemy import func, or_, select, cast, Integer
 from sqlalchemy.orm import Session
 
 from app.db.models.area import Area
@@ -23,6 +24,8 @@ from app.schemas.division import (
     ReportaResiduosDTO,
 )
 from app.services.ajuste_service import AjusteService
+
+log = logging.getLogger("divisiones")
 
 
 # --------- utilidades internas ---------
@@ -51,8 +54,12 @@ class DivisionService:
         - RegionId/ProvinciaId/ComunaId/Direccion se toman de Direcciones si en Divisiones vienen NULL.
         - Filtros por Servicio/Región/Provincia/Comuna operan sobre ambos orígenes.
         - Búsqueda por Nombre/Dirección sin LOWER/UPPER (no requiere cambios en la BD).
+        Paginación mediante ROW_NUMBER() para evitar DISTINCT/ordenamientos costosos.
         """
-        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
+        import time
+        t0 = time.perf_counter()
+
+        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta).label("DirPref")
 
         base = (
             db.query(
@@ -63,12 +70,12 @@ class DivisionService:
                 func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
                 func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                 func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
-                DirPref.label("Direccion"),
+                DirPref,  # dirección preferida (puede venir de Divisiones o Direcciones)
             )
             .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
         )
 
-        # Filtros directos (forzando booleanos a 1/0 para SQL Server)
+        # Filtros (forzando booleanos a 1/0 para SQL Server)
         if active is not None:
             base = base.filter(cast(Division.Active, Integer) == (1 if active else 0))
         if servicio_id is not None:
@@ -80,7 +87,7 @@ class DivisionService:
         if comuna_id is not None:
             base = base.filter(or_(Division.ComunaId == comuna_id, Direccion.ComunaId == comuna_id))
 
-        # Búsqueda SIN LOWER() para no romper índices (SQL Server suele ser case-insensitive)
+        # Búsqueda sin LOWER()/UPPER()
         if q:
             like = f"%{q}%"
             base = base.filter(
@@ -91,46 +98,47 @@ class DivisionService:
                 )
             )
 
-        # Conteo eficiente sobre subquery de IDs
-        id_subq = base.with_entities(Division.Id).distinct().subquery()
-        total = db.query(func.count()).select_from(id_subq).scalar() or 0
+        # ---- TOTAL ----
+        total_subq = base.with_entities(Division.Id).subquery()
+        total = db.query(func.count()).select_from(total_subq).scalar() or 0
 
-        # Paginación por IDs y luego fetch ordenado
+        # ---- PAGINACIÓN CON ROW_NUMBER() ----
         size = max(1, min(200, page_size))
         page = max(1, page)
+        start = (page - 1) * size + 1
+        end = page * size
 
-        page_ids_rows = (
+        rn = func.row_number().over(order_by=(func.isnull(DirPref, "").asc(), Division.Id.asc())).label("rn")
+
+        ranked = (
             base.with_entities(
                 Division.Id.label("Id"),
-                DirPref.label("OrdenDir"),
-                Division.Id.label("OrdenId"),
+                Division.Nombre.label("Nombre"),
+                Division.Active.label("Active"),
+                Division.ServicioId.label("ServicioId"),
+                func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
+                func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
+                func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
+                DirPref.label("Direccion"),
+                rn,
             )
-            .distinct()
-            .order_by(text("OrdenDir ASC"), text("OrdenId ASC"))
-            .offset((page - 1) * size)
-            .limit(size)
+        ).subquery()
+
+        rows = (
+            db.query(
+                ranked.c.Id,
+                ranked.c.Nombre,
+                ranked.c.Active,
+                ranked.c.ServicioId,
+                ranked.c.RegionId,
+                ranked.c.ProvinciaId,
+                ranked.c.ComunaId,
+                ranked.c.Direccion,
+            )
+            .filter(ranked.c.rn.between(start, end))
+            .order_by(ranked.c.rn.asc())
             .all()
         )
-        ids = [r.Id for r in page_ids_rows] or []
-
-        rows = []
-        if ids:
-            rows = (
-                db.query(
-                    Division.Id.label("Id"),
-                    Division.Nombre.label("Nombre"),
-                    Division.Active.label("Active"),
-                    Division.ServicioId.label("ServicioId"),
-                    func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
-                    func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
-                    func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
-                    DirPref.label("Direccion"),
-                )
-                .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
-                .filter(Division.Id.in_(ids))
-                .order_by(DirPref.asc(), Division.Id.asc())
-                .all()
-            )
 
         items = [
             {
@@ -145,6 +153,13 @@ class DivisionService:
             }
             for r in rows
         ]
+
+        t1 = time.perf_counter()
+        log.debug(
+            "Divisiones.list q=%r page=%s size=%s total=%s -> %s items en %.1f ms",
+            q, page, size, total, len(items), (t1 - t0) * 1000
+        )
+
         return {"total": total, "page": page, "page_size": size, "items": items}
 
     # --------- GET/SELECT y filtros simples ---------
@@ -159,20 +174,47 @@ class DivisionService:
         id_list = [r[0] for r in ids]
         if not id_list:
             return []
-        return db.query(Division).filter(Division.Id.in_(id_list)).order_by(Division.Direccion).all()
+        # Orden por dirección preferida (igual criterio)
+        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
+        return (
+            db.query(Division)
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+            .filter(Division.Id.in_(id_list))
+            .order_by(DirPref.asc(), Division.Id.asc())
+            .all()
+        )
 
     def by_servicio(self, db: Session, servicio_id: int, search: Optional[str] = None) -> List[Division]:
-        qy = db.query(Division).filter(Division.ServicioId == servicio_id)
+        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
+        qy = (
+            db.query(Division)
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+            .filter(Division.ServicioId == servicio_id)
+        )
         if search:
             like = f"%{search}%"
-            qy = qy.filter(Division.Direccion.like(like))
-        return qy.order_by(Division.Direccion).all()
+            qy = qy.filter(DirPref.like(like))
+        return qy.order_by(DirPref.asc(), Division.Id.asc()).all()
 
     def by_edificio(self, db: Session, edificio_id: int) -> List[Division]:
-        return db.query(Division).filter(Division.EdificioId == edificio_id).order_by(Division.Direccion).all()
+        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
+        return (
+            db.query(Division)
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+            .filter(Division.EdificioId == edificio_id)
+            .order_by(DirPref.asc(), Division.Id.asc())
+            .all()
+        )
 
     def by_region(self, db: Session, region_id: int) -> List[Division]:
-        return db.query(Division).filter(Division.RegionId == region_id).order_by(Division.Direccion).all()
+        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
+        return (
+            db.query(Division)
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+            .filter(Division.RegionId == region_id)
+            .order_by(DirPref.asc(), Division.Id.asc())
+            .all()
+        )
 
     def list_select(self, db: Session, q: Optional[str], servicio_id: int | None) -> List[tuple[int, str | None]]:
         DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
@@ -217,7 +259,7 @@ class DivisionService:
             CheckReporta=d.JustificaResiduos,
             Justificacion=d.JustificacionResiduos,
             CheckReportaNoReciclados=d.JustificaResiduosNoReciclados,
-            JustificacionNoReciclados=d.JustificacionResiduosNoReciclados,
+            JustificacionNoReciclados=d.JustificacionNoReciclados,
         )
 
     def set_reporta_residuos(self, db: Session, division_id: int, payload: ReportaResiduosDTO) -> None:
@@ -231,7 +273,7 @@ class DivisionService:
     def set_reporta_residuos_no_reciclados(self, db: Session, division_id: int, payload: ReportaResiduosDTO) -> None:
         d = self.get(db, division_id)
         d.JustificaResiduosNoReciclados = payload.CheckReportaNoReciclados
-        d.JustificacionResiduosNoReciclados = payload.JustificacionNoReciclados
+        d.JustificacionNoReciclados = payload.JustificacionNoReciclados
         d.UpdatedAt = datetime.utcnow()
         d.Version = (d.Version or 0) + 1
         db.commit()
@@ -262,7 +304,6 @@ class DivisionService:
     # --------- Reglas con Ajustes ---------
     def set_anios(self, db: Session, payload: DivisionAniosDTO, set_gestion: bool) -> None:
         aj = AjusteService(db)
-        # Este endpoint SIEMPRE modifica años -> requiere flag
         if not aj.can_edit_unidad_pmg():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -278,15 +319,11 @@ class DivisionService:
         db.commit()
 
     def patch(self, db: Session, division_id: int, patch: DivisionPatchDTO) -> Division:
-        """
-        Aplica parches parciales. Si el payload toca campos sensibles (años/UnidadPMG),
-        exige el flag de edición de Unidad PMG.
-        """
         aj = AjusteService(db)
         campos_sensibles = {
             "AnioInicioGestionEnergetica",
             "AnioInicioRestoItems",
-            "UnidadPMG",  # si existiera en tu esquema
+            "UnidadPMG",
         }
         payload = patch.model_dump(exclude_unset=True)
 

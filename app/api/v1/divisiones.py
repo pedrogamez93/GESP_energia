@@ -29,7 +29,6 @@ DbDep = Annotated[Session, Depends(get_db)]
 
 
 def _current_user_id(request: Request) -> str | None:
-    # Permite venir desde middleware (request.state.user_id) o cabecera explícita.
     return getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
 
 
@@ -39,7 +38,7 @@ def list_divisiones(
     db: DbDep,
     q: Optional[str] = Query(None, description="Busca en Dirección o Nombre (case-insensitive)"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(50, ge=1, le=200),  # puedes bajar a 25 si quieres aún más ágil
     active: Optional[bool] = Query(True),
     ServicioId: Optional[int] = Query(None),
     RegionId: Optional[int] = Query(None),
@@ -72,13 +71,11 @@ def select_divisiones(
     ServicioId: Optional[int] = Query(None),
 ):
     rows = svc.list_select(db, q, ServicioId)
-    # En el picker usamos 'Nombre' para mostrar la Dirección
     return [DivisionSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
 
 @router.get("/{division_id}", response_model=DivisionDTO, summary="Detalle")
 def get_division(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
-    # Devolvemos la instancia ORM; FastAPI + Pydantic v2 serializan por from_attributes
     return svc.get(db, division_id)
 
 
@@ -119,7 +116,6 @@ def get_divisiones_by_user(
 # Paridad con .NET (observaciones / flags / años)
 # ---------------------------
 
-# Observación/justificación de papel
 @router.get("/observacion-papel/{division_id}", response_model=ObservacionDTO)
 def get_obs_papel(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_observacion_papel(db, division_id)
@@ -135,7 +131,6 @@ def put_obs_papel(
     return OkMessage()
 
 
-# Observación residuos
 @router.get("/observacion-residuos/{division_id}", response_model=ObservacionDTO)
 def get_obs_residuos(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_observacion_residuos(db, division_id)
@@ -151,7 +146,6 @@ def put_obs_residuos(
     return OkMessage()
 
 
-# Reporta residuos / no reciclados
 @router.get("/reporta-residuos/{division_id}", response_model=ReportaResiduosDTO)
 def get_rep_residuos(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_reporta_residuos(db, division_id)
@@ -177,7 +171,6 @@ def put_rep_residuos_no_rec(
     return OkMessage()
 
 
-# Observación/justificación de agua
 @router.get("/observacion-agua/{division_id}", response_model=ObservacionDTO)
 def get_obs_agua(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_observacion_agua(db, division_id)
@@ -193,7 +186,6 @@ def put_obs_agua(
     return OkMessage()
 
 
-# Inexistencia E&V
 @router.get("/inexistencia-eyv/{division_id}", response_model=ObservacionInexistenciaDTO)
 def get_inexistencia_eyv(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_inexistencia_eyv(db, division_id)
@@ -209,7 +201,6 @@ def put_inexistencia_eyv(
     return OkMessage()
 
 
-# Años de inicio
 @router.post("/set-inicio-gestion", status_code=status.HTTP_204_NO_CONTENT)
 def set_inicio_gestion(payload: DivisionAniosDTO, db: DbDep):
     svc.set_anios(db, payload, set_gestion=True)
@@ -222,7 +213,6 @@ def set_resto_items(payload: DivisionAniosDTO, db: DbDep):
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# Patch de campos varios
 @router.patch("/{division_id}", response_model=DivisionDTO, summary="Patch parcial de división")
 def patch_division(
     division_id: Annotated[int, Path(..., ge=1)],
@@ -232,7 +222,6 @@ def patch_division(
     return svc.patch(db, division_id, patch)
 
 
-# Delete cascada (soft)
 @router.delete("/delete/{division_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_division(
     division_id: Annotated[int, Path(..., ge=1)],
@@ -243,7 +232,6 @@ def delete_division(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# --- Activar / Desactivar (soft) ---
 @router.put("/{division_id}/activar", response_model=DivisionDTO, summary="Activar división (soft, en cascada)")
 def activar_division(
     division_id: Annotated[int, Path(..., ge=1)],

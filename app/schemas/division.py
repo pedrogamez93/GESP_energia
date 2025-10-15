@@ -72,7 +72,6 @@ class DivisionAniosDTO(BaseModel):
     AnioInicioRestoItems: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
-# respuestas chicas
 class OkMessage(BaseModel):
     Ok: bool = True
     Message: str = "ok"
