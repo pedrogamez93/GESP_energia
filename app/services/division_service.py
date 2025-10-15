@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Iterable, List, Optional, Dict, Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, cast, Integer, text
+from sqlalchemy import func, or_, select, cast, Integer
 from sqlalchemy.orm import Session
 
 from app.db.models.area import Area
@@ -25,18 +25,15 @@ from app.schemas.division import (
 )
 from app.services.ajuste_service import AjusteService
 
-# Logger dedicado para este servicio (actívalo con LOG_LEVEL=DEBUG)
 log = logging.getLogger("divisiones")
 
 
-# --------- utilidades internas ---------
 def _any_key_in(keys: Iterable[str], payload_keys: Iterable[str]) -> bool:
     pl = {k.lower() for k in payload_keys}
     return any(k.lower() in pl for k in keys)
 
 
 class DivisionService:
-    # --------- Listado (paginado, items planos) ---------
     def list(
         self,
         db: Session,
@@ -51,22 +48,18 @@ class DivisionService:
         **_: object,
     ) -> Dict[str, Any]:
         """
-        Devuelve dicts planos aplicando COALESCE con Direcciones:
-        - RegionId/ProvinciaId/ComunaId/Direccion se toman de Direcciones si en Divisiones vienen NULL.
-        - Filtros por Servicio/Región/Provincia/Comuna operan sobre ambos orígenes.
-        - Búsqueda por Nombre/Dirección sin LOWER/UPPER (SQL Server suele ser case-insensitive).
-        - Paginación:
-            * Fast-path (sin q ni filtros territoriales): contar y recortar IDs solo en Divisiones (sin JOIN),
-              luego JOIN para la página y ordenar la página por Dirección preferida + Id.
-            * Slow-path: ROW_NUMBER() sobre Dirección preferida + Id (orden global pero más costoso).
-        Logs: tiempos de total, fetch de página y total global del request.
+        Paginación en servidor:
+        - Fast-path: sin q ni Region/Provincia/Comuna -> contar y paginar por Id sin JOIN; JOIN solo para la página.
+        - Slow-path: ROW_NUMBER() global por Dirección preferida + Id.
+        Campos territoriales siempre con COALESCE(Division.x, Direccion.x).
         """
         import time
+
         t0 = time.perf_counter()
         size = max(1, min(200, page_size))
         page = max(1, page)
 
-        # Dirección preferida (Division.Direccion o Direccion.DireccionCompleta)
+        # Expresión de Dirección preferida (Division.Direccion o Direccion.DireccionCompleta)
         DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
 
         log.debug(
@@ -74,13 +67,10 @@ class DivisionService:
             q, page, size, active, servicio_id, region_id, provincia_id, comuna_id
         )
 
-        # --- ¿Podemos usar fast-path? (sin q ni filtros por Direcciones) ---
         fast_path = (not q) and (region_id is None) and (provincia_id is None) and (comuna_id is None)
-        # En fast-path aplicamos solo filtros en Divisiones (Active/ServicioId) sin JOIN.
-        # El resultado JSON es el mismo; solo cambia la estrategia interna para ser más rápida.
         if fast_path:
             t_total = time.perf_counter()
-            log.debug("DIVISIONES.list → FAST-PATH habilitado (sin q ni filtros territoriales)")
+            log.debug("DIVISIONES.list → FAST-PATH habilitado")
 
             base_ids = db.query(Division.Id)
             if active is not None:
@@ -88,12 +78,10 @@ class DivisionService:
             if servicio_id is not None:
                 base_ids = base_ids.filter(Division.ServicioId == servicio_id)
 
-            # TOTAL sin JOIN
             total = db.query(func.count()).select_from(base_ids.subquery()).scalar() or 0
             log.debug("DIVISIONES.list[FAST] → total=%s (%.1f ms hasta total)",
                       total, (time.perf_counter() - t_total) * 1000)
 
-            # IDs de la página por Id ASC (rápido); luego JOIN solo para esos IDs
             t_page = time.perf_counter()
             page_ids = (
                 base_ids.order_by(Division.Id.asc())
@@ -107,7 +95,6 @@ class DivisionService:
 
             rows = []
             if ids:
-                # JOIN solo para la página y ordenar la página por Dirección preferida + Id
                 rows = (
                     db.query(
                         Division.Id.label("Id"),
@@ -145,7 +132,7 @@ class DivisionService:
             )
             return {"total": total, "page": page, "page_size": size, "items": items}
 
-        # --- Slow-path (orden global por Dirección preferida) ---
+        # -------- Slow-path (orden global por Dirección preferida + Id) --------
         t_build = time.perf_counter()
         base = (
             db.query(
@@ -184,16 +171,16 @@ class DivisionService:
 
         log.debug("DIVISIONES.list[SLOW] → base listo (%.1f ms)", (time.perf_counter() - t_build) * 1000)
 
-        # ---- TOTAL sobre subquery de Ids (con JOIN aplicado) ----
+        # Total
         t_total = time.perf_counter()
         total_subq = base.with_entities(Division.Id).subquery()
         total = db.query(func.count()).select_from(total_subq).scalar() or 0
         log.debug("DIVISIONES.list[SLOW] → total=%s (%.1f ms hasta total)",
                   total, (time.perf_counter() - t_total) * 1000)
 
-        # ---- PAGINACIÓN GLOBAL por Dirección preferida + Id (ROW_NUMBER) ----
+        # ROW_NUMBER() con orden global por DirPref + Id
         rn = func.row_number().over(
-            order_by=(func.isnull(base.c.DirPref, "").asc(), Division.Id.asc())
+            order_by=(func.coalesce(DirPref, "").asc(), Division.Id.asc())
         ).label("rn")
 
         ranked = (
@@ -205,7 +192,7 @@ class DivisionService:
                 func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
                 func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                 func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
-                base.c.DirPref.label("Direccion"),
+                DirPref.label("Direccion"),
                 rn,
             )
         ).subquery()
@@ -436,7 +423,6 @@ class DivisionService:
         db.refresh(d)
         return d
 
-    # --- Soft delete en cascada ---
     def delete_soft_cascada(self, db: Session, division_id: int, user_id: str | None) -> None:
         aj = AjusteService(db)
         if not aj.can_delete_unidad_pmg():
@@ -502,7 +488,6 @@ class DivisionService:
             db.rollback()
             raise
 
-    # --- Activar/Desactivar en cascada ---
     def set_active_cascada(self, db: Session, division_id: int, active: bool, user_id: str | None) -> Division:
         aj = AjusteService(db)
         if not aj.can_delete_unidad_pmg():
