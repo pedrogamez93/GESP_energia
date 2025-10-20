@@ -314,6 +314,14 @@ class InmuebleService:
         dir_id = self._ensure_direccion(data.Direccion, parent)
         now = datetime.utcnow()
 
+        # Herencia de ServicioId si no viene en el payload:
+        servicio_id = data.ServicioId if data.ServicioId is not None else (parent.ServicioId if parent else None)
+        if servicio_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ServicioId es requerido (provéelo o herédalo desde el padre)."
+            )
+
         # Coalesce para NOT NULL en BD
         funcionarios_value = data.Funcionarios if data.Funcionarios is not None else 0
 
@@ -323,18 +331,21 @@ class InmuebleService:
                 CreatedBy=created_by, ModifiedBy=created_by,
                 TipoInmueble=data.TipoInmueble, Nombre=data.Nombre,
                 AnyoConstruccion=data.AnyoConstruccion,  # puede ser None si la columna admite NULL
-                ServicioId=data.ServicioId, TipoPropiedadId=data.TipoPropiedadId, EdificioId=data.EdificioId,
-                Superficie=data.Superficie, TipoUsoId=data.TipoUsoId, TipoAdministracionId=data.TipoAdministracionId,
-                AdministracionServicioId=data.AdministracionServicioId, ParentId=data.ParentId, NroRol=data.NroRol,
+                ServicioId=servicio_id,                   # heredado o explícito
+                TipoPropiedadId=data.TipoPropiedadId, EdificioId=data.EdificioId,
+                Superficie=data.Superficie, TipoUsoId=data.TipoUsoId, 
+                TipoAdministracionId=data.TipoAdministracionId,
+                AdministracionServicioId=data.AdministracionServicioId,
+                ParentId=data.ParentId, NroRol=data.NroRol,
                 DireccionInmuebleId=dir_id,
-                Funcionarios=funcionarios_value,  # <- clave: evita NULL
+                Funcionarios=funcionarios_value,         # evita NULL
             )
             self.db.add(obj); self.db.commit(); self.db.refresh(obj)
         except IntegrityError:
             self.db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Violación de integridad al crear el inmueble. Revisa campos NOT NULL (p. ej. Funcionarios)."
+                detail="Violación de integridad al crear el inmueble. Revisa campos NOT NULL (p. ej. Funcionarios/ServicioId)."
             )
 
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
@@ -355,10 +366,13 @@ class InmuebleService:
             else:
                 obj.DireccionInmuebleId = self._ensure_direccion(data.Direccion, parent)
 
-        # Aplicamos el payload al modelo, cuidando Funcionarios si viene None
+        # Aplicamos el payload al modelo, cuidando Funcionarios y ServicioId
         for k, v in data.model_dump(exclude_unset=True, exclude={"Direccion"}).items():
             if k == "Funcionarios" and v is None:
                 v = 0
+            if k == "ServicioId" and v is None:
+                # no sobreescribimos ServicioId a NULL (NOT NULL en BD)
+                continue
             setattr(obj, k, v)
 
         obj.UpdatedAt = datetime.utcnow()

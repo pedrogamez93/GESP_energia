@@ -61,8 +61,8 @@ class InmueblePage(BaseModel):
 class InmuebleCreate(BaseModel):
     TipoInmueble: int
     Nombre: Optional[str] = None
-    AnyoConstruccion: Optional[int] = None          # <- ahora opcional
-    ServicioId: int
+    AnyoConstruccion: Optional[int] = None                 # opcional
+    ServicioId: Optional[int] = None                       # <- ahora opcional (se hereda del padre si falta)
     TipoPropiedadId: int
     EdificioId: int
     Superficie: Optional[float] = None
@@ -72,7 +72,7 @@ class InmuebleCreate(BaseModel):
     ParentId: Optional[int] = None
     NroRol: Optional[str] = None
     Direccion: Optional[DireccionDTO] = None
-    Funcionarios: Optional[int] = 0                 # <- default 0 para evitar NULL
+    Funcionarios: Optional[int] = 0                        # default para evitar NULL en BD
 
 class InmuebleUpdate(BaseModel):
     TipoInmueble: Optional[int] = None
@@ -89,7 +89,7 @@ class InmuebleUpdate(BaseModel):
     NroRol: Optional[str] = None
     Direccion: Optional[DireccionDTO] = None
     Active: Optional[bool] = None
-    Funcionarios: Optional[int] = None             # <- admite actualizarlo
+    Funcionarios: Optional[int] = None
 
 # -------- Compat: búsquedas/vínculos --------
 class InmuebleByAddressRequest(BaseModel):
@@ -98,7 +98,7 @@ class InmuebleByAddressRequest(BaseModel):
     ComunaId: int
 
 class InmuebleUnidadRequest(BaseModel):
-    UnidadId: int = Field(..., gt=0)               # <- corregido (sin duplicado)
+    UnidadId: int = Field(..., gt=0)                       # corregido duplicado
 
 class UnidadVinculadaDTO(BaseModel):
     UnidadId: int
