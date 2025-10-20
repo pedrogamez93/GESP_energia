@@ -16,6 +16,9 @@ from app.db.session import engine
 # ⬇️ importa y registra los listeners de auditoría al boot
 from app.audit import hooks   # <-- ¡IMPORTANTE!
 
+import logging
+log = logging.getLogger("uvicorn.error")
+
 # CORS
 try:
     from app.core.config import settings
@@ -159,17 +162,26 @@ async def attach_request_meta(request: Request, call_next):
     xff = request.headers.get("x-forwarded-for")
     ip = (xff.split(",")[0].strip() if xff else request.client.host)
 
-    # 1) crear el dict una sola vez
     meta = {
         "ip": ip,
         "user_agent": request.headers.get("user-agent"),
         "method": request.method,
         "path": request.url.path,
         "request_id": str(uuid4()),
-        "status_code": 200,  # default para evitar NULL si el hook corre antes
+        "status_code": 200,
     }
 
-    # 2) capturar/redactar body (si aplica) y MUTAR el mismo dict
+    # 👇 LOG del Authorization (redactado) solo para /api/v1/inmuebles
+    if request.url.path.startswith("/api/v1/inmuebles"):
+        auth = request.headers.get("authorization")
+        def redact(a: str | None):
+            if not a:
+                return None
+            # ejemplo: "Bearer eyJ***9Q"
+            return a[:10] + "***" + a[-2:] if len(a) > 12 else "***"
+        log.info(f"[AUTH-CHK] path=%s auth=%s", request.url.path, redact(auth))
+
+    # --- (tu lógica de auditoría que ya tenías) ---
     capture_body = (
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
         and request.url.path not in {"/api/v1/auth/login"}
@@ -191,7 +203,6 @@ async def attach_request_meta(request: Request, call_next):
             try:
                 if "application/json" in ctype:
                     parsed = loads(sample.decode("utf-8"))
-                    # usa tu función _redact_json si la tienes importada; aquí solo ejemplo mínimo:
                     body_json_str = dumps(parsed, ensure_ascii=False)
                 elif "application/x-www-form-urlencoded" in ctype:
                     parsed_raw = parse_qs(sample.decode("utf-8"))
@@ -205,13 +216,11 @@ async def attach_request_meta(request: Request, call_next):
     meta["request_body_json"] = body_json_str
     meta["request_body_sha256"] = body_hash
 
-    # 3) colgar el MISMO dict en request.state y publicar en contextvar
     request.state.audit_meta = meta
     current_request_meta.set(meta)
 
     try:
         resp = await call_next(request)
-        # 4) MUTAR el MISMO dict (no reasignar)
         meta["status_code"] = resp.status_code
         return resp
     except asyncio.CancelledError:
