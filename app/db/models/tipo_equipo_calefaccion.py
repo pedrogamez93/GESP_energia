@@ -5,7 +5,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 class TipoEquipoCalefaccion(Base):
-    __tablename__ = "TipoEquiposCalefaccion"
+
+    __tablename__ = "TiposEquiposCalefaccion"
     __table_args__ = {"schema": "dbo"}
 
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
