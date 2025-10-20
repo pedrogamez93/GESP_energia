@@ -1,4 +1,8 @@
 # app/main.py
+from app.api.v1 import tipos_equipos_calefaccion
+from app.api.v1 import tipos_colectores
+from app.api.v1 import energeticos
+from app.services import tipos_luminarias
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -286,3 +290,7 @@ app.include_router(provincias_router)
 app.include_router(division_sistemas.router)                 
 app.include_router(tipo_equipo_calefaccion_energeticos.router) 
 app.include_router(division_sistemas_detalle.router)
+app.include_router(tipos_luminarias.router)           # ya trae /api/v1/tipos-luminarias
+app.include_router(tipos_equipos_calefaccion.router)  # ya trae /api/v1/tipos-equipos-calefaccion
+app.include_router(tipos_colectores.router)           # ya trae /api/v1/tipos-colectores
+app.include_router(energeticos.router)                # ya trae /api/v1/energeticos

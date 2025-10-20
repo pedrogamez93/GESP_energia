@@ -1,163 +1,58 @@
+# app/api/v1/energeticos.py
+from __future__ import annotations
 from typing import Annotated
-from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
+from fastapi import APIRouter, Depends, Query, Path, status, Response
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.dependencies.db import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
+
 from app.schemas.energetico import (
-    EnergeticoDTO,
-    EnergeticoListDTO,
-    EnergeticoCreate,
-    EnergeticoUpdate,
-    EnergeticoSelectDTO,
-    EnergeticoUMDTO,
-    EnergeticoUMCreate,
-    EnergeticoUMUpdate,
-    EnergeticoDivisionDTO,
-    EnergeticoPage,  # <- wrapper de paginación
+    EnergeticoDTO, EnergeticoCreate, EnergeticoUpdate,
+    EnergeticoUMDTO, EnergeticoUMCreate, EnergeticoUMUpdate
 )
 from app.services.energetico_service import EnergeticoService
 
-router = APIRouter(prefix="/api/v1/energeticos", tags=["Energéticos"])
-svc = EnergeticoService()
+router = APIRouter(prefix="/api/v1/energeticos", tags=["Energeticos"])
 DbDep = Annotated[Session, Depends(get_db)]
+svc = EnergeticoService()
 
-# ---------- GET públicos ----------
-@router.get("", response_model=EnergeticoPage)
-def list_energeticos(
-    db: DbDep,
-    q: str | None = Query(default=None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-):
-    res = svc.list(db, q, page, page_size)
-    # Convertimos cada ORM a DTO para que Pydantic serialice sin error
-    items = [EnergeticoListDTO.model_validate(it) for it in (res.get("data") or [])]
-    return EnergeticoPage(total=int(res.get("total") or 0), data=items)
+# ----- CRUD Energetico -----
+@router.get("", response_model=dict, summary="Listar (paginado)")
+def list_(db: DbDep, q: str | None = Query(None), page: int = 1, page_size: int = 50):
+    q = q.strip() if isinstance(q, str) else q
+    return svc.list(db, q, page, page_size)
 
+@router.get("/{id}", response_model=EnergeticoDTO, summary="Obtener por Id")
+def get_(db: DbDep, id: Annotated[int, Path(..., ge=1)]):
+    return EnergeticoDTO.model_validate(svc.get(db, id))
 
-@router.get("/select", response_model=list[EnergeticoSelectDTO])
-def list_energeticos_select(db: DbDep):
-    rows = svc.list_select(db) or []
-    return [EnergeticoSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
+@router.post("", response_model=EnergeticoDTO, status_code=status.HTTP_201_CREATED, summary="(ADMIN) Crear")
+def create_(payload: EnergeticoCreate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    return EnergeticoDTO.model_validate(svc.create(db, payload))
 
+@router.put("/{id}", response_model=EnergeticoDTO, summary="(ADMIN) Actualizar")
+def update_(id: Annotated[int, Path(..., ge=1)], payload: EnergeticoUpdate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    return EnergeticoDTO.model_validate(svc.update(db, id, payload))
 
-@router.get("/{id}", response_model=EnergeticoDTO)
-def get_energetico(
-    db: DbDep,
-    id: Annotated[int, Path(..., ge=1)],
-):
-    return svc.get(db, id)
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMIN) Eliminar")
+def delete_(id: Annotated[int, Path(..., ge=1)], db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    svc.delete(db, id); return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-# Energéticos por división (equivale a GetByDivisionId)
-@router.get("/division/{division_id}", response_model=list[EnergeticoDivisionDTO])
-def get_by_division(
-    db: DbDep,
-    division_id: Annotated[int, Path(..., ge=1)],
-):
-    return svc.by_division(db, division_id)
+# ----- Unidades por energético (N:M con metadata) -----
+@router.get("/{energetico_id}/unidades", response_model=list[EnergeticoUMDTO], summary="Listar UM por energético")
+def list_um(energetico_id: Annotated[int, Path(..., ge=1)], db: DbDep):
+    return [EnergeticoUMDTO.model_validate(x) for x in svc.list_um(db, energetico_id)]
 
-# Activos por división (equivale a GetEnergeticosActivos)
-@router.get("/activos/division/{division_id}", response_model=list[EnergeticoDTO])
-def get_activos_by_division(
-    db: DbDep,
-    division_id: Annotated[int, Path(..., ge=1)],
-):
-    return svc.activos_by_division(db, division_id)
+@router.post("/{energetico_id}/unidades", response_model=EnergeticoUMDTO, status_code=status.HTTP_201_CREATED, summary="Agregar UM")
+def add_um(energetico_id: Annotated[int, Path(..., ge=1)], payload: EnergeticoUMCreate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    return EnergeticoUMDTO.model_validate(svc.add_um(db, energetico_id, payload))
 
-# Equivalente a GetByEdificioId – 501 hasta tener el modelo/relación
-@router.get("/edificio/{edificio_id}", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def get_by_edificio(
-    db: DbDep,
-    edificio_id: Annotated[int, Path(..., ge=1)],
-):
-    raise HTTPException(status_code=501, detail="Pendiente implementar (requiere modelo/tabla de Edificio y relación)")
+@router.put("/unidades/{um_id}", response_model=EnergeticoUMDTO, summary="Actualizar UM")
+def upd_um(um_id: Annotated[int, Path(..., ge=1)], payload: EnergeticoUMUpdate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    return EnergeticoUMDTO.model_validate(svc.update_um(db, um_id, payload))
 
-# ---------- Escrituras ADMINISTRADOR ----------
-@router.post(
-    "",
-    response_model=EnergeticoDTO,
-    status_code=status.HTTP_201_CREATED,
-    summary="(ADMINISTRADOR) Crear energético",
-)
-def create_energetico(
-    payload: EnergeticoCreate,
-    db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-):
-    return svc.create(db, payload)
-
-@router.put(
-    "/{id}",
-    response_model=EnergeticoDTO,
-    summary="(ADMINISTRADOR) Actualizar energético",
-)
-def update_energetico(
-    id: int,
-    payload: EnergeticoUpdate,
-    db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-):
-    return svc.update(db, id, payload)
-
-@router.delete(
-    "/{id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="(ADMINISTRADOR) Eliminar energético (hard delete)",
-)
-def delete_energetico(
-    id: int,
-    db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-):
-    svc.delete(db, id)
-    return None
-
-# ---------- Unidades de medida por energético (N:M con metadata) ----------
-@router.get("/{energetico_id}/unidades-medida", response_model=list[EnergeticoUMDTO])
-def list_um(
-    energetico_id: Annotated[int, Path(..., ge=1)],
-    db: DbDep,
-):
-    return svc.list_um(db, energetico_id)
-
-@router.post(
-    "/{energetico_id}/unidades-medida",
-    response_model=EnergeticoUMDTO,
-    status_code=status.HTTP_201_CREATED,
-    summary="(ADMINISTRADOR) Agregar unidad de medida a un energético",
-)
-def add_um(
-    energetico_id: Annotated[int, Path(..., ge=1)],
-    payload: EnergeticoUMCreate,
-    db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-):
-    return svc.add_um(db, energetico_id, payload)
-
-@router.put(
-    "/um/{um_id}",
-    response_model=EnergeticoUMDTO,
-    summary="(ADMINISTRADOR) Actualizar relación UM de un energético",
-)
-def update_um(
-    um_id: Annotated[int, Path(..., ge=1)],
-    payload: EnergeticoUMUpdate,
-    db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-):
-    return svc.update_um(db, um_id, payload)
-
-@router.delete(
-    "/um/{um_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="(ADMINISTRADOR) Eliminar relación UM de un energético",
-)
-def delete_um(
-    um_id: Annotated[int, Path(..., ge=1)],
-    db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-):
-    svc.delete_um(db, um_id)
-    return None
+@router.delete("/unidades/{um_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Eliminar UM")
+def del_um(um_id: Annotated[int, Path(..., ge=1)], db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    svc.delete_um(db, um_id); return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -1,6 +1,7 @@
-# app/api/v1/tipos_colectores.py
+# app/api/v1/tipos_luminarias.py
 from __future__ import annotations
 from typing import Annotated
+
 from fastapi import APIRouter, Depends, Query, Path, status, Response
 from sqlalchemy.orm import Session
 
@@ -9,11 +10,11 @@ from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 
 from app.schemas.catalogo_simple import CatalogoDTO, CatalogoCreate, CatalogoUpdate
-from app.services.tipo_colector_service import TipoColectorService
+from app.services.tipo_luminaria_service import TipoLuminariaService
 
-router = APIRouter(prefix="/api/v1/tipos-colectores", tags=["Tipos Colectores"])
+router = APIRouter(prefix="/api/v1/tipos-luminarias", tags=["Tipos Luminarias"])
 DbDep = Annotated[Session, Depends(get_db)]
-svc = TipoColectorService()
+svc = TipoLuminariaService()
 
 @router.get("", response_model=dict, summary="Listar (paginado)")
 def list_(db: DbDep, q: str | None = Query(None), page: int = 1, page_size: int = 50):
@@ -36,4 +37,5 @@ def update_(id: Annotated[int, Path(..., ge=1)], payload: CatalogoUpdate, db: Db
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMIN) Eliminar")
 def delete_(id: Annotated[int, Path(..., ge=1)], db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
-    svc.delete(db, id); return Response(status_code=status.HTTP_204_NO_CONTENT)
+    svc.delete(db, id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
