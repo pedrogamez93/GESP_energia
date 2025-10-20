@@ -17,6 +17,12 @@ from urllib.parse import parse_qs
 
 from app.db.session import engine
 
+from fastapi.exceptions import RequestValidationError
+from fastapi import Request
+from fastapi.responses import JSONResponse
+import logging
+
+logger = logging.getLogger("uvicorn.error")
 # ⬇️ importa y registra los listeners de auditoría al boot
 from app.audit import hooks   # <-- ¡IMPORTANTE!
 
@@ -159,6 +165,23 @@ def _redact_json(obj):
     if isinstance(obj, list):
         return [_redact_json(v) for v in obj]
     return obj
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    try:
+        body = await request.body()
+        body_preview = body.decode("utf-8", errors="ignore")[:2000]
+    except Exception:
+        body_preview = "<no-body-read>"
+
+    logger.error(
+        "[422] %s %s\nBody: %s\nDetail: %s",
+        request.method, request.url.path, body_preview, exc.errors()
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
 
 # --- Middleware de request: adjunta metadatos + body redacted a request.state.audit_meta ---
 @app.middleware("http")
