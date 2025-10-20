@@ -8,17 +8,23 @@ from app.dependencies.db import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 
-from app.schemas.catalogo_simple import CatalogoDTO, CatalogoCreate, CatalogoUpdate
+from app.schemas.catalogo_simple import CatalogoDTO, CatalogoCreate, CatalogoUpdate, CatalogoPage
 from app.services.tipo_colector_service import TipoColectorService
 
 router = APIRouter(prefix="/api/v1/tipos-colectores", tags=["Tipos Colectores"])
 DbDep = Annotated[Session, Depends(get_db)]
 svc = TipoColectorService()
 
-@router.get("", response_model=dict, summary="Listar (paginado)")
+@router.get("", response_model=CatalogoPage, summary="Listar (paginado)")
 def list_(db: DbDep, q: str | None = Query(None), page: int = 1, page_size: int = 50):
     q = q.strip() if isinstance(q, str) else q
-    return svc.list(db, q, page, page_size)
+    data = svc.list(db, q, page, page_size)
+    return {
+        "total": data["total"],
+        "page": data["page"],
+        "page_size": data["page_size"],
+        "items": [CatalogoDTO.model_validate(x) for x in data["items"]],
+    }
 
 @router.get("/{id}", response_model=CatalogoDTO, summary="Obtener por Id")
 def get_(db: DbDep, id: Annotated[int, Path(..., ge=1)]):

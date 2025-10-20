@@ -1,15 +1,13 @@
 # app/schemas/catalogo_simple.py
 from __future__ import annotations
-from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
+from pydantic import BaseModel, ConfigDict
 
-class CatalogoSelectDTO(BaseModel):
+class CatalogoDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     Id: int
     Nombre: Optional[str] = None
-    class Config: from_attributes = True
-
-class CatalogoDTO(CatalogoSelectDTO):
-    Active: Optional[bool] = None  # algunos lo usan; si no, quedará en None
+    Active: Optional[bool] = True
 
 class CatalogoCreate(BaseModel):
     Nombre: Optional[str] = None
@@ -17,3 +15,10 @@ class CatalogoCreate(BaseModel):
 class CatalogoUpdate(BaseModel):
     Nombre: Optional[str] = None
     Active: Optional[bool] = None
+
+# 👇 NUEVO: envoltorio de paginación tipado
+class CatalogoPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[CatalogoDTO]
