@@ -1,21 +1,33 @@
 from __future__ import annotations
-from datetime import datetime
-from sqlalchemy import BigInteger, Text, Boolean, DateTime
+from sqlalchemy import BigInteger, Text, Float, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 class TipoEquipoCalefaccion(Base):
-    __tablename__ = "TipoEquiposCalefaccion"
+    __tablename__ = "TiposEquiposCalefaccion"
     __table_args__ = {"schema": "dbo"}
 
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-
-    CreatedAt: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    UpdatedAt: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    Version:   Mapped[int]      = mapped_column(BigInteger, nullable=False, default=1)
-    Active:    Mapped[bool]     = mapped_column(Boolean, nullable=False, default=True)
-    CreatedBy: Mapped[str | None] = mapped_column(Text)
-    ModifiedBy:Mapped[str | None] = mapped_column(Text)
-
     Nombre: Mapped[str | None] = mapped_column(Text)
-    OldId:  Mapped[int | None] = mapped_column(BigInteger)
+
+    # Parámetros y costos (según DDL)
+    Rendimiento: Mapped[float] = mapped_column(Float, nullable=False)
+    A: Mapped[float] = mapped_column(Float, nullable=False)
+    B: Mapped[float] = mapped_column(Float, nullable=False)
+    C: Mapped[float] = mapped_column(Float, nullable=False)
+    Temp: Mapped[float] = mapped_column(Float, nullable=False)
+    Costo: Mapped[float] = mapped_column(Float, nullable=False)
+    Costo_Social: Mapped[float] = mapped_column(Float, nullable=False)
+    Costo_Mant: Mapped[float] = mapped_column(Float, nullable=False)
+    Costo_Social_Mant: Mapped[float] = mapped_column(Float, nullable=False)
+    Ejec_HD_Maestro: Mapped[float] = mapped_column(Float, nullable=False)
+    Ejec_HD_Ayte: Mapped[float] = mapped_column(Float, nullable=False)
+    Ejec_HD_Jornal: Mapped[float] = mapped_column(Float, nullable=False)
+    Mant_HD_Maestro: Mapped[float] = mapped_column(Float, nullable=False)
+    Mant_HD_Ayte: Mapped[float] = mapped_column(Float, nullable=False)
+    Mant_HD_Jornal: Mapped[float] = mapped_column(Float, nullable=False)
+
+    # banderas de uso
+    AC: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    CA: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    FR: Mapped[bool] = mapped_column(Boolean, nullable=False)

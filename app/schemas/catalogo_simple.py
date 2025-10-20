@@ -1,19 +1,28 @@
-# app/schemas/catalogo_simple.py
 from __future__ import annotations
-from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
+from pydantic import BaseModel, ConfigDict
 
+# --- Select ligero (compatibilidad con sistemas.py) ---
 class CatalogoSelectDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     Id: int
     Nombre: Optional[str] = None
-    class Config: from_attributes = True
 
+# --- DTO completo de catálogo genérico ---
 class CatalogoDTO(CatalogoSelectDTO):
-    Active: Optional[bool] = None  # algunos lo usan; si no, quedará en None
+    Active: Optional[bool] = True
 
+# --- Payloads CRUD ---
 class CatalogoCreate(BaseModel):
     Nombre: Optional[str] = None
 
 class CatalogoUpdate(BaseModel):
     Nombre: Optional[str] = None
     Active: Optional[bool] = None
+
+# --- Página estándar (para listados paginados) ---
+class CatalogoPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[CatalogoDTO]

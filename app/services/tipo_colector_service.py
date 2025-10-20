@@ -1,53 +1,45 @@
-# app/services/tipo_luminaria_service.py
+# app/services/tipo_colector_service.py
 from __future__ import annotations
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from fastapi import HTTPException
 
-from app.db.models.tipo_luminaria import TipoLuminaria
-
+from app.db.models.tipo_colector import TipoColector
 
 def _now():
     return datetime.utcnow()
 
-class TipoLuminariaService:
-    # -------- Listado paginado --------
+class TipoColectorService:
     def list(self, db: Session, q: str | None, page: int, page_size: int) -> dict:
-        page = max(1, int(page or 1))
-        size = max(1, min(200, int(page_size or 50)))
-
-        query = db.query(TipoLuminaria)
+        page = max(1, int(page or 1)); size = max(1, min(200, int(page_size or 50)))
+        query = db.query(TipoColector)
         if q:
             like = f"%{q}%"
-            query = query.filter(func.lower(TipoLuminaria.Nombre).like(func.lower(like)))
-
+            query = query.filter(func.lower(TipoColector.Nombre).like(func.lower(like)))
         total = query.count()
-        items = (query.order_by(TipoLuminaria.Nombre, TipoLuminaria.Id)
+        items = (query.order_by(TipoColector.Nombre, TipoColector.Id)
                       .offset((page - 1) * size)
                       .limit(size)
                       .all())
         return {"total": total, "page": page, "page_size": size, "items": items}
 
-    # -------- Get --------
-    def get(self, db: Session, id_: int) -> TipoLuminaria:
-        obj = db.query(TipoLuminaria).filter(TipoLuminaria.Id == id_).first()
+    def get(self, db: Session, id_: int) -> TipoColector:
+        obj = db.query(TipoColector).filter(TipoColector.Id == id_).first()
         if not obj:
-            raise HTTPException(status_code=404, detail="Tipo de luminaria no encontrado")
+            raise HTTPException(status_code=404, detail="Tipo de colector no encontrado")
         return obj
 
-    # -------- Create --------
     def create(self, db: Session, data, user: str | None = None):
         now = _now()
-        obj = TipoLuminaria(
-            Nombre=(data.Nombre or "").strip() if hasattr(data, "Nombre") else None,
+        obj = TipoColector(
+            Nombre=(getattr(data, "Nombre", None) or "").strip(),
             CreatedAt=now, UpdatedAt=now, Version=1, Active=True,
             CreatedBy=user, ModifiedBy=user
         )
         db.add(obj); db.commit(); db.refresh(obj)
         return obj
 
-    # -------- Update --------
     def update(self, db: Session, id_: int, data, user: str | None = None):
         obj = self.get(db, id_)
         if hasattr(data, "Nombre"):
@@ -61,7 +53,6 @@ class TipoLuminariaService:
         db.commit(); db.refresh(obj)
         return obj
 
-    # -------- Delete (duro) --------
     def delete(self, db: Session, id_: int):
         obj = self.get(db, id_)
         db.delete(obj); db.commit()
