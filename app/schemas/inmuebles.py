@@ -16,7 +16,7 @@ class AreaDTO(BaseModel):
     Active: bool = True
     Superficie: Optional[float] = None
     PisoId: Optional[int] = None
-    Unidades: List[UnidadBriefDTO] = []
+    Unidades: List[UnidadBriefDTO] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
 class PisoDTO(BaseModel):
@@ -25,8 +25,8 @@ class PisoDTO(BaseModel):
     PisoNumero: Optional[int] = None
     PisoNumeroNombre: Optional[str] = None  # NumeroPisos.Nombre
     Active: bool = True
-    Areas: List[AreaDTO] = []
-    Unidades: List[UnidadBriefDTO] = []
+    Areas: List[AreaDTO] = Field(default_factory=list)
+    Unidades: List[UnidadBriefDTO] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
 # -------- Lecturas: lista y detalle --------
@@ -47,9 +47,9 @@ class InmuebleDTO(InmuebleListDTO):
     Superficie: Optional[float] = None
     NroRol: Optional[str] = None
     GeVersion: Optional[int] = None
-    Children: List["InmuebleDTO"] = []
-    Pisos: List[PisoDTO] = []
-    Unidades: List[UnidadBriefDTO] = []
+    Children: List["InmuebleDTO"] = Field(default_factory=list)
+    Pisos: List[PisoDTO] = Field(default_factory=list)
+    Unidades: List[UnidadBriefDTO] = Field(default_factory=list)
 
 class InmueblePage(BaseModel):
     total: int
@@ -61,7 +61,7 @@ class InmueblePage(BaseModel):
 class InmuebleCreate(BaseModel):
     TipoInmueble: int
     Nombre: Optional[str] = None
-    AnyoConstruccion: int
+    AnyoConstruccion: Optional[int] = None          # <- ahora opcional
     ServicioId: int
     TipoPropiedadId: int
     EdificioId: int
@@ -72,6 +72,7 @@ class InmuebleCreate(BaseModel):
     ParentId: Optional[int] = None
     NroRol: Optional[str] = None
     Direccion: Optional[DireccionDTO] = None
+    Funcionarios: Optional[int] = 0                 # <- default 0 para evitar NULL
 
 class InmuebleUpdate(BaseModel):
     TipoInmueble: Optional[int] = None
@@ -88,6 +89,7 @@ class InmuebleUpdate(BaseModel):
     NroRol: Optional[str] = None
     Direccion: Optional[DireccionDTO] = None
     Active: Optional[bool] = None
+    Funcionarios: Optional[int] = None             # <- admite actualizarlo
 
 # -------- Compat: búsquedas/vínculos --------
 class InmuebleByAddressRequest(BaseModel):
@@ -96,8 +98,7 @@ class InmuebleByAddressRequest(BaseModel):
     ComunaId: int
 
 class InmuebleUnidadRequest(BaseModel):
-    UnidadId: int = Field(..., gt=0)
-    UnidadId: int
+    UnidadId: int = Field(..., gt=0)               # <- corregido (sin duplicado)
 
 class UnidadVinculadaDTO(BaseModel):
     UnidadId: int

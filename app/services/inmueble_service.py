@@ -4,6 +4,8 @@ from typing import Optional, Tuple, List
 
 from sqlalchemy import text, bindparam, true
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from fastapi import HTTPException, status
 
 from app.db.models.division import Division
 from app.db.models.direccion import Direccion
@@ -311,16 +313,30 @@ class InmuebleService:
         parent = self.db.query(Division).filter(Division.Id == data.ParentId).first() if data.ParentId else None
         dir_id = self._ensure_direccion(data.Direccion, parent)
         now = datetime.utcnow()
-        obj = Division(
-            CreatedAt=now, UpdatedAt=now, Version=1, Active=True,
-            CreatedBy=created_by, ModifiedBy=created_by,
-            TipoInmueble=data.TipoInmueble, Nombre=data.Nombre, AnyoConstruccion=data.AnyoConstruccion,
-            ServicioId=data.ServicioId, TipoPropiedadId=data.TipoPropiedadId, EdificioId=data.EdificioId,
-            Superficie=data.Superficie, TipoUsoId=data.TipoUsoId, TipoAdministracionId=data.TipoAdministracionId,
-            AdministracionServicioId=data.AdministracionServicioId, ParentId=data.ParentId, NroRol=data.NroRol,
-            DireccionInmuebleId=dir_id,
-        )
-        self.db.add(obj); self.db.commit(); self.db.refresh(obj)
+
+        # Coalesce para NOT NULL en BD
+        funcionarios_value = data.Funcionarios if data.Funcionarios is not None else 0
+
+        try:
+            obj = Division(
+                CreatedAt=now, UpdatedAt=now, Version=1, Active=True,
+                CreatedBy=created_by, ModifiedBy=created_by,
+                TipoInmueble=data.TipoInmueble, Nombre=data.Nombre,
+                AnyoConstruccion=data.AnyoConstruccion,  # puede ser None si la columna admite NULL
+                ServicioId=data.ServicioId, TipoPropiedadId=data.TipoPropiedadId, EdificioId=data.EdificioId,
+                Superficie=data.Superficie, TipoUsoId=data.TipoUsoId, TipoAdministracionId=data.TipoAdministracionId,
+                AdministracionServicioId=data.AdministracionServicioId, ParentId=data.ParentId, NroRol=data.NroRol,
+                DireccionInmuebleId=dir_id,
+                Funcionarios=funcionarios_value,  # <- clave: evita NULL
+            )
+            self.db.add(obj); self.db.commit(); self.db.refresh(obj)
+        except IntegrityError:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Violación de integridad al crear el inmueble. Revisa campos NOT NULL (p. ej. Funcionarios)."
+            )
+
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
@@ -329,6 +345,7 @@ class InmuebleService:
         if not obj:
             return None
         parent = self.db.query(Division).filter(Division.Id == data.ParentId).first() if data.ParentId else None
+
         if data.Direccion is not None:
             if obj.DireccionInmuebleId:
                 dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first()
@@ -337,10 +354,26 @@ class InmuebleService:
                         setattr(dir_, k, v)
             else:
                 obj.DireccionInmuebleId = self._ensure_direccion(data.Direccion, parent)
+
+        # Aplicamos el payload al modelo, cuidando Funcionarios si viene None
         for k, v in data.model_dump(exclude_unset=True, exclude={"Direccion"}).items():
+            if k == "Funcionarios" and v is None:
+                v = 0
             setattr(obj, k, v)
-        obj.UpdatedAt = datetime.utcnow(); obj.ModifiedBy = modified_by; obj.Version = (obj.Version or 0) + 1
-        self.db.commit(); self.db.refresh(obj)
+
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
+        obj.Version = (obj.Version or 0) + 1
+
+        try:
+            self.db.commit(); self.db.refresh(obj)
+        except IntegrityError:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Violación de integridad al actualizar el inmueble. Revisa campos NOT NULL."
+            )
+
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
@@ -350,6 +383,7 @@ class InmuebleService:
             return None
         if not obj.Active:
             return self.get(inmueble_id)
+
         obj.Active = False
         obj.UpdatedAt = datetime.utcnow()
         obj.ModifiedBy = modified_by
