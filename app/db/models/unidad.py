@@ -1,4 +1,3 @@
-# app/db/models/unidad.py
 from __future__ import annotations
 
 from sqlalchemy import BigInteger, ForeignKey, String
@@ -15,11 +14,9 @@ class Unidad(Base):
     __table_args__ = ({"schema": "dbo"},)
 
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    # Define aquí solo lo que necesitas en Python. El resto de columnas
-    # existentes en la BD pueden omitirse si no las usas desde el código.
     Nombre: Mapped[str | None] = mapped_column(String(length=255), nullable=True)
 
-    # Relaciones (no crean tablas nuevas; solo mapeo ORM)
+    # Relaciones ORM (no crean tablas; solo mapeo)
     unidad_inmuebles: Mapped[list["UnidadInmueble"]] = relationship(
         "UnidadInmueble", back_populates="unidad", cascade="all, delete-orphan"
     )
@@ -46,7 +43,6 @@ class UnidadInmueble(Base):
         BigInteger, ForeignKey("dbo.Divisiones.Id", ondelete="RESTRICT"), primary_key=True
     )
 
-    # Relaciones ORM
     unidad: Mapped["Unidad"] = relationship("Unidad", back_populates="unidad_inmuebles")
 
 
