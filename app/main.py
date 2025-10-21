@@ -89,7 +89,7 @@ from app.audit.context import current_request_meta
 from app.api.v1 import division_sistemas                      
 from app.api.v1 import tipo_equipo_calefaccion_energeticos
 from app.api.v1 import division_sistemas_detalle
-from app.api.v1.unidades import router as unidades_router
+from app.api.v1.routers.unidad_router import router as unidades_router
 
 # --- OpenAPI tags (opcional, añade los que quieras mostrar en Swagger) ---
 tags_metadata = [
