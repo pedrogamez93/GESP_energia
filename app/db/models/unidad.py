@@ -21,7 +21,7 @@ class Unidad(Base):
     CreatedAt: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
     UpdatedAt: Mapped["DateTime | None"] = mapped_column(DateTime, nullable=True)
     Version: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    Active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # <-- BIT en SQL Server
+    Active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     ModifiedBy: Mapped[str | None] = mapped_column(String(length=255), nullable=True)
     CreatedBy: Mapped[str | None] = mapped_column(String(length=255), nullable=True)
 
@@ -38,6 +38,9 @@ class Unidad(Base):
 
     ReportaPMG: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     IndicadorEE: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # <-- FALTABA ESTA COLUMNA
+    Funcionarios: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Relaciones ORM (no crean tablas; solo mapeo)
     unidad_inmuebles: Mapped[list["UnidadInmueble"]] = relationship(
@@ -58,7 +61,6 @@ class UnidadInmueble(Base):
     __tablename__ = "UnidadesInmuebles"
     __table_args__ = ({"schema": "dbo"},)
 
-    # PK compuesta
     UnidadId: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="RESTRICT"), primary_key=True
     )
