@@ -7,9 +7,13 @@ from app.db.base import Base
 
 
 class UnidadInmueble(Base):
+    """
+    Tabla puente N:M entre Unidades y Divisiones (inmuebles).
+    ÚNICA definición de la tabla 'dbo.UnidadesInmuebles' para evitar el error:
+    'Table ... is already defined for this MetaData instance'.
+    """
     __tablename__ = "UnidadesInmuebles"
     __table_args__ = (
-        # PK compuesta, como en la BD
         PrimaryKeyConstraint("InmuebleId", "UnidadId", name="PK_UnidadesInmuebles"),
         {"schema": "dbo"},
     )
@@ -25,7 +29,7 @@ class UnidadInmueble(Base):
         nullable=False,
     )
 
-    # Backref hacia Unidad (declarado como string para evitar import circular)
+    # Backref hacia Unidad (definida en app/db/models/unidad.py)
     unidad: Mapped["app.db.models.unidad.Unidad"] = relationship(
         "app.db.models.unidad.Unidad",
         back_populates="unidad_inmuebles",
