@@ -48,8 +48,9 @@ def _set_instance_active(u: Unidad, value: bool) -> None:
 
 def _q_only_actives(q):
     if _ACTIVE_COL is not None:
-        return q.filter(_ACTIVE_COL.is_(True))
-    return q  # si el modelo no tiene flag de activo, no filtramos
+        # Antes: return q.filter(_ACTIVE_COL.is_(True))  # <-- provoca "IS 1" en MSSQL
+        return q.filter(_ACTIVE_COL == True)  # noqa: E712  -> genera "= 1" en SQL Server
+    return q
 
 def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
     active_val = _get_instance_active(u)
