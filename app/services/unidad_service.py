@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime
 
 from sqlalchemy import select, text
@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models.unidad import Unidad, UnidadInmueble, UnidadPiso, UnidadArea
 
-# ⬇️ Solo DTOs de unidad que realmente usamos aquí
 from app.schemas.unidad import (
     UnidadDTO,
     UnidadListDTO,
@@ -16,18 +15,44 @@ from app.schemas.unidad import (
     pisoDTO,
     AreaDTO,
 )
-
-# ⬇️ Paginación centralizada (Pydantic v2)
 from app.schemas.pagination import Page, PageMeta
 
 
 # ---------------------- Helpers ----------------------
+_ACTIVE_CANDIDATES = ("Active", "Activo", "IsActive", "Enabled")
+
 def _now() -> datetime:
     return datetime.now()
 
+def _find_active_column(model) -> Tuple[Optional[str], Optional[object]]:
+    """
+    Devuelve (nombre_atributo, columna) del atributo booleano de 'actividad'
+    según exista en el modelo. Si no existe, (None, None).
+    """
+    for name in _ACTIVE_CANDIDATES:
+        if hasattr(model, name):
+            return name, getattr(model, name)
+    return None, None
+
+# Detectamos una vez la columna del modelo
+_ACTIVE_NAME, _ACTIVE_COL = _find_active_column(Unidad)
+
+def _get_instance_active(u: Unidad) -> Optional[bool]:
+    if _ACTIVE_NAME:
+        return getattr(u, _ACTIVE_NAME)
+    return None
+
+def _set_instance_active(u: Unidad, value: bool) -> None:
+    if _ACTIVE_NAME:
+        setattr(u, _ACTIVE_NAME, value)
+
+def _q_only_actives(q):
+    if _ACTIVE_COL is not None:
+        return q.filter(_ACTIVE_COL.is_(True))
+    return q  # si el modelo no tiene flag de activo, no filtramos
 
 def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
-    # Inmuebles/Pisos/Areas se proyectan en llamadas específicas
+    active_val = _get_instance_active(u)
     return UnidadDTO.model_validate(
         {
             "Id": u.Id,
@@ -36,14 +61,15 @@ def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
             "ServicioId": u.ServicioId or 0,
             "ServicioNombre": None,
             "InstitucionNombre": None,
-            "Active": "1" if u.Active else "0",
+            # si no hay flag, asumimos "1"
+            "Active": "1" if (active_val if active_val is not None else True) else "0",
             "Funcionarios": u.Funcionarios or 0,
-            "ReportaPMG": bool(u.ReportaPMG),
-            "IndicadorEE": bool(u.IndicadorEE),
-            "AccesoFactura": u.AccesoFactura or 0,
-            "InstitucionResponsableId": u.InstitucionResponsableId,
-            "ServicioResponsableId": u.ServicioResponsableId,
-            "OrganizacionResponsable": u.OrganizacionResponsable,
+            "ReportaPMG": bool(getattr(u, "ReportaPMG", False)),
+            "IndicadorEE": bool(getattr(u, "IndicadorEE", False)),
+            "AccesoFactura": getattr(u, "AccesoFactura", 0) or 0,
+            "InstitucionResponsableId": getattr(u, "InstitucionResponsableId", None),
+            "ServicioResponsableId": getattr(u, "ServicioResponsableId", None),
+            "OrganizacionResponsable": getattr(u, "OrganizacionResponsable", None),
             "Servicio": None,
             "Inmuebles": [],
             "Pisos": [],
@@ -52,32 +78,32 @@ def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
         from_attributes=False,
     )
 
-
 def _map_unidad_to_listdto(
     u: Unidad,
     institucion_nombre: Optional[str] = None,
     servicio_nombre: Optional[str] = None,
 ) -> UnidadListDTO:
+    active_val = _get_instance_active(u)
     return UnidadListDTO.model_validate(
         {
             "Id": u.Id,
             "OldId": u.OldId,
             "Nombre": u.Nombre,
             "Ubicacion": None,
-            "InstitucionId": u.InstitucionResponsableId or 0,
+            "InstitucionId": getattr(u, "InstitucionResponsableId", 0) or 0,
             "InstitucionNombre": institucion_nombre or "",
             "ServicioId": u.ServicioId or 0,
             "ServicioNombre": servicio_nombre or "",
-            "Active": "1" if u.Active else "0",
+            "Active": "1" if (active_val if active_val is not None else True) else "0",
             "Funcionarios": u.Funcionarios or 0,
-            "ReportaPMG": bool(u.ReportaPMG),
-            "IndicadorEE": bool(u.IndicadorEE),
-            "AccesoFactura": "1" if (u.AccesoFactura or 0) > 0 else "0",
-            "InstitucionResponsableId": u.InstitucionResponsableId,
+            "ReportaPMG": bool(getattr(u, "ReportaPMG", False)),
+            "IndicadorEE": bool(getattr(u, "IndicadorEE", False)),
+            "AccesoFactura": "1" if (getattr(u, "AccesoFactura", 0) or 0) > 0 else "0",
+            "InstitucionResponsableId": getattr(u, "InstitucionResponsableId", None),
             "InstitucionResponsableNombre": institucion_nombre,
-            "ServicioResponsableId": u.ServicioResponsableId,
+            "ServicioResponsableId": getattr(u, "ServicioResponsableId", None),
             "ServicioResponsableNombre": servicio_nombre,
-            "OrganizacionResponsable": u.OrganizacionResponsable,
+            "OrganizacionResponsable": getattr(u, "OrganizacionResponsable", None),
         },
         from_attributes=False,
     )
@@ -94,15 +120,9 @@ class UnidadService:
 
     # ---------- CREATE ----------
     def create(self, payload: dict) -> UnidadDTO:
-        """
-        payload esperado (acorde a .NET):
-        - Campos de Unidad (Nombre, ServicioId, Funcionarios, ReportaPMG, IndicadorEE, AccesoFactura,
-          InstitucionResponsableId, ServicioResponsableId, OrganizacionResponsable, ...)
-        - Inmuebles: [ { Id, Edificios: [ { Id, Pisos: [ { Id, Areas: [ { Id } ] } ] } ] } ]
-          * Se utiliza Inmuebles[0] como raíz; de ahí se agregan puentes a Inmueble/Pisos/Areas
-        """
         u = Unidad(
-            Active=True,
+            # si existe el campo de activo, lo seteamos a True
+            **({_ACTIVE_NAME: True} if _ACTIVE_NAME else {}),
             CreatedAt=_now(),
             UpdatedAt=_now(),
             CreatedBy=self.current_user_id,
@@ -144,7 +164,7 @@ class UnidadService:
     # ---------- UPDATE ----------
     def update(self, unidad_id: int, payload: dict) -> None:
         u = self.db.get(Unidad, unidad_id)
-        if not u or not u.Active:
+        if not u or (_ACTIVE_NAME and not getattr(u, _ACTIVE_NAME)):
             raise ValueError("Unidad no encontrada o inactiva")
 
         # Actualiza campos base
@@ -152,12 +172,15 @@ class UnidadService:
         u.Nombre = payload.get("Nombre", u.Nombre)
         u.ServicioId = payload.get("ServicioId", u.ServicioId)
         u.Funcionarios = payload.get("Funcionarios", u.Funcionarios)
-        u.ReportaPMG = payload.get("ReportaPMG", u.ReportaPMG)
-        u.IndicadorEE = payload.get("IndicadorEE", u.IndicadorEE)
-        u.AccesoFactura = payload.get("AccesoFactura", u.AccesoFactura)
-        u.InstitucionResponsableId = payload.get("InstitucionResponsableId", u.InstitucionResponsableId)
-        u.ServicioResponsableId = payload.get("ServicioResponsableId", u.ServicioResponsableId)
-        u.OrganizacionResponsable = payload.get("OrganizacionResponsable", u.OrganizacionResponsable)
+        if "ReportaPMG" in payload:
+            u.ReportaPMG = payload.get("ReportaPMG")
+        if "IndicadorEE" in payload:
+            u.IndicadorEE = payload.get("IndicadorEE")
+        if "AccesoFactura" in payload:
+            u.AccesoFactura = payload.get("AccesoFactura")
+        u.InstitucionResponsableId = payload.get("InstitucionResponsableId", getattr(u, "InstitucionResponsableId", None))
+        u.ServicioResponsableId = payload.get("ServicioResponsableId", getattr(u, "ServicioResponsableId", None))
+        u.OrganizacionResponsable = payload.get("OrganizacionResponsable", getattr(u, "OrganizacionResponsable", None))
         u.UpdatedAt = _now()
         u.ModifiedBy = self.current_user_id
         u.Version = (u.Version or 0) + 1
@@ -191,7 +214,7 @@ class UnidadService:
         u = self.db.get(Unidad, unidad_id)
         if not u:
             return
-        u.Active = False
+        _set_instance_active(u, False)
         self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
         self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
         self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id).delete()
@@ -200,7 +223,7 @@ class UnidadService:
     # ---------- GET detalle ----------
     def get(self, unidad_id: int) -> UnidadDTO:
         u = self.db.get(Unidad, unidad_id)
-        if not u or not u.Active:
+        if not u or (_ACTIVE_NAME and not getattr(u, _ACTIVE_NAME)):
             raise ValueError("Unidad no encontrada o inactiva")
 
         dto = _map_unidad_to_dto(u)
@@ -230,14 +253,14 @@ class UnidadService:
                 select(UnidadArea).where(UnidadArea.UnidadId == unidad_id)
             ).all()
         ]
-        # ⚠️ Campo 'Nombre' (no 'Nomnbre')
         dto.Areas = [AreaDTO(Id=a, Nombre=None) for a in area_ids]
 
         return dto
 
     # ---------- LIST (filter + pagination) ----------
     def list_filter(self, f: UnidadFilterDTO, page: int, page_size: int) -> Page[UnidadListDTO]:
-        q = self.db.query(Unidad).filter(Unidad.Active.is_(True))
+        q = self.db.query(Unidad)
+        q = _q_only_actives(q)
 
         # Filtro por texto (Nombre)
         if f.Unidad:
@@ -250,7 +273,7 @@ class UnidadService:
         if f.InstitucionId:
             q = q.filter(Unidad.InstitucionResponsableId == f.InstitucionId)
 
-        # Filtro por región (vía JOINs raw equivalentes a EF de .NET)
+        # Filtro por región (raw SQL equivalente a EF .NET)
         if f.RegionId:
             sql = text(
                 """
@@ -265,11 +288,14 @@ class UnidadService:
             if ids:
                 q = q.filter(Unidad.Id.in_(ids))
             else:
-                q = q.filter(False)  # devuelve vacío
+                q = q.filter(False)  # sin resultados
 
         total: int = q.count()
         items: List[Unidad] = (
-            q.order_by(Unidad.Nombre).offset((page - 1) * page_size).limit(page_size).all()
+            q.order_by(Unidad.Nombre)
+             .offset((page - 1) * page_size)
+             .limit(page_size)
+             .all()
         )
 
         data = [_map_unidad_to_listdto(u) for u in items]
@@ -278,9 +304,8 @@ class UnidadService:
 
     # ---------- Asociados por usuario ----------
     def list_asociados_by_user(self, user_id: str) -> List[UnidadListDTO]:
-        q = self.db.query(Unidad).filter(Unidad.Active.is_(True))
+        q = self.db.query(Unidad)
         if not self.current_user_is_admin:
-            # Espera tabla UsuarioUnidades (ajusta si difiere)
             sql = text(
                 """
                 SELECT DISTINCT uu.UnidadId
@@ -294,21 +319,18 @@ class UnidadService:
             else:
                 return []
 
+        q = _q_only_actives(q)
         items = q.order_by(Unidad.Nombre).all()
         return [_map_unidad_to_listdto(u) for u in items]
 
     # ---------- Check nombre duplicado ----------
     def check_nombre(self, nombre: str, servicio_id: int) -> bool:
-        exists = (
-            self.db.query(Unidad)
-            .filter(
-                Unidad.Active.is_(True),
-                Unidad.Nombre == nombre,
-                Unidad.ServicioId == servicio_id,
-            )
-            .first()
+        q = self.db.query(Unidad).filter(
+            Unidad.Nombre == nombre,
+            Unidad.ServicioId == servicio_id,
         )
-        return bool(exists)
+        q = _q_only_actives(q)
+        return bool(q.first())
 
     # ---------- Compatibilidad OldId ----------
     def has_inteligent_measurement(self, old_id: int) -> bool:
