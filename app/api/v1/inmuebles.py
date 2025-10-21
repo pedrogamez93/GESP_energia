@@ -43,14 +43,6 @@ def listar_inmuebles(
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
-@router.get("/{inmueble_id}", response_model=InmuebleDTO, summary="Detalle de inmueble (con árbol/pisos/áreas/unidades)")
-def obtener_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDep):
-    obj = InmuebleService(db).get(inmueble_id)
-    if not obj:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
-    return obj
-
-
 @router.post("", response_model=InmuebleDTO, status_code=status.HTTP_201_CREATED, summary="(ADMIN) Crear inmueble")
 def crear_inmueble(
     data: InmuebleCreate,
@@ -58,6 +50,14 @@ def crear_inmueble(
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     return InmuebleService(db).create(data, created_by=current_user.id)
+
+
+@router.get("/{inmueble_id}", response_model=InmuebleDTO, summary="Detalle de inmueble (con árbol/pisos/áreas/unidades)")
+def obtener_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDep):
+    obj = InmuebleService(db).get(inmueble_id)
+    if not obj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
+    return obj
 
 
 @router.put("/{inmueble_id}", response_model=InmuebleDTO, summary="(ADMIN) Actualizar inmueble")

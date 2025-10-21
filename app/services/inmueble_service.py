@@ -4,8 +4,6 @@ from typing import Optional, Tuple, List
 
 from sqlalchemy import text, bindparam, true
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from fastapi import HTTPException, status
 
 from app.db.models.division import Division
 from app.db.models.direccion import Direccion
@@ -18,6 +16,7 @@ from app.schemas.direcciones import DireccionDTO
 
 
 def _order_by_nombre_nulls_last_sql() -> str:
+    # Asegura NOMBRE NULLS LAST, luego Nombre, luego Id
     return "CASE WHEN dv.Nombre IS NULL THEN 1 ELSE 0 END, dv.Nombre, dv.Id"
 
 
@@ -25,7 +24,7 @@ class InmuebleService:
     def __init__(self, db: Session):
         self.db = db
 
-    # --------------- helpers ---------------
+    # ───────── helpers ─────────
     @staticmethod
     def _to_list_dto_row(row) -> InmuebleListDTO:
         dirdto = None
@@ -72,7 +71,7 @@ class InmuebleService:
             Children=[], Pisos=[], Unidades=[],
         )
 
-    # --------------- listado/filtrado (rápido) ---------------
+    # ───────── listado/filtrado (rápido) ─────────
     def list_paged(
         self,
         page: int = 1,
@@ -159,7 +158,7 @@ class InmuebleService:
         ]
         return total, items
 
-    # --------------- detalle (árbol + pisos/áreas + unidades) ---------------
+    # ───────── detalle (árbol + pisos/áreas + unidades) ─────────
     def get(self, inmueble_id: int) -> InmuebleDTO | None:
         root = (
             self.db.query(Division)
@@ -198,99 +197,93 @@ class InmuebleService:
         return result
 
     def _fetch_unidades_por_inmueble(self, inmueble_id: int) -> list[dict]:
-        try:
-            sql = text("""
-                SELECT u.Id, u.Nombre
-                FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)
-                JOIN dbo.Unidades u WITH (NOLOCK) ON u.Id = ui.UnidadId
-                WHERE ui.InmuebleId = :iid
-                ORDER BY CASE WHEN u.Nombre IS NULL THEN 1 ELSE 0 END, u.Nombre, u.Id
-            """)
-            return [dict(r) for r in self.db.execute(sql, {"iid": inmueble_id}).mappings().all()]
-        except Exception:
-            return []
+        sql = text("""
+            SELECT u.Id, u.Nombre
+            FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)
+            JOIN dbo.Unidades u WITH (NOLOCK) ON u.Id = ui.UnidadId
+            WHERE ui.InmuebleId = :iid
+            ORDER BY CASE WHEN u.Nombre IS NULL THEN 1 ELSE 0 END, u.Nombre, u.Id
+        """)
+        return [dict(r) for r in self.db.execute(sql, {"iid": inmueble_id}).mappings().all()]
 
     def _fetch_pisos_for_division(self, division_id: int) -> list[dict]:
-        try:
-            pisos_sql = text("""
-                SELECT p.Id, p.DivisionId, p.Active, p.NumeroPisoId,
-                       np.Numero AS PisoNumero, np.Nombre AS PisoNumeroNombre
-                FROM dbo.Pisos p WITH (NOLOCK)
-                LEFT JOIN dbo.NumeroPisos np WITH (NOLOCK) ON np.Id = p.NumeroPisoId
-                WHERE p.DivisionId = :div_id AND ISNULL(p.Active, 0) = 1
-                ORDER BY CASE WHEN np.Numero IS NULL THEN 1 ELSE 0 END, np.Numero, p.Id
-            """)
-            pisos = self.db.execute(pisos_sql, {"div_id": division_id}).mappings().all()
-            if not pisos:
-                return []
-
-            piso_ids = [r["Id"] for r in pisos]
-
-            areas_sql = text("""
-                SELECT a.Id, a.PisoId, a.Active, a.Nombre, a.Superficie
-                FROM dbo.Areas a WITH (NOLOCK)
-                WHERE a.PisoId IN :ids AND ISNULL(a.Active, 0) = 1
-                ORDER BY a.Id
-            """).bindparams(bindparam("ids", expanding=True))
-            area_rows = self.db.execute(areas_sql, {"ids": piso_ids}).mappings().all()
-
-            areas_by_piso: dict[int, list] = {}
-            area_ids: list[int] = []
-            for ar in area_rows:
-                area_ids.append(ar["Id"])
-                areas_by_piso.setdefault(ar["PisoId"], []).append({
-                    "Id": ar["Id"],
-                    "Nombre": ar.get("Nombre"),
-                    "Active": bool(ar.get("Active", 1)),
-                    "Superficie": float(ar.get("Superficie")) if ar.get("Superficie") is not None else None,
-                    "PisoId": ar["PisoId"],
-                    "Unidades": [],
-                })
-
-            unidades_piso_by_piso: dict[int, list] = {}
-            if piso_ids:
-                up_sql = text("""
-                    SELECT up.PisoId, u.Id, u.Nombre
-                    FROM dbo.UnidadesPisos up WITH (NOLOCK)
-                    JOIN dbo.Unidades u WITH (NOLOCK) ON u.Id = up.UnidadId
-                    WHERE up.PisoId IN :ids
-                    ORDER BY up.PisoId, u.Nombre, u.Id
-                """).bindparams(bindparam("ids", expanding=True))
-                for r in self.db.execute(up_sql, {"ids": piso_ids}).mappings():
-                    unidades_piso_by_piso.setdefault(r["PisoId"], []).append({"Id": r["Id"], "Nombre": r["Nombre"]})
-
-            unidades_area_by_area: dict[int, list] = {}
-            if area_ids:
-                ua_sql = text("""
-                    SELECT ua.AreaId, u.Id, u.Nombre
-                    FROM dbo.UnidadesAreas ua WITH (NOLOCK)
-                    JOIN dbo.Unidades u WITH (NOLOCK) ON u.Id = ua.UnidadId
-                    WHERE ua.AreaId IN :ids
-                    ORDER BY ua.AreaId, u.Nombre, u.Id
-                """).bindparams(bindparam("ids", expanding=True))
-                for r in self.db.execute(ua_sql, {"ids": area_ids}).mappings():
-                    unidades_area_by_area.setdefault(r["AreaId"], []).append({"Id": r["Id"], "Nombre": r["Nombre"]})
-
-            pisos_res: list[dict] = []
-            for p in pisos:
-                pid = p["Id"]
-                areas = areas_by_piso.get(pid, [])
-                for a in areas:
-                    a["Unidades"] = unidades_area_by_area.get(a["Id"], [])
-                pisos_res.append({
-                    "Id": pid,
-                    "DivisionId": p.get("DivisionId"),
-                    "PisoNumero": p.get("PisoNumero"),
-                    "PisoNumeroNombre": p.get("PisoNumeroNombre"),
-                    "Active": True,
-                    "Areas": areas,
-                    "Unidades": unidades_piso_by_piso.get(pid, []),
-                })
-            return pisos_res
-        except Exception:
+        pisos_sql = text("""
+            SELECT p.Id, p.DivisionId, p.Active, p.NumeroPisoId,
+                   np.Numero AS PisoNumero, np.Nombre AS PisoNumeroNombre
+            FROM dbo.Pisos p WITH (NOLOCK)
+            LEFT JOIN dbo.NumeroPisos np WITH (NOLOCK) ON np.Id = p.NumeroPisoId
+            WHERE p.DivisionId = :div_id AND ISNULL(p.Active, 0) = 1
+            ORDER BY CASE WHEN np.Numero IS NULL THEN 1 ELSE 0 END, np.Numero, p.Id
+        """)
+        pisos = self.db.execute(pisos_sql, {"div_id": division_id}).mappings().all()
+        if not pisos:
             return []
 
-    # --------------- CRUD ---------------
+        piso_ids = [r["Id"] for r in pisos]
+
+        areas_sql = text("""
+            SELECT a.Id, a.PisoId, a.Active, a.Nombre, a.Superficie
+            FROM dbo.Areas a WITH (NOLOCK)
+            WHERE a.PisoId IN :ids AND ISNULL(a.Active, 0) = 1
+            ORDER BY a.Id
+        """).bindparams(bindparam("ids", expanding=True))
+        area_rows = self.db.execute(areas_sql, {"ids": piso_ids}).mappings().all()
+
+        areas_by_piso: dict[int, list] = {}
+        area_ids: list[int] = []
+        for ar in area_rows:
+            area_ids.append(ar["Id"])
+            areas_by_piso.setdefault(ar["PisoId"], []).append({
+                "Id": ar["Id"],
+                "Nombre": ar.get("Nombre"),
+                "Active": bool(ar.get("Active", 1)),
+                "Superficie": float(ar.get("Superficie")) if ar.get("Superficie") is not None else None,
+                "PisoId": ar["PisoId"],
+                "Unidades": [],
+            })
+
+        unidades_piso_by_piso: dict[int, list] = {}
+        if piso_ids:
+            up_sql = text("""
+                SELECT up.PisoId, u.Id, u.Nombre
+                FROM dbo.UnidadesPisos up WITH (NOLOCK)
+                JOIN dbo.Unidades u WITH (NOLOCK) ON u.Id = up.UnidadId
+                WHERE up.PisoId IN :ids
+                ORDER BY up.PisoId, u.Nombre, u.Id
+            """).bindparams(bindparam("ids", expanding=True))
+            for r in self.db.execute(up_sql, {"ids": piso_ids}).mappings():
+                unidades_piso_by_piso.setdefault(r["PisoId"], []).append({"Id": r["Id"], "Nombre": r["Nombre"]})
+
+        unidades_area_by_area: dict[int, list] = {}
+        if area_ids:
+            ua_sql = text("""
+                SELECT ua.AreaId, u.Id, u.Nombre
+                FROM dbo.UnidadesAreas ua WITH (NOLOCK)
+                JOIN dbo.Unidades u WITH (NOLOCK) ON u.Id = ua.UnidadId
+                WHERE ua.AreaId IN :ids
+                ORDER BY ua.AreaId, u.Nombre, u.Id
+            """).bindparams(bindparam("ids", expanding=True))
+            for r in self.db.execute(ua_sql, {"ids": area_ids}).mappings():
+                unidades_area_by_area.setdefault(r["AreaId"], []).append({"Id": r["Id"], "Nombre": r["Nombre"]})
+
+        pisos_res: list[dict] = []
+        for p in pisos:
+            pid = p["Id"]
+            areas = areas_by_piso.get(pid, [])
+            for a in areas:
+                a["Unidades"] = unidades_area_by_area.get(a["Id"], [])
+            pisos_res.append({
+                "Id": pid,
+                "DivisionId": p.get("DivisionId"),
+                "PisoNumero": p.get("PisoNumero"),
+                "PisoNumeroNombre": p.get("PisoNumeroNombre"),
+                "Active": True,
+                "Areas": areas,
+                "Unidades": unidades_piso_by_piso.get(pid, []),
+            })
+        return pisos_res
+
+    # ───────── CRUD ─────────
     def _ensure_direccion(self, payload: DireccionDTO | None, parent: Division | None) -> int | None:
         if payload is None and parent is None:
             return None
@@ -314,7 +307,7 @@ class InmuebleService:
         dir_id = self._ensure_direccion(data.Direccion, parent)
         now = datetime.utcnow()
 
-        # ⛑️ anti-NULL: la BD no acepta NULL en AnyoConstruccion
+        # anti-NULL: la BD no acepta NULL en AnyoConstruccion (algunos dumps quedan vacíos)
         anyo = 0
         if data.AnyoConstruccion not in (None, ""):
             try:
@@ -326,7 +319,7 @@ class InmuebleService:
             CreatedAt=now, UpdatedAt=now, Version=1, Active=True,
             CreatedBy=created_by, ModifiedBy=created_by,
             TipoInmueble=data.TipoInmueble, Nombre=data.Nombre,
-            AnyoConstruccion=anyo,                      # 👈 siempre número
+            AnyoConstruccion=anyo,
             ServicioId=data.ServicioId or (parent.ServicioId if parent else 1),
             TipoPropiedadId=data.TipoPropiedadId or 0,
             EdificioId=data.EdificioId or 0,
@@ -336,8 +329,8 @@ class InmuebleService:
             AdministracionServicioId=data.AdministracionServicioId,
             ParentId=data.ParentId, NroRol=data.NroRol,
             DireccionInmuebleId=dir_id,
-            Funcionarios=0,                             # 👈 anti-NULL / integridad
-            GeVersion=3,                                # si usas gev=3 por defecto
+            Funcionarios=0,
+            GeVersion=3,
         )
         self.db.add(obj); self.db.commit(); self.db.refresh(obj)
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
@@ -350,7 +343,7 @@ class InmuebleService:
 
         parent = self.db.query(Division).filter(Division.Id == data.ParentId).first() if data.ParentId else None
 
-        # Dirección igual que ya lo tienes…
+        # Dirección
         if data.Direccion is not None:
             if obj.DireccionInmuebleId:
                 dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first()
@@ -360,7 +353,6 @@ class InmuebleService:
             else:
                 obj.DireccionInmuebleId = self._ensure_direccion(data.Direccion, parent)
 
-        # ⛑️ No sobrescribir con None campos NOT NULL
         payload = data.model_dump(exclude_unset=True, exclude={"Direccion"})
         if "AnyoConstruccion" in payload:
             val = payload["AnyoConstruccion"]
@@ -377,8 +369,8 @@ class InmuebleService:
 
         obj.ServicioId = payload.get("ServicioId", obj.ServicioId or (parent.ServicioId if parent else 1))
         obj.Funcionarios = obj.Funcionarios or 0
-
         obj.UpdatedAt = datetime.utcnow(); obj.ModifiedBy = modified_by; obj.Version = (obj.Version or 0) + 1
+
         self.db.commit(); self.db.refresh(obj)
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
@@ -404,7 +396,7 @@ class InmuebleService:
         self.db.commit()
         return self.get(inmueble_id)
 
-    # --------------- compat .NET V1 ---------------
+    # ───────── compat .NET V1 ─────────
     def get_by_address(self, req: InmuebleByAddressRequest) -> List[InmuebleListDTO]:
         dir_ = self.db.query(Direccion).filter(
             Direccion.Calle == req.Calle,
@@ -426,7 +418,7 @@ class InmuebleService:
             "DirComunaId": dir_.ComunaId, "DirDireccionCompleta": dir_.DireccionCompleta
         }) for i in inmuebles]
 
-    # --------------- vínculos Unidad <-> Inmueble ---------------
+    # ───────── vínculos Unidad <-> Inmueble ─────────
     def add_unidad(self, inmueble_id: int, unidad_id: int) -> None:
         exists = self.db.query(UnidadInmueble).filter(
             UnidadInmueble.InmuebleId == inmueble_id,

@@ -3,13 +3,15 @@ from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.direcciones import DireccionDTO
 
-# -------- Unidades (forma breve, como en .NET para asociaciones) --------
+
+# ───────── Unidades (resumen para asociaciones) ─────────
 class UnidadBriefDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
-# -------- Áreas / Pisos --------
+
+# ───────── Áreas / Pisos ─────────
 class AreaDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
@@ -18,6 +20,7 @@ class AreaDTO(BaseModel):
     PisoId: Optional[int] = None
     Unidades: List[UnidadBriefDTO] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
+
 
 class PisoDTO(BaseModel):
     Id: int
@@ -29,7 +32,8 @@ class PisoDTO(BaseModel):
     Unidades: List[UnidadBriefDTO] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
-# -------- Lecturas: lista y detalle --------
+
+# ───────── Lecturas: lista y detalle ─────────
 class InmuebleListDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
@@ -42,6 +46,7 @@ class InmuebleListDTO(BaseModel):
     Direccion: Optional[DireccionDTO] = None
     model_config = ConfigDict(from_attributes=True)
 
+
 class InmuebleDTO(InmuebleListDTO):
     AnyoConstruccion: Optional[int] = None
     Superficie: Optional[float] = None
@@ -51,18 +56,20 @@ class InmuebleDTO(InmuebleListDTO):
     Pisos: List[PisoDTO] = Field(default_factory=list)
     Unidades: List[UnidadBriefDTO] = Field(default_factory=list)
 
+
 class InmueblePage(BaseModel):
     total: int
     page: int
     page_size: int
     items: List[InmuebleListDTO]
 
-# -------- Escrituras --------
+
+# ───────── Escrituras ─────────
 class InmuebleCreate(BaseModel):
     TipoInmueble: int
     Nombre: Optional[str] = None
     AnyoConstruccion: Optional[int] = None                 # opcional
-    ServicioId: Optional[int] = None                       # <- ahora opcional (se hereda del padre si falta)
+    ServicioId: Optional[int] = None                       # si falta se hereda del padre
     TipoPropiedadId: int
     EdificioId: int
     Superficie: Optional[float] = None
@@ -72,7 +79,8 @@ class InmuebleCreate(BaseModel):
     ParentId: Optional[int] = None
     NroRol: Optional[str] = None
     Direccion: Optional[DireccionDTO] = None
-    Funcionarios: Optional[int] = 0                        # default para evitar NULL en BD
+    Funcionarios: Optional[int] = 0                        # default anti-NULL
+
 
 class InmuebleUpdate(BaseModel):
     TipoInmueble: Optional[int] = None
@@ -91,17 +99,21 @@ class InmuebleUpdate(BaseModel):
     Active: Optional[bool] = None
     Funcionarios: Optional[int] = None
 
-# -------- Compat: búsquedas/vínculos --------
+
+# ───────── Compat: búsquedas/vínculos ─────────
 class InmuebleByAddressRequest(BaseModel):
     Calle: str
     Numero: str
     ComunaId: int
 
+
 class InmuebleUnidadRequest(BaseModel):
-    UnidadId: int = Field(..., gt=0)                       # corregido duplicado
+    UnidadId: int = Field(..., gt=0)
+
 
 class UnidadVinculadaDTO(BaseModel):
     UnidadId: int
+
 
 # Pydantic v2: forward refs
 InmuebleDTO.model_rebuild()
