@@ -314,31 +314,30 @@ class InmuebleService:
         dir_id = self._ensure_direccion(data.Direccion, parent)
         now = datetime.utcnow()
 
-        # ⬇️ Nuevo: resolver ServicioId (heredar del padre si viene None)
-        servicio_id = data.ServicioId or (parent.ServicioId if parent else None)
-        if servicio_id is None:
-            # fallback seguro (o lanza HTTPException si prefieres exigirlo)
-            servicio_id = 1
+        # ⛑️ anti-NULL: la BD no acepta NULL en AnyoConstruccion
+        anyo = 0
+        if data.AnyoConstruccion not in (None, ""):
+            try:
+                anyo = int(data.AnyoConstruccion)
+            except Exception:
+                anyo = 0
 
         obj = Division(
             CreatedAt=now, UpdatedAt=now, Version=1, Active=True,
             CreatedBy=created_by, ModifiedBy=created_by,
-
             TipoInmueble=data.TipoInmueble, Nombre=data.Nombre,
-            AnyoConstruccion=data.AnyoConstruccion,
-
-            # ⬇️ Usar el servicio ya resuelto (no data.ServicioId crudo)
-            ServicioId=servicio_id,
-
-            TipoPropiedadId=data.TipoPropiedadId, EdificioId=data.EdificioId,
-            Superficie=data.Superficie, TipoUsoId=data.TipoUsoId,
+            AnyoConstruccion=anyo,                      # 👈 siempre número
+            ServicioId=data.ServicioId or (parent.ServicioId if parent else 1),
+            TipoPropiedadId=data.TipoPropiedadId or 0,
+            EdificioId=data.EdificioId or 0,
+            Superficie=data.Superficie,
+            TipoUsoId=data.TipoUsoId,
             TipoAdministracionId=data.TipoAdministracionId,
             AdministracionServicioId=data.AdministracionServicioId,
             ParentId=data.ParentId, NroRol=data.NroRol,
             DireccionInmuebleId=dir_id,
-
-            # ⬇️ Nuevo: anti-NULL en Funcionarios
-            Funcionarios=0,
+            Funcionarios=0,                             # 👈 anti-NULL / integridad
+            GeVersion=3,                                # si usas gev=3 por defecto
         )
         self.db.add(obj); self.db.commit(); self.db.refresh(obj)
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
@@ -348,8 +347,10 @@ class InmuebleService:
         obj = self.db.query(Division).filter(Division.Id == inmueble_id).first()
         if not obj:
             return None
+
         parent = self.db.query(Division).filter(Division.Id == data.ParentId).first() if data.ParentId else None
 
+        # Dirección igual que ya lo tienes…
         if data.Direccion is not None:
             if obj.DireccionInmuebleId:
                 dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first()
@@ -359,28 +360,26 @@ class InmuebleService:
             else:
                 obj.DireccionInmuebleId = self._ensure_direccion(data.Direccion, parent)
 
-        # Aplicamos el payload al modelo, cuidando Funcionarios y ServicioId
-        for k, v in data.model_dump(exclude_unset=True, exclude={"Direccion"}).items():
-            if k == "Funcionarios" and v is None:
-                v = 0
-            if k == "ServicioId" and v is None:
-                # no sobreescribimos ServicioId a NULL (NOT NULL en BD)
-                continue
+        # ⛑️ No sobrescribir con None campos NOT NULL
+        payload = data.model_dump(exclude_unset=True, exclude={"Direccion"})
+        if "AnyoConstruccion" in payload:
+            val = payload["AnyoConstruccion"]
+            if val in (None, ""):
+                payload["AnyoConstruccion"] = obj.AnyoConstruccion or 0
+            else:
+                try:
+                    payload["AnyoConstruccion"] = int(val)
+                except Exception:
+                    payload["AnyoConstruccion"] = obj.AnyoConstruccion or 0
+
+        for k, v in payload.items():
             setattr(obj, k, v)
 
-        obj.UpdatedAt = datetime.utcnow()
-        obj.ModifiedBy = modified_by
-        obj.Version = (obj.Version or 0) + 1
+        obj.ServicioId = payload.get("ServicioId", obj.ServicioId or (parent.ServicioId if parent else 1))
+        obj.Funcionarios = obj.Funcionarios or 0
 
-        try:
-            self.db.commit(); self.db.refresh(obj)
-        except IntegrityError:
-            self.db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Violación de integridad al actualizar el inmueble. Revisa campos NOT NULL."
-            )
-
+        obj.UpdatedAt = datetime.utcnow(); obj.ModifiedBy = modified_by; obj.Version = (obj.Version or 0) + 1
+        self.db.commit(); self.db.refresh(obj)
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
