@@ -10,7 +10,7 @@ from app.schemas.unidad import (
 )
 from app.services.unidad_service import UnidadService
 
-router = APIRouter(prefix="/api/unidad", tags=["Unidades"])
+router = APIRouter(prefix="/api/v1/unidades", tags=["Unidades"])
 
 
 # --------- Dependencias de auth (ajusta a tu proyecto) ----------
