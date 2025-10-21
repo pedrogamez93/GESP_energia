@@ -1,3 +1,4 @@
+# app/api/v1/unidad_router.py
 from __future__ import annotations
 from typing import List, Optional
 
@@ -5,17 +6,14 @@ from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-
-from app.schemas.pagination import Page, PageMeta
+from app.schemas.pagination import Page
 from app.schemas.unidad import (
     UnidadDTO,
     UnidadListDTO,
     UnidadFilterDTO,
-    UnidadPatchDTO,  # si aún no lo usas, puedes dejarlo o quitarlo
+    UnidadPatchDTO,
 )
-
 from app.services.unidad_service import UnidadService
-
 
 router = APIRouter(prefix="/api/v1/unidades", tags=["Unidades"])
 
@@ -26,12 +24,87 @@ class CurrentUser:
         self.id = id
         self.is_admin = is_admin
 
-
 def get_current_user() -> CurrentUser:
     return CurrentUser(id="system", is_admin=True)
 
 
-# ----------------- Endpoints -----------------
+# ================== RUTAS ESTÁTICAS / ESPECÍFICAS PRIMERO ==================
+
+@router.get("/filter", response_model=Page[UnidadListDTO])
+def list_unidades_filter(
+    unidad: Optional[str] = Query(None),
+    userId: Optional[str] = Query(None),
+    institucionId: Optional[int] = Query(None),
+    servicioId: Optional[int] = Query(None),
+    regionId: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    f = UnidadFilterDTO(
+        Unidad=unidad,
+        userId=userId,
+        InstitucionId=institucionId,
+        ServicioId=servicioId,
+        RegionId=regionId,
+    )
+    return svc.list_filter(f, page, page_size)
+
+
+@router.get("/getasociadosbyuser/{user_id}", response_model=List[UnidadListDTO])
+def list_asociados_by_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    return svc.list_asociados_by_user(user_id)
+
+
+@router.get("/getbyfilter", response_model=List[UnidadListDTO])
+def get_by_filter(
+    userId: Optional[str] = Query(None),
+    institucionId: Optional[int] = Query(None),
+    servicioId: Optional[int] = Query(None),
+    regionId: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    f = UnidadFilterDTO(
+        Unidad=None,
+        userId=userId,
+        InstitucionId=institucionId,
+        ServicioId=servicioId,
+        RegionId=regionId,
+    )
+    page = svc.list_filter(f, page=1, page_size=100000)
+    return [UnidadListDTO.model_validate(x) for x in page.data]
+
+
+@router.get("/check/{nombre}/{servicio_id}", response_model=bool)
+def check_unidad_nombre(
+    nombre: str,
+    servicio_id: int,
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    return svc.check_nombre(nombre, servicio_id)
+
+
+@router.get("/hasInteligentMeasurement/{old_id}", response_model=bool)
+def has_inteligent_measurement(
+    old_id: int,
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    return svc.has_inteligent_measurement(old_id)
+
+
 @router.post("", response_model=UnidadDTO, status_code=status.HTTP_201_CREATED)
 def create_unidad(
     payload: dict,
@@ -40,8 +113,7 @@ def create_unidad(
 ):
     svc = UnidadService(db, me.id, me.is_admin)
     try:
-        obj = svc.create(payload)
-        return obj
+        return svc.create(payload)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -83,81 +155,3 @@ def get_unidad(
         return svc.get(unidad_id)
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
-
-
-@router.get("/filter", response_model=Page[UnidadListDTO])
-def list_unidades_filter(
-    unidad: Optional[str] = Query(None),
-    userId: Optional[str] = Query(None),
-    institucionId: Optional[int] = Query(None),
-    servicioId: Optional[int] = Query(None),
-    regionId: Optional[int] = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=500),
-    db: Session = Depends(get_db),
-    me: CurrentUser = Depends(get_current_user),
-):
-    svc = UnidadService(db, me.id, me.is_admin)
-    f = UnidadFilterDTO(
-        Unidad=unidad,
-        userId=userId,
-        InstitucionId=institucionId,
-        ServicioId=servicioId,
-        RegionId=regionId,
-    )
-    # El service ya devuelve Page[UnidadListDTO]; retornamos tal cual
-    return svc.list_filter(f, page, page_size)
-
-
-@router.get("/getasociadosbyuser/{user_id}", response_model=List[UnidadListDTO])
-def list_asociados_by_user(
-    user_id: str,
-    db: Session = Depends(get_db),
-    me: CurrentUser = Depends(get_current_user),
-):
-    svc = UnidadService(db, me.id, me.is_admin)
-    rows = svc.list_asociados_by_user(user_id)
-    return rows
-
-
-@router.get("/getbyfilter", response_model=List[UnidadListDTO])
-def get_by_filter(
-    userId: Optional[str] = Query(None),
-    institucionId: Optional[int] = Query(None),
-    servicioId: Optional[int] = Query(None),
-    regionId: Optional[int] = Query(None),
-    db: Session = Depends(get_db),
-    me: CurrentUser = Depends(get_current_user),
-):
-    svc = UnidadService(db, me.id, me.is_admin)
-    f = UnidadFilterDTO(
-        Unidad=None,
-        userId=userId,
-        InstitucionId=institucionId,
-        ServicioId=servicioId,
-        RegionId=regionId,
-    )
-    page = svc.list_filter(f, page=1, page_size=100000)
-    # ⚠️ Page es objeto, no dict: usar .data
-    return [UnidadListDTO.model_validate(x) for x in page.data]
-
-
-@router.get("/check/{nombre}/{servicio_id}", response_model=bool)
-def check_unidad_nombre(
-    nombre: str,
-    servicio_id: int,
-    db: Session = Depends(get_db),
-    me: CurrentUser = Depends(get_current_user),
-):
-    svc = UnidadService(db, me.id, me.is_admin)
-    return svc.check_nombre(nombre, servicio_id)
-
-
-@router.get("/hasInteligentMeasurement/{old_id}", response_model=bool)
-def has_inteligent_measurement(
-    old_id: int,
-    db: Session = Depends(get_db),
-    me: CurrentUser = Depends(get_current_user),
-):
-    svc = UnidadService(db, me.id, me.is_admin)
-    return svc.has_inteligent_measurement(old_id)
