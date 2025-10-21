@@ -1,71 +1,86 @@
-# app/services/unidad_service.py
 from __future__ import annotations
-from typing import List, Optional, Iterable
-from contextlib import contextmanager
-
-from sqlalchemy import select, func, text
-from sqlalchemy.orm import Session
-from app.schemas.pagination import PageMeta, Page
-from app.db.models.unidad import Unidad, UnidadInmueble, UnidadPiso, UnidadArea
-from app.schemas.unidad import (
-    UnidadDTO, UnidadListDTO, UnidadFilterDTO, ServicioDTO,
-    InmuebleTopDTO, pisoDTO, AreaDTO
-)
+from typing import List, Optional
 from datetime import datetime
+
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
+
+from app.db.models.unidad import Unidad, UnidadInmueble, UnidadPiso, UnidadArea
+
+# ⬇️ Solo DTOs de unidad que realmente usamos aquí
+from app.schemas.unidad import (
+    UnidadDTO,
+    UnidadListDTO,
+    UnidadFilterDTO,
+    InmuebleTopDTO,
+    pisoDTO,
+    AreaDTO,
+)
+
+# ⬇️ Paginación centralizada (Pydantic v2)
+from app.schemas.pagination import Page, PageMeta
 
 
 # ---------------------- Helpers ----------------------
-def _now():
+def _now() -> datetime:
     return datetime.now()
 
 
 def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
     # Inmuebles/Pisos/Areas se proyectan en llamadas específicas
-    return UnidadDTO.model_validate({
-        "Id": u.Id,
-        "OldId": u.OldId,
-        "Nombre": u.Nombre,
-        "ServicioId": u.ServicioId or 0,
-        "ServicioNombre": None,
-        "InstitucionNombre": None,
-        "Active": "1" if u.Active else "0",
-        "Funcionarios": u.Funcionarios or 0,
-        "ReportaPMG": bool(u.ReportaPMG),
-        "IndicadorEE": bool(u.IndicadorEE),
-        "AccesoFactura": u.AccesoFactura or 0,
-        "InstitucionResponsableId": u.InstitucionResponsableId,
-        "ServicioResponsableId": u.ServicioResponsableId,
-        "OrganizacionResponsable": u.OrganizacionResponsable,
-        "Servicio": None,
-        "Inmuebles": [],
-        "Pisos": [],
-        "Areas": [],
-    }, from_attributes=False)
+    return UnidadDTO.model_validate(
+        {
+            "Id": u.Id,
+            "OldId": u.OldId,
+            "Nombre": u.Nombre,
+            "ServicioId": u.ServicioId or 0,
+            "ServicioNombre": None,
+            "InstitucionNombre": None,
+            "Active": "1" if u.Active else "0",
+            "Funcionarios": u.Funcionarios or 0,
+            "ReportaPMG": bool(u.ReportaPMG),
+            "IndicadorEE": bool(u.IndicadorEE),
+            "AccesoFactura": u.AccesoFactura or 0,
+            "InstitucionResponsableId": u.InstitucionResponsableId,
+            "ServicioResponsableId": u.ServicioResponsableId,
+            "OrganizacionResponsable": u.OrganizacionResponsable,
+            "Servicio": None,
+            "Inmuebles": [],
+            "Pisos": [],
+            "Areas": [],
+        },
+        from_attributes=False,
+    )
 
 
-def _map_unidad_to_listdto(u: Unidad,
-                           institucion_nombre: Optional[str] = None,
-                           servicio_nombre: Optional[str] = None) -> UnidadListDTO:
-    return UnidadListDTO.model_validate({
-        "Id": u.Id,
-        "OldId": u.OldId,
-        "Nombre": u.Nombre,
-        "Ubicacion": None,
-        "InstitucionId": u.InstitucionResponsableId or 0,
-        "InstitucionNombre": institucion_nombre or "",
-        "ServicioId": u.ServicioId or 0,
-        "ServicioNombre": servicio_nombre or "",
-        "Active": "1" if u.Active else "0",
-        "Funcionarios": u.Funcionarios or 0,
-        "ReportaPMG": bool(u.ReportaPMG),
-        "IndicadorEE": bool(u.IndicadorEE),
-        "AccesoFactura": "1" if (u.AccesoFactura or 0) > 0 else "0",
-        "InstitucionResponsableId": u.InstitucionResponsableId,
-        "InstitucionResponsableNombre": institucion_nombre,
-        "ServicioResponsableId": u.ServicioResponsableId,
-        "ServicioResponsableNombre": servicio_nombre,
-        "OrganizacionResponsable": u.OrganizacionResponsable,
-    }, from_attributes=False)
+def _map_unidad_to_listdto(
+    u: Unidad,
+    institucion_nombre: Optional[str] = None,
+    servicio_nombre: Optional[str] = None,
+) -> UnidadListDTO:
+    return UnidadListDTO.model_validate(
+        {
+            "Id": u.Id,
+            "OldId": u.OldId,
+            "Nombre": u.Nombre,
+            "Ubicacion": None,
+            "InstitucionId": u.InstitucionResponsableId or 0,
+            "InstitucionNombre": institucion_nombre or "",
+            "ServicioId": u.ServicioId or 0,
+            "ServicioNombre": servicio_nombre or "",
+            "Active": "1" if u.Active else "0",
+            "Funcionarios": u.Funcionarios or 0,
+            "ReportaPMG": bool(u.ReportaPMG),
+            "IndicadorEE": bool(u.IndicadorEE),
+            "AccesoFactura": "1" if (u.AccesoFactura or 0) > 0 else "0",
+            "InstitucionResponsableId": u.InstitucionResponsableId,
+            "InstitucionResponsableNombre": institucion_nombre,
+            "ServicioResponsableId": u.ServicioResponsableId,
+            "ServicioResponsableNombre": servicio_nombre,
+            "OrganizacionResponsable": u.OrganizacionResponsable,
+        },
+        from_attributes=False,
+    )
 
 
 # ---------------------- Servicio ----------------------
@@ -191,23 +206,32 @@ class UnidadService:
         dto = _map_unidad_to_dto(u)
 
         # Inmuebles top
-        inm_ids = [r.InmuebleId for r in self.db.scalars(
-            select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
-        ).all()]
-        # Nota: aquí proyectamos campos mínimos; en tu repo puedes reemplazar por join a tablas “Inmuebles/Direcciones”
+        inm_ids = [
+            r.InmuebleId
+            for r in self.db.scalars(
+                select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
+            ).all()
+        ]
         dto.Inmuebles = [InmuebleTopDTO(Id=i, TipoInmueble=0) for i in inm_ids]
 
         # Pisos
-        piso_ids = [r.PisoId for r in self.db.scalars(
-            select(UnidadPiso).where(UnidadPiso.UnidadId == unidad_id)
-        ).all()]
+        piso_ids = [
+            r.PisoId
+            for r in self.db.scalars(
+                select(UnidadPiso).where(UnidadPiso.UnidadId == unidad_id)
+            ).all()
+        ]
         dto.Pisos = [pisoDTO(Id=p, NumeroPisoNombre=None, Checked=True) for p in piso_ids]
 
         # Áreas
-        area_ids = [r.AreaId for r in self.db.scalars(
-            select(UnidadArea).where(UnidadArea.UnidadId == unidad_id)
-        ).all()]
-        dto.Areas = [AreaDTO(Id=a, Nomnbre=None) for a in area_ids]
+        area_ids = [
+            r.AreaId
+            for r in self.db.scalars(
+                select(UnidadArea).where(UnidadArea.UnidadId == unidad_id)
+            ).all()
+        ]
+        # ⚠️ Campo 'Nombre' (no 'Nomnbre')
+        dto.Areas = [AreaDTO(Id=a, Nombre=None) for a in area_ids]
 
         return dto
 
@@ -226,44 +250,44 @@ class UnidadService:
         if f.InstitucionId:
             q = q.filter(Unidad.InstitucionResponsableId == f.InstitucionId)
 
-        # Filtro por región (similar a EF: Divisiones -> DireccionInmueble.RegionId -> UnidadesInmuebles)
+        # Filtro por región (vía JOINs raw equivalentes a EF de .NET)
         if f.RegionId:
-            # Si tu esquema tiene nombres distintos, cambia el SQL raw manteniendo la lógica
-            sql = text("""
+            sql = text(
+                """
                 SELECT DISTINCT ui.UnidadId
                 FROM dbo.UnidadesInmuebles ui
                 JOIN dbo.Divisiones d ON d.Id = ui.InmuebleId
                 JOIN dbo.Direcciones di ON di.Id = d.DireccionId
                 WHERE di.RegionId = :region_id
-            """)
+                """
+            )
             ids = [row[0] for row in self.db.execute(sql, {"region_id": f.RegionId}).all()]
             if ids:
                 q = q.filter(Unidad.Id.in_(ids))
             else:
-                q = q.filter(False)  # vacío
+                q = q.filter(False)  # devuelve vacío
 
-        total = q.count()
+        total: int = q.count()
         items: List[Unidad] = (
-            q.order_by(Unidad.Nombre)
-             .offset((page - 1) * page_size)
-             .limit(page_size)
-             .all()
+            q.order_by(Unidad.Nombre).offset((page - 1) * page_size).limit(page_size).all()
         )
 
-        # TODO: si requieres nombres de servicio/institución aquí, haz joins o caché
         data = [_map_unidad_to_listdto(u) for u in items]
-        return Page[UnidadListDTO](data=data, meta=PageMeta(total=total, page=page, page_size=page_size))
+        pages = (total + page_size - 1) // page_size
+        return Page[UnidadListDTO](data=data, meta=PageMeta(total=total, page=page, page_size=page_size, pages=pages))
 
     # ---------- Asociados por usuario ----------
     def list_asociados_by_user(self, user_id: str) -> List[UnidadListDTO]:
         q = self.db.query(Unidad).filter(Unidad.Active.is_(True))
         if not self.current_user_is_admin:
             # Espera tabla UsuarioUnidades (ajusta si difiere)
-            sql = text("""
+            sql = text(
+                """
                 SELECT DISTINCT uu.UnidadId
                 FROM dbo.UsuarioUnidades uu
                 WHERE uu.UsuarioId = :user_id
-            """)
+                """
+            )
             ids = [row[0] for row in self.db.execute(sql, {"user_id": user_id}).all()]
             if ids:
                 q = q.filter(Unidad.Id.in_(ids))
@@ -275,11 +299,15 @@ class UnidadService:
 
     # ---------- Check nombre duplicado ----------
     def check_nombre(self, nombre: str, servicio_id: int) -> bool:
-        exists = self.db.query(Unidad).filter(
-            Unidad.Active.is_(True),
-            Unidad.Nombre == nombre,
-            Unidad.ServicioId == servicio_id
-        ).first()
+        exists = (
+            self.db.query(Unidad)
+            .filter(
+                Unidad.Active.is_(True),
+                Unidad.Nombre == nombre,
+                Unidad.ServicioId == servicio_id,
+            )
+            .first()
+        )
         return bool(exists)
 
     # ---------- Compatibilidad OldId ----------

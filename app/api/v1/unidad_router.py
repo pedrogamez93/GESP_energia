@@ -1,15 +1,24 @@
 from __future__ import annotations
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
-from app.schemas.pagination import PageMeta, Page
+
 from app.db.session import get_db
+
+from app.schemas.pagination import Page, PageMeta
 from app.schemas.unidad import (
-    UnidadDTO, UnidadListDTO, UnidadFilterDTO, UnidadPatchDTO, 
+    UnidadDTO,
+    UnidadListDTO,
+    UnidadFilterDTO,
+    UnidadPatchDTO,  # si aún no lo usas, puedes dejarlo o quitarlo
 )
+
 from app.services.unidad_service import UnidadService
 
+
 router = APIRouter(prefix="/api/v1/unidades", tags=["Unidades"])
+
 
 # --------- Auth dummy (ajusta a tu proyecto) ----------
 class CurrentUser:
@@ -17,11 +26,12 @@ class CurrentUser:
         self.id = id
         self.is_admin = is_admin
 
+
 def get_current_user() -> CurrentUser:
     return CurrentUser(id="system", is_admin=True)
 
-# ----------------- Endpoints -----------------
 
+# ----------------- Endpoints -----------------
 @router.post("", response_model=UnidadDTO, status_code=status.HTTP_201_CREATED)
 def create_unidad(
     payload: dict,
@@ -31,7 +41,6 @@ def create_unidad(
     svc = UnidadService(db, me.id, me.is_admin)
     try:
         obj = svc.create(payload)
-        # si `obj` es ORM, Pydantic v2 lo valida por from_attributes=True
         return obj
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -90,14 +99,14 @@ def list_unidades_filter(
 ):
     svc = UnidadService(db, me.id, me.is_admin)
     f = UnidadFilterDTO(
-        Unidad=unidad, userId=userId, InstitucionId=institucionId,
-        ServicioId=servicioId, RegionId=regionId
+        Unidad=unidad,
+        userId=userId,
+        InstitucionId=institucionId,
+        ServicioId=servicioId,
+        RegionId=regionId,
     )
-    # Esperamos un dict: {"data": [...], "total": n, "page": x, "page_size": y}
-    res = svc.list_filter(f, page, page_size)
-
-    # Validación v2: convierte dict -> Page[UnidadListDTO]
-    return Page[UnidadListDTO].model_validate(res)
+    # El service ya devuelve Page[UnidadListDTO]; retornamos tal cual
+    return svc.list_filter(f, page, page_size)
 
 
 @router.get("/getasociadosbyuser/{user_id}", response_model=List[UnidadListDTO])
@@ -108,7 +117,6 @@ def list_asociados_by_user(
 ):
     svc = UnidadService(db, me.id, me.is_admin)
     rows = svc.list_asociados_by_user(user_id)
-    # si rows son ORM, Pydantic v2 los modela por from_attributes=True
     return rows
 
 
@@ -123,15 +131,18 @@ def get_by_filter(
 ):
     svc = UnidadService(db, me.id, me.is_admin)
     f = UnidadFilterDTO(
-        Unidad=None, userId=userId, InstitucionId=institucionId,
-        ServicioId=servicioId, RegionId=regionId
+        Unidad=None,
+        userId=userId,
+        InstitucionId=institucionId,
+        ServicioId=servicioId,
+        RegionId=regionId,
     )
     page = svc.list_filter(f, page=1, page_size=100000)
-    # page["data"] debe ser lista de dict/ORM compatibles con UnidadListDTO
-    return [UnidadListDTO.model_validate(x) for x in page["data"]]
+    # ⚠️ Page es objeto, no dict: usar .data
+    return [UnidadListDTO.model_validate(x) for x in page.data]
 
 
-@router.get("/{nombre}/{servicio_id}", response_model=bool)
+@router.get("/check/{nombre}/{servicio_id}", response_model=bool)
 def check_unidad_nombre(
     nombre: str,
     servicio_id: int,
