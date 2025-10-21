@@ -3,6 +3,7 @@ from app.api.v1 import tipos_equipos_calefaccion
 from app.api.v1 import tipos_colectores
 from app.api.v1 import energeticos
 from app.services import tipos_luminarias
+from app.api.v1.unidades import router as unidades_router
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -326,3 +327,4 @@ app.include_router(tipos_luminarias.router)           # ya trae /api/v1/tipos-lu
 app.include_router(tipos_equipos_calefaccion.router)  # ya trae /api/v1/tipos-equipos-calefaccion
 app.include_router(tipos_colectores.router)           # ya trae /api/v1/tipos-colectores
 app.include_router(energeticos.router)                # ya trae /api/v1/energeticos
+app.include_router(unidades_router)
