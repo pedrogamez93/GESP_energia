@@ -83,13 +83,14 @@ from app.api.v1.frontis import router as frontis_router
 from app.api.v1.reportes import router as reportes_router
 from app.api.v1.parametros_medicion import router as parametros_medicion_router
 from app.api.v1.provincia import router as provincias_router
+from app.api.v1.unidad_router import router as unidades_router
 
 from app.audit.context import current_request_meta
 
 from app.api.v1 import division_sistemas                      
 from app.api.v1 import tipo_equipo_calefaccion_energeticos
 from app.api.v1 import division_sistemas_detalle
-from app.api.v1.unidad_router import router as unidades_router
+
 
 # --- OpenAPI tags (opcional, añade los que quieras mostrar en Swagger) ---
 tags_metadata = [
