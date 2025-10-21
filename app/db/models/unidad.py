@@ -1,55 +1,28 @@
+# app/db/models/unidad.py
 from __future__ import annotations
-from datetime import datetime
 
-from sqlalchemy import (
-    BigInteger, Integer, Text, Boolean, DateTime, String,
-    ForeignKey, PrimaryKeyConstraint
-)
+from sqlalchemy import BigInteger, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
 
+# =======================
+#   Tabla principal
+# =======================
 class Unidad(Base):
     __tablename__ = "Unidades"
-    __table_args__ = (
-        # Fuerza PK para evitar "could not assemble any primary key columns"
-        PrimaryKeyConstraint("Id", name="PK_Unidades"),
-        {"schema": "dbo"},
+    __table_args__ = ({"schema": "dbo"},)
+
+    Id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Define aquí solo lo que necesitas en Python. El resto de columnas
+    # existentes en la BD pueden omitirse si no las usas desde el código.
+    Nombre: Mapped[str | None] = mapped_column(String(length=255), nullable=True)
+
+    # Relaciones (no crean tablas nuevas; solo mapeo ORM)
+    unidad_inmuebles: Mapped[list["UnidadInmueble"]] = relationship(
+        "UnidadInmueble", back_populates="unidad", cascade="all, delete-orphan"
     )
-
-    # -------- PK / auditoría --------
-    Id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, autoincrement=True
-    )
-    CreatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    UpdatedAt: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    Version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    Active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    ModifiedBy: Mapped[str | None] = mapped_column(Text)
-    CreatedBy: Mapped[str | None] = mapped_column(Text)
-
-    # -------- Negocio --------
-    ServicioId: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("dbo.Servicios.Id"))
-    ChkNombre: Mapped[int | None] = mapped_column(Integer)
-    OldId: Mapped[int | None] = mapped_column(BigInteger)
-    Nombre: Mapped[str] = mapped_column(String(512), nullable=False)
-    Funcionarios: Mapped[int | None] = mapped_column(Integer)
-    IndicadorEE: Mapped[bool] = mapped_column(Boolean, default=False)
-    AccesoFactura: Mapped[int | None] = mapped_column(Integer)
-    InstitucionResponsableId: Mapped[int | None] = mapped_column(Integer)
-    ServicioResponsableId: Mapped[int | None] = mapped_column(Integer)
-    OrganizacionResponsable: Mapped[str | None] = mapped_column(Text)
-    ReportaPMG: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    # -------- Relaciones N:M (tablas puente) --------
-    # IMPORTANTE: NO declarar aquí otra clase UnidadInmueble.
-    unidad_inmuebles: Mapped[list["app.db.models.unidad_inmueble.UnidadInmueble"]] = relationship(
-        "app.db.models.unidad_inmueble.UnidadInmueble",
-        back_populates="unidad",
-        cascade="all, delete-orphan",
-    )
-
     unidad_pisos: Mapped[list["UnidadPiso"]] = relationship(
         "UnidadPiso", back_populates="unidad", cascade="all, delete-orphan"
     )
@@ -58,31 +31,54 @@ class Unidad(Base):
     )
 
 
-class UnidadPiso(Base):
-    __tablename__ = "UnidadesPisos"
-    __table_args__ = (
-        PrimaryKeyConstraint("UnidadId", "PisoId", name="PK_UnidadesPisos"),
-        {"schema": "dbo"},
+# =======================
+#   Pivote: Unidades <-> Divisiones (Inmuebles)
+# =======================
+class UnidadInmueble(Base):
+    __tablename__ = "UnidadesInmuebles"
+    __table_args__ = ({"schema": "dbo"},)
+
+    # PK compuesta
+    UnidadId: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="RESTRICT"), primary_key=True
+    )
+    InmuebleId: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("dbo.Divisiones.Id", ondelete="RESTRICT"), primary_key=True
     )
 
+    # Relaciones ORM
+    unidad: Mapped["Unidad"] = relationship("Unidad", back_populates="unidad_inmuebles")
+
+
+# =======================
+#   Pivote: Unidades <-> Pisos
+# =======================
+class UnidadPiso(Base):
+    __tablename__ = "UnidadesPisos"
+    __table_args__ = ({"schema": "dbo"},)
+
     UnidadId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="CASCADE"), nullable=False
+        BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="RESTRICT"), primary_key=True
     )
-    PisoId: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    PisoId: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("dbo.Pisos.Id", ondelete="RESTRICT"), primary_key=True
+    )
 
     unidad: Mapped["Unidad"] = relationship("Unidad", back_populates="unidad_pisos")
 
 
+# =======================
+#   Pivote: Unidades <-> Áreas
+# =======================
 class UnidadArea(Base):
     __tablename__ = "UnidadesAreas"
-    __table_args__ = (
-        PrimaryKeyConstraint("UnidadId", "AreaId", name="PK_UnidadesAreas"),
-        {"schema": "dbo"},
-    )
+    __table_args__ = ({"schema": "dbo"},)
 
     UnidadId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="CASCADE"), nullable=False
+        BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="RESTRICT"), primary_key=True
     )
-    AreaId: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    AreaId: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("dbo.Areas.Id", ondelete="RESTRICT"), primary_key=True
+    )
 
     unidad: Mapped["Unidad"] = relationship("Unidad", back_populates="unidad_areas")

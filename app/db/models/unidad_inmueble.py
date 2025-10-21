@@ -2,6 +2,7 @@ from __future__ import annotations
 from sqlalchemy import BigInteger, ForeignKey, PrimaryKeyConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
+from .unidad import UnidadInmueble
 
 class UnidadInmueble(Base):
     __tablename__ = "UnidadesInmuebles"
