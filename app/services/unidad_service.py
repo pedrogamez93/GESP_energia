@@ -5,10 +5,10 @@ from contextlib import contextmanager
 
 from sqlalchemy import select, func, text
 from sqlalchemy.orm import Session
-
+from app.schemas.pagination import PageMeta, Page
 from app.db.models.unidad import Unidad, UnidadInmueble, UnidadPiso, UnidadArea
 from app.schemas.unidad import (
-    UnidadDTO, UnidadListDTO, UnidadFilterDTO, Page, PageMeta, ServicioDTO,
+    UnidadDTO, UnidadListDTO, UnidadFilterDTO, ServicioDTO,
     InmuebleTopDTO, pisoDTO, AreaDTO
 )
 from datetime import datetime
