@@ -3,7 +3,7 @@ from app.api.v1 import tipos_equipos_calefaccion
 from app.api.v1 import tipos_colectores
 from app.api.v1 import energeticos
 from app.services import tipos_luminarias
-from app.api.v1.unidades import router as unidades_router
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -89,6 +89,7 @@ from app.audit.context import current_request_meta
 from app.api.v1 import division_sistemas                      
 from app.api.v1 import tipo_equipo_calefaccion_energeticos
 from app.api.v1 import division_sistemas_detalle
+from app.api.v1.unidades import router as unidades_router
 
 # --- OpenAPI tags (opcional, añade los que quieras mostrar en Swagger) ---
 tags_metadata = [
