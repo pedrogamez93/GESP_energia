@@ -4,18 +4,10 @@ from typing import List, Optional, Tuple
 from datetime import datetime
 
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.db.models.unidad import Unidad, UnidadInmueble
-
-# Estos dos pueden estar en otros archivos de modelos en tu proyecto; dejamos import flexible.
-try:
-    from app.db.models.unidad_piso import UnidadPiso   # type: ignore
-    from app.db.models.unidad_area import UnidadArea   # type: ignore
-except Exception:
-    # Si están en el mismo archivo de unidad (no es tu caso, pero por compatibilidad)
-    from app.db.models.unidad import UnidadPiso, UnidadArea  # type: ignore
 
 from app.schemas.unidad import (
     UnidadDTO,
@@ -53,11 +45,12 @@ def _set_instance_active(u: Unidad, value: bool) -> None:
 
 def _q_only_actives(q):
     if _ACTIVE_COL is not None:
+        # En MSSQL es mejor "col = 1" que "IS TRUE"
         return q.filter(_ACTIVE_COL == True)  # noqa: E712
     return q
 
 def _coerce_boolish_to_int(v) -> int | None:
-    """Convierte valores 'Si/No', True/False, '1'/'0' → 1/0/None."""
+    """Convierte 'Si/No', True/False, '1'/'0' → 1/0/None."""
     if v is None or v == "":
         return None
     if isinstance(v, bool):
@@ -128,6 +121,34 @@ def _map_unidad_to_listdto(
         from_attributes=False,
     )
 
+def _lazy_models():
+    """
+    Importa UnidadPiso y UnidadArea SOLO si existen en tu proyecto
+    (para no romper el arranque si están en otro módulo o no existen).
+    """
+    UnidadPiso = None
+    UnidadArea = None
+    try:
+        from app.db.models.unidad_piso import UnidadPiso as _UP  # type: ignore
+        UnidadPiso = _UP
+    except Exception:
+        try:
+            # por si los tienes en el mismo archivo 'unidad.py' (poco probable)
+            from app.db.models.unidad import UnidadPiso as _UP  # type: ignore
+            UnidadPiso = _UP
+        except Exception:
+            UnidadPiso = None
+    try:
+        from app.db.models.unidad_area import UnidadArea as _UA  # type: ignore
+        UnidadArea = _UA
+    except Exception:
+        try:
+            from app.db.models.unidad import UnidadArea as _UA  # type: ignore
+            UnidadArea = _UA
+        except Exception:
+            UnidadArea = None
+    return UnidadPiso, UnidadArea
+
 
 # ---------------------- Servicio ----------------------
 class UnidadService:
@@ -141,15 +162,17 @@ class UnidadService:
     # ---------- CREATE ----------
     def create(self, payload: dict) -> UnidadDTO:
         """
-        FIX CLAVE:
-        - Si el payload no trae ChkNombre, se setea a 1 (la BD no acepta NULL).
-        - AccesoFactura se normaliza a 0/1.
+        FIX:
+        - ChkNombre: si no viene, se fuerza a 1 (BD no acepta NULL).
+        - AccesoFactura: normalizado a 0/1.
+        - Altas en pivotes protegidas con import perezoso.
         """
         chk_nombre = payload.get("ChkNombre")
         if chk_nombre is None:
-            chk_nombre = 1  # <- valor seguro para cumplir NOT NULL
+            chk_nombre = 1  # valor seguro para cumplir NOT NULL
 
         acceso_factura = _coerce_boolish_to_int(payload.get("AccesoFactura"))
+
         try:
             u = Unidad(
                 **({_ACTIVE_NAME: True} if _ACTIVE_NAME else {}),
@@ -160,18 +183,19 @@ class UnidadService:
 
                 Nombre=payload.get("Nombre"),
                 ServicioId=payload.get("ServicioId"),
-                ChkNombre=chk_nombre,                 # <-- clave del fix
+                ChkNombre=chk_nombre,
                 Funcionarios=payload.get("Funcionarios"),
                 ReportaPMG=payload.get("ReportaPMG") or False,
                 IndicadorEE=payload.get("IndicadorEE") or False,
-                AccesoFactura=acceso_factura,         # <-- normalizado 0/1
+                AccesoFactura=acceso_factura,
                 InstitucionResponsableId=payload.get("InstitucionResponsableId"),
                 ServicioResponsableId=payload.get("ServicioResponsableId"),
                 OrganizacionResponsable=payload.get("OrganizacionResponsable"),
             )
-
             self.db.add(u)
-            self.db.flush()  # para obtener u.Id
+            self.db.flush()  # obtener u.Id
+
+            UnidadPiso, UnidadArea = _lazy_models()
 
             inmuebles = payload.get("Inmuebles") or []
             if inmuebles:
@@ -184,10 +208,10 @@ class UnidadService:
                         self.db.add(UnidadInmueble(UnidadId=u.Id, InmuebleId=edif["Id"]))
 
                     for piso in (edif.get("Pisos") or []):
-                        if piso.get("Id"):
+                        if UnidadPiso is not None and piso.get("Id"):
                             self.db.add(UnidadPiso(UnidadId=u.Id, PisoId=piso["Id"]))
                         for area in (piso.get("Areas") or []):
-                            if area.get("Id"):
+                            if UnidadArea is not None and area.get("Id"):
                                 self.db.add(UnidadArea(UnidadId=u.Id, AreaId=area["Id"]))
 
             self.db.commit()
@@ -196,8 +220,7 @@ class UnidadService:
 
         except IntegrityError as e:
             self.db.rollback()
-            # mensaje claro para debug (si volviera a fallar por otra restricción)
-            raise ValueError(f"Error de integridad al crear Unidad (posible NOT NULL/constraint): {str(e.orig)}")
+            raise ValueError(f"Error de integridad al crear Unidad (NOT NULL/constraint): {str(e.orig)}")
 
     # ---------- UPDATE ----------
     def update(self, unidad_id: int, payload: dict) -> None:
@@ -217,11 +240,10 @@ class UnidadService:
         if "AccesoFactura" in payload:
             u.AccesoFactura = _coerce_boolish_to_int(payload.get("AccesoFactura"))
 
-        # (Opcional) permitir actualizar ChkNombre; si no viene, se mantiene.
+        # Sanear/actualizar ChkNombre
         if "ChkNombre" in payload and payload.get("ChkNombre") is not None:
             u.ChkNombre = int(payload.get("ChkNombre") or 1)
         elif u.ChkNombre is None:
-            # si por alguna razón el registro histórico tenía NULL, lo saneamos
             u.ChkNombre = 1
 
         u.InstitucionResponsableId = payload.get("InstitucionResponsableId", getattr(u, "InstitucionResponsableId", None))
@@ -232,10 +254,13 @@ class UnidadService:
         u.ModifiedBy = self.current_user_id
         u.Version = (u.Version or 0) + 1
 
-        # Limpia puentes y vuelve a crear según payload
+        # Limpia puentes y vuelve a crear según payload (si existen los modelos)
+        UnidadPiso, UnidadArea = _lazy_models()
         self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id).delete()
-        self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
-        self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
+        if UnidadPiso is not None:
+            self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
+        if UnidadArea is not None:
+            self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
 
         inmuebles = payload.get("Inmuebles") or []
         if inmuebles:
@@ -248,10 +273,10 @@ class UnidadService:
                     self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=edif["Id"]))
 
                 for piso in (edif.get("Pisos") or []):
-                    if piso.get("Id"):
+                    if UnidadPiso is not None and piso.get("Id"):
                         self.db.add(UnidadPiso(UnidadId=unidad_id, PisoId=piso["Id"]))
                     for area in (piso.get("Areas") or []):
-                        if area.get("Id"):
+                        if UnidadArea is not None and area.get("Id"):
                             self.db.add(UnidadArea(UnidadId=unidad_id, AreaId=area["Id"]))
 
         self.db.commit()
@@ -262,9 +287,14 @@ class UnidadService:
         if not u:
             return
         _set_instance_active(u, False)
-        self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
-        self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
+
+        UnidadPiso, UnidadArea = _lazy_models()
+        if UnidadArea is not None:
+            self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
+        if UnidadPiso is not None:
+            self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
         self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id).delete()
+
         self.db.commit()
 
     # ---------- GET detalle ----------
@@ -283,21 +313,26 @@ class UnidadService:
         ]
         dto.Inmuebles = [InmuebleTopDTO(Id=i, TipoInmueble=0) for i in inm_ids]
 
-        piso_ids = [
-            r.PisoId
-            for r in self.db.scalars(
-                select(UnidadPiso).where(UnidadPiso.UnidadId == unidad_id)
-            ).all()
-        ]
-        dto.Pisos = [pisoDTO(Id=p, NumeroPisoNombre=None, Checked=True) for p in piso_ids]
+        # Estas listas se devuelven vacías si no tienes los modelos/puentes
+        UnidadPiso, UnidadArea = _lazy_models()
 
-        area_ids = [
-            r.AreaId
-            for r in self.db.scalars(
-                select(UnidadArea).where(UnidadArea.UnidadId == unidad_id)
-            ).all()
-        ]
-        dto.Areas = [AreaDTO(Id=a, Nombre=None) for a in area_ids]
+        if UnidadPiso is not None:
+            piso_ids = [
+                r.PisoId
+                for r in self.db.scalars(
+                    select(UnidadPiso).where(UnidadPiso.UnidadId == unidad_id)
+                ).all()
+            ]
+            dto.Pisos = [pisoDTO(Id=p, NumeroPisoNombre=None, Checked=True) for p in piso_ids]
+
+        if UnidadArea is not None:
+            area_ids = [
+                r.AreaId
+                for r in self.db.scalars(
+                    select(UnidadArea).where(UnidadArea.UnidadId == unidad_id)
+                ).all()
+            ]
+            dto.Areas = [AreaDTO(Id=a, Nombre=None) for a in area_ids]
 
         return dto
 
@@ -364,7 +399,7 @@ class UnidadService:
         items = q.order_by(Unidad.Nombre).all()
         return [_map_unidad_to_listdto(u) for u in items]
 
-    # ---------- Check nombre duplicado ----------
+    # ---------- Compatibilidad ----------
     def check_nombre(self, nombre: str, servicio_id: int) -> bool:
         q = self.db.query(Unidad).filter(
             Unidad.Nombre == nombre,
@@ -373,7 +408,6 @@ class UnidadService:
         q = _q_only_actives(q)
         return bool(q.first())
 
-    # ---------- Compatibilidad OldId ----------
     def has_inteligent_measurement(self, old_id: int) -> bool:
         found = self.db.query(Unidad).filter(Unidad.OldId == old_id).first()
         return bool(found)
