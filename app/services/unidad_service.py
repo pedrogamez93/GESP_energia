@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.db.models.unidad import Unidad, UnidadInmueble, UnidadPiso, UnidadArea
+from app.db.models.unidad import Unidad, UnidadInmueble
 
 from app.schemas.unidad import (
     UnidadDTO,
