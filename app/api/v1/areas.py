@@ -1,6 +1,5 @@
-# app/api/v1/areas.py
 from __future__ import annotations
-from typing import Annotated, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Path, Query, status, Request, Response, HTTPException
 from sqlalchemy.orm import Session
@@ -22,7 +21,6 @@ from app.services.area_units_service import (
 )
 
 router = APIRouter(prefix="/api/v1/areas", tags=["Áreas"])
-DbDep = Annotated[Session, Depends(get_db)]
 
 
 def _current_user_id(request: Request) -> str | None:
@@ -35,7 +33,7 @@ def _current_user_id(request: Request) -> str | None:
 
 @router.get("", response_model=Page[AreaListDTO], summary="Listado paginado/filtrado de áreas")
 def list_areas(
-    db: DbDep,
+    db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     PisoId: Optional[int] = Query(None, description="Filtra por Piso"),
@@ -50,7 +48,7 @@ def list_areas(
 
 @router.get("/{area_id}", response_model=AreaDTO, summary="Detalle de área")
 def get_area(
-    db: DbDep,
+    db: Session = Depends(get_db),
     area_id: int = Path(..., ge=1),
 ):
     svc = AreaService(db)
@@ -67,8 +65,8 @@ def get_area(
 @router.post("", response_model=AreaDTO, status_code=status.HTTP_201_CREATED, summary="Crear área")
 def create_area(
     request: Request,
-    db: DbDep,
-    payload: AreaCreate,
+    payload: AreaCreate,  # <-- primero los obligatorios
+    db: DbDep = Depends(get_db),  # <-- luego los que tienen default
 ):
     user_id = _current_user_id(request) or "system"
     svc = AreaService(db)
@@ -79,9 +77,9 @@ def create_area(
 @router.put("/{area_id}", response_model=AreaDTO, summary="Actualizar área (ADMIN)")
 def update_area(
     request: Request,
-    db: DbDep,
-    payload: AreaUpdate,
+    payload: AreaUpdate,   # <-- igual que arriba
     area_id: int = Path(..., ge=1),
+    db: DbDep = Depends(get_db),
 ):
     user_id = _current_user_id(request) or "system"
     svc = AreaService(db)
@@ -99,7 +97,7 @@ def update_area(
              summary="Soft-delete de área (paridad .NET api/Areas/delete/{id})")
 def soft_delete_area_compat(
     request: Request,
-    db: DbDep,
+    db: Session = Depends(get_db),
     area_id: int = Path(..., ge=1),
 ):
     a = db.query(Area).filter(Area.Id == area_id).first()
@@ -120,7 +118,7 @@ def soft_delete_area_compat(
 @router.patch("/{area_id}/reactivar", response_model=AreaDTO, summary="Reactivar área (Active=True)")
 def reactivate_area(
     request: Request,
-    db: DbDep,
+    db: Session = Depends(get_db),
     area_id: int = Path(..., ge=1),
 ):
     svc = AreaService(db)
@@ -145,7 +143,7 @@ def reactivate_area(
 def area_link_unidades(
     payload: LinkUnidades,
     area_id: int = Path(..., ge=1),
-    db: DbDep = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     added = link_unidades_to_area(db, area_id, payload.unidades)
     return {"added": added}
@@ -155,7 +153,7 @@ def area_link_unidades(
 def area_list_unidades(
     area_id: int = Path(..., ge=1),
     include_inactive: bool = Query(True),
-    db: DbDep = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     rows = list_unidades_of_area(db, area_id, include_inactive=include_inactive)
     return [UnidadBrief(**r) for r in rows]
@@ -165,7 +163,7 @@ def area_list_unidades(
 def area_unlink_unidad(
     area_id: int = Path(..., ge=1),
     unidad_id: int = Path(..., ge=1),
-    db: DbDep = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     removed = unlink_unidad_from_area(db, area_id, unidad_id)
     return {"removed": removed}

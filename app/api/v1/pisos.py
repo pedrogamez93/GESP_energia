@@ -1,6 +1,5 @@
-# app/api/v1/pisos.py
 from __future__ import annotations
-from typing import Annotated, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Path, Query, status, Request, Response, HTTPException
 from sqlalchemy.orm import Session
@@ -23,7 +22,6 @@ from app.services.piso_units_service import (
 )
 
 router = APIRouter(prefix="/api/v1/pisos", tags=["Pisos"])
-DbDep = Annotated[Session, Depends(get_db)]
 
 
 def _current_user_id(request: Request) -> str | None:
@@ -36,7 +34,7 @@ def _current_user_id(request: Request) -> str | None:
 
 @router.get("", response_model=Page[PisoListDTO], summary="Listado paginado/filtrado de pisos")
 def list_pisos(
-    db: DbDep,
+    db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     DivisionId: Optional[int] = Query(None, description="Filtra por División (edificio)"),
@@ -51,7 +49,7 @@ def list_pisos(
 
 @router.get("/{piso_id}", response_model=PisoDTO, summary="Detalle de piso")
 def get_piso(
-    db: DbDep,
+    db: Session = Depends(get_db),
     piso_id: int = Path(..., ge=1),
 ):
     svc = PisoService(db)
@@ -68,8 +66,8 @@ def get_piso(
 @router.post("", response_model=PisoDTO, status_code=status.HTTP_201_CREATED, summary="Crear piso")
 def create_piso(
     request: Request,
-    db: DbDep,
-    payload: PisoCreate,
+    payload: PisoCreate,   # <-- primero
+    db: DbDep = Depends(get_db),
 ):
     user_id = _current_user_id(request) or "system"
     svc = PisoService(db)
@@ -80,9 +78,9 @@ def create_piso(
 @router.put("/{piso_id}", response_model=PisoDTO, summary="Actualizar piso (ADMIN)")
 def update_piso(
     request: Request,
-    db: DbDep,
-    payload: PisoUpdate,
+    payload: PisoUpdate,   # <-- primero
     piso_id: int = Path(..., ge=1),
+    db: DbDep = Depends(get_db),
 ):
     user_id = _current_user_id(request) or "system"
     svc = PisoService(db)
@@ -100,7 +98,7 @@ def update_piso(
              summary="Soft-delete de piso (paridad .NET api/Pisos/delete/{id})")
 def soft_delete_piso_compat(
     request: Request,
-    db: DbDep,
+    db: Session = Depends(get_db),
     piso_id: int = Path(..., ge=1),
 ):
     p = db.query(Piso).filter(Piso.Id == piso_id).first()
@@ -131,7 +129,7 @@ def soft_delete_piso_compat(
 @router.patch("/{piso_id}/reactivar", response_model=PisoDTO, summary="Reactivar piso (Active=True)")
 def reactivate_piso(
     request: Request,
-    db: DbDep,
+    db: Session = Depends(get_db),
     piso_id: int = Path(..., ge=1),
 ):
     svc = PisoService(db)
@@ -156,7 +154,7 @@ def reactivate_piso(
 def piso_link_unidades(
     payload: LinkUnidades,
     piso_id: int = Path(..., ge=1),
-    db: DbDep = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     added = link_unidades_to_piso(db, piso_id, payload.unidades)
     return {"added": added}
@@ -166,7 +164,7 @@ def piso_link_unidades(
 def piso_list_unidades(
     piso_id: int = Path(..., ge=1),
     include_inactive: bool = Query(True),
-    db: DbDep = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     rows = list_unidades_of_piso(db, piso_id, include_inactive=include_inactive)
     return [UnidadBrief(**r) for r in rows]
@@ -176,7 +174,7 @@ def piso_list_unidades(
 def piso_unlink_unidad(
     piso_id: int = Path(..., ge=1),
     unidad_id: int = Path(..., ge=1),
-    db: DbDep = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     removed = unlink_unidad_from_piso(db, piso_id, unidad_id)
     return {"removed": removed}
