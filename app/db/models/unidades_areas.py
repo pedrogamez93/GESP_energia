@@ -1,13 +1,11 @@
-from sqlalchemy import Table, Column, BigInteger, ForeignKey, PrimaryKeyConstraint
+from sqlalchemy import Table, Column, BigInteger, ForeignKey
 from app.db.base import Base
 
-metadata = Base.metadata
-
+# Tabla intermedia Área <-> Unidad
 UnidadesAreas = Table(
     "UnidadesAreas",
-    metadata,
-    Column("UnidadId", BigInteger, ForeignKey("dbo.Unidades.Id"), nullable=False),
-    Column("AreaId",   BigInteger, ForeignKey("dbo.Areas.Id"),    nullable=False),
-    PrimaryKeyConstraint("UnidadId", "AreaId", name="PK_UnidadesAreas"),
+    Base.metadata,
+    Column("UnidadId", BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="CASCADE"), primary_key=True, nullable=False),
+    Column("AreaId",   BigInteger, ForeignKey("dbo.Areas.Id", ondelete="CASCADE"),    primary_key=True, nullable=False),
     schema="dbo",
 )
