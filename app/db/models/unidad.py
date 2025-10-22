@@ -1,7 +1,7 @@
 # app/db/models/unidad.py
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Integer, ForeignKey, String, Boolean, DateTime
+from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -38,20 +38,18 @@ class Unidad(Base):
 
     ReportaPMG: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     IndicadorEE: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-
-    # <-- FALTABA ESTA COLUMNA
     Funcionarios: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    # Relaciones ORM (no crean tablas; solo mapeo)
+    # Relaciones ORM (no crean tablas; solo mapeo lógico)
     unidad_inmuebles: Mapped[list["UnidadInmueble"]] = relationship(
         "UnidadInmueble", back_populates="unidad", cascade="all, delete-orphan"
     )
-    unidad_pisos: Mapped[list["UnidadPiso"]] = relationship(
-        "UnidadPiso", back_populates="unidad", cascade="all, delete-orphan"
-    )
-    unidad_areas: Mapped[list["UnidadArea"]] = relationship(
-        "UnidadArea", back_populates="unidad", cascade="all, delete-orphan"
-    )
+
+    # Nota:
+    # Las relaciones con Pisos y Áreas ya no necesitan clases pivote aquí.
+    # Se gestionan mediante los Table(...) en:
+    #   - app/db/models/unidades_pisos.py
+    #   - app/db/models/unidades_areas.py
 
 
 # =======================
@@ -61,45 +59,7 @@ class UnidadInmueble(Base):
     __tablename__ = "UnidadesInmuebles"
     __table_args__ = ({"schema": "dbo"},)
 
-    UnidadId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="RESTRICT"), primary_key=True
-    )
-    InmuebleId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Divisiones.Id", ondelete="RESTRICT"), primary_key=True
-    )
+    UnidadId: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    InmuebleId: Mapped[int] = mapped_column(BigInteger, primary_key=True)
 
     unidad: Mapped["Unidad"] = relationship("Unidad", back_populates="unidad_inmuebles")
-
-
-# =======================
-#   Pivote: Unidades <-> Pisos
-# =======================
-class UnidadPiso(Base):
-    __tablename__ = "UnidadesPisos"
-    __table_args__ = ({"schema": "dbo"},)
-
-    UnidadId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="RESTRICT"), primary_key=True
-    )
-    PisoId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Pisos.Id", ondelete="RESTRICT"), primary_key=True
-    )
-
-    unidad: Mapped["Unidad"] = relationship("Unidad", back_populates="unidad_pisos")
-
-
-# =======================
-#   Pivote: Unidades <-> Áreas
-# =======================
-class UnidadArea(Base):
-    __tablename__ = "UnidadesAreas"
-    __table_args__ = ({"schema": "dbo"},)
-
-    UnidadId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Unidades.Id", ondelete="RESTRICT"), primary_key=True
-    )
-    AreaId: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dbo.Areas.Id", ondelete="RESTRICT"), primary_key=True
-    )
-
-    unidad: Mapped["Unidad"] = relationship("Unidad", back_populates="unidad_areas")
