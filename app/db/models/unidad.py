@@ -1,7 +1,7 @@
 # app/db/models/unidad.py
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey   # <-- AÑADIDO ForeignKey
+from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -22,7 +22,11 @@ class Unidad(Base):
 
     Nombre:   Mapped[str | None]  = mapped_column(String(length=255), nullable=True)
     ServicioId: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    # En BD esta columna es NOT NULL; aquí la dejamos nullable=True para no romper el mapeo,
+    # pero el servicio se encargará de ponerle valor SIEMPRE (1 por defecto).
     ChkNombre:  Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     OldId:      Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     AccesoFactura: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -39,7 +43,6 @@ class Unidad(Base):
         "UnidadInmueble",
         back_populates="unidad",
         cascade="all, delete-orphan",
-        # estos dos son opcionales si están bien los FKs, pero ayudan a que sea explícito:
         primaryjoin="Unidad.Id == UnidadInmueble.UnidadId",
         foreign_keys="UnidadInmueble.UnidadId",
     )
@@ -49,7 +52,6 @@ class UnidadInmueble(Base):
     __tablename__ = "UnidadesInmuebles"
     __table_args__ = ({"schema": "dbo"},)
 
-    # --> AQUÍ VAN LOS FKs (antes faltaban)
     UnidadId:   Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("dbo.Unidades.Id", ondelete="RESTRICT"),

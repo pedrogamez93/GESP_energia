@@ -1,11 +1,21 @@
+# app/services/unidad_service.py
 from __future__ import annotations
 from typing import List, Optional, Tuple
 from datetime import datetime
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models.unidad import Unidad, UnidadInmueble
+
+# Estos dos pueden estar en otros archivos de modelos en tu proyecto; dejamos import flexible.
+try:
+    from app.db.models.unidad_piso import UnidadPiso   # type: ignore
+    from app.db.models.unidad_area import UnidadArea   # type: ignore
+except Exception:
+    # Si están en el mismo archivo de unidad (no es tu caso, pero por compatibilidad)
+    from app.db.models.unidad import UnidadPiso, UnidadArea  # type: ignore
 
 from app.schemas.unidad import (
     UnidadDTO,
@@ -25,16 +35,11 @@ def _now() -> datetime:
     return datetime.now()
 
 def _find_active_column(model) -> Tuple[Optional[str], Optional[object]]:
-    """
-    Devuelve (nombre_atributo, columna) del atributo booleano de 'actividad'
-    según exista en el modelo. Si no existe, (None, None).
-    """
     for name in _ACTIVE_CANDIDATES:
         if hasattr(model, name):
             return name, getattr(model, name)
     return None, None
 
-# Detectamos una vez la columna del modelo
 _ACTIVE_NAME, _ACTIVE_COL = _find_active_column(Unidad)
 
 def _get_instance_active(u: Unidad) -> Optional[bool]:
@@ -48,9 +53,24 @@ def _set_instance_active(u: Unidad, value: bool) -> None:
 
 def _q_only_actives(q):
     if _ACTIVE_COL is not None:
-        # Antes: return q.filter(_ACTIVE_COL.is_(True))  # <-- provoca "IS 1" en MSSQL
-        return q.filter(_ACTIVE_COL == True)  # noqa: E712  -> genera "= 1" en SQL Server
+        return q.filter(_ACTIVE_COL == True)  # noqa: E712
     return q
+
+def _coerce_boolish_to_int(v) -> int | None:
+    """Convierte valores 'Si/No', True/False, '1'/'0' → 1/0/None."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return 1 if v else 0
+    s = str(v).strip().lower()
+    if s in {"1", "si", "sí", "true", "t", "y", "yes"}:
+        return 1
+    if s in {"0", "no", "false", "f", "n"}:
+        return 0
+    try:
+        return int(s)
+    except Exception:
+        return None
 
 def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
     active_val = _get_instance_active(u)
@@ -62,7 +82,6 @@ def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
             "ServicioId": u.ServicioId or 0,
             "ServicioNombre": None,
             "InstitucionNombre": None,
-            # si no hay flag, asumimos "1"
             "Active": "1" if (active_val if active_val is not None else True) else "0",
             "Funcionarios": u.Funcionarios or 0,
             "ReportaPMG": bool(getattr(u, "ReportaPMG", False)),
@@ -121,46 +140,64 @@ class UnidadService:
 
     # ---------- CREATE ----------
     def create(self, payload: dict) -> UnidadDTO:
-        u = Unidad(
-            # si existe el campo de activo, lo seteamos a True
-            **({_ACTIVE_NAME: True} if _ACTIVE_NAME else {}),
-            CreatedAt=_now(),
-            UpdatedAt=_now(),
-            CreatedBy=self.current_user_id,
-            Version=1,
-            Nombre=payload.get("Nombre"),
-            ServicioId=payload.get("ServicioId"),
-            Funcionarios=payload.get("Funcionarios"),
-            ReportaPMG=payload.get("ReportaPMG") or False,
-            IndicadorEE=payload.get("IndicadorEE") or False,
-            AccesoFactura=payload.get("AccesoFactura"),
-            InstitucionResponsableId=payload.get("InstitucionResponsableId"),
-            ServicioResponsableId=payload.get("ServicioResponsableId"),
-            OrganizacionResponsable=payload.get("OrganizacionResponsable"),
-        )
-        self.db.add(u)
-        self.db.flush()  # para obtener u.Id
+        """
+        FIX CLAVE:
+        - Si el payload no trae ChkNombre, se setea a 1 (la BD no acepta NULL).
+        - AccesoFactura se normaliza a 0/1.
+        """
+        chk_nombre = payload.get("ChkNombre")
+        if chk_nombre is None:
+            chk_nombre = 1  # <- valor seguro para cumplir NOT NULL
 
-        inmuebles = payload.get("Inmuebles") or []
-        if inmuebles:
-            root = inmuebles[0]
-            if root.get("Id"):
-                self.db.add(UnidadInmueble(UnidadId=u.Id, InmuebleId=root["Id"]))
+        acceso_factura = _coerce_boolish_to_int(payload.get("AccesoFactura"))
+        try:
+            u = Unidad(
+                **({_ACTIVE_NAME: True} if _ACTIVE_NAME else {}),
+                CreatedAt=_now(),
+                UpdatedAt=_now(),
+                CreatedBy=self.current_user_id,
+                Version=1,
 
-            for edif in (root.get("Edificios") or []):
-                if edif.get("Id"):
-                    self.db.add(UnidadInmueble(UnidadId=u.Id, InmuebleId=edif["Id"]))
+                Nombre=payload.get("Nombre"),
+                ServicioId=payload.get("ServicioId"),
+                ChkNombre=chk_nombre,                 # <-- clave del fix
+                Funcionarios=payload.get("Funcionarios"),
+                ReportaPMG=payload.get("ReportaPMG") or False,
+                IndicadorEE=payload.get("IndicadorEE") or False,
+                AccesoFactura=acceso_factura,         # <-- normalizado 0/1
+                InstitucionResponsableId=payload.get("InstitucionResponsableId"),
+                ServicioResponsableId=payload.get("ServicioResponsableId"),
+                OrganizacionResponsable=payload.get("OrganizacionResponsable"),
+            )
 
-                for piso in (edif.get("Pisos") or []):
-                    if piso.get("Id"):
-                        self.db.add(UnidadPiso(UnidadId=u.Id, PisoId=piso["Id"]))
-                    for area in (piso.get("Areas") or []):
-                        if area.get("Id"):
-                            self.db.add(UnidadArea(UnidadId=u.Id, AreaId=area["Id"]))
+            self.db.add(u)
+            self.db.flush()  # para obtener u.Id
 
-        self.db.commit()
-        self.db.refresh(u)
-        return _map_unidad_to_dto(u)
+            inmuebles = payload.get("Inmuebles") or []
+            if inmuebles:
+                root = inmuebles[0]
+                if root.get("Id"):
+                    self.db.add(UnidadInmueble(UnidadId=u.Id, InmuebleId=root["Id"]))
+
+                for edif in (root.get("Edificios") or []):
+                    if edif.get("Id"):
+                        self.db.add(UnidadInmueble(UnidadId=u.Id, InmuebleId=edif["Id"]))
+
+                    for piso in (edif.get("Pisos") or []):
+                        if piso.get("Id"):
+                            self.db.add(UnidadPiso(UnidadId=u.Id, PisoId=piso["Id"]))
+                        for area in (piso.get("Areas") or []):
+                            if area.get("Id"):
+                                self.db.add(UnidadArea(UnidadId=u.Id, AreaId=area["Id"]))
+
+            self.db.commit()
+            self.db.refresh(u)
+            return _map_unidad_to_dto(u)
+
+        except IntegrityError as e:
+            self.db.rollback()
+            # mensaje claro para debug (si volviera a fallar por otra restricción)
+            raise ValueError(f"Error de integridad al crear Unidad (posible NOT NULL/constraint): {str(e.orig)}")
 
     # ---------- UPDATE ----------
     def update(self, unidad_id: int, payload: dict) -> None:
@@ -168,20 +205,29 @@ class UnidadService:
         if not u or (_ACTIVE_NAME and not getattr(u, _ACTIVE_NAME)):
             raise ValueError("Unidad no encontrada o inactiva")
 
-        # Actualiza campos base
         u.OldId = payload.get("OldId")
         u.Nombre = payload.get("Nombre", u.Nombre)
         u.ServicioId = payload.get("ServicioId", u.ServicioId)
         u.Funcionarios = payload.get("Funcionarios", u.Funcionarios)
+
         if "ReportaPMG" in payload:
             u.ReportaPMG = payload.get("ReportaPMG")
         if "IndicadorEE" in payload:
             u.IndicadorEE = payload.get("IndicadorEE")
         if "AccesoFactura" in payload:
-            u.AccesoFactura = payload.get("AccesoFactura")
+            u.AccesoFactura = _coerce_boolish_to_int(payload.get("AccesoFactura"))
+
+        # (Opcional) permitir actualizar ChkNombre; si no viene, se mantiene.
+        if "ChkNombre" in payload and payload.get("ChkNombre") is not None:
+            u.ChkNombre = int(payload.get("ChkNombre") or 1)
+        elif u.ChkNombre is None:
+            # si por alguna razón el registro histórico tenía NULL, lo saneamos
+            u.ChkNombre = 1
+
         u.InstitucionResponsableId = payload.get("InstitucionResponsableId", getattr(u, "InstitucionResponsableId", None))
         u.ServicioResponsableId = payload.get("ServicioResponsableId", getattr(u, "ServicioResponsableId", None))
         u.OrganizacionResponsable = payload.get("OrganizacionResponsable", getattr(u, "OrganizacionResponsable", None))
+
         u.UpdatedAt = _now()
         u.ModifiedBy = self.current_user_id
         u.Version = (u.Version or 0) + 1
@@ -229,7 +275,6 @@ class UnidadService:
 
         dto = _map_unidad_to_dto(u)
 
-        # Inmuebles top
         inm_ids = [
             r.InmuebleId
             for r in self.db.scalars(
@@ -238,7 +283,6 @@ class UnidadService:
         ]
         dto.Inmuebles = [InmuebleTopDTO(Id=i, TipoInmueble=0) for i in inm_ids]
 
-        # Pisos
         piso_ids = [
             r.PisoId
             for r in self.db.scalars(
@@ -247,7 +291,6 @@ class UnidadService:
         ]
         dto.Pisos = [pisoDTO(Id=p, NumeroPisoNombre=None, Checked=True) for p in piso_ids]
 
-        # Áreas
         area_ids = [
             r.AreaId
             for r in self.db.scalars(
@@ -263,18 +306,15 @@ class UnidadService:
         q = self.db.query(Unidad)
         q = _q_only_actives(q)
 
-        # Filtro por texto (Nombre)
         if f.Unidad:
             like = f"%{f.Unidad}%"
             q = q.filter(Unidad.Nombre.ilike(like))
 
-        # Filtro por servicio/institución (responsables)
         if f.ServicioId:
             q = q.filter(Unidad.ServicioId == f.ServicioId)
         if f.InstitucionId:
             q = q.filter(Unidad.InstitucionResponsableId == f.InstitucionId)
 
-        # Filtro por región (raw SQL equivalente a EF .NET)
         if f.RegionId:
             sql = text(
                 """
@@ -289,7 +329,7 @@ class UnidadService:
             if ids:
                 q = q.filter(Unidad.Id.in_(ids))
             else:
-                q = q.filter(False)  # sin resultados
+                q = q.filter(False)
 
         total: int = q.count()
         items: List[Unidad] = (
