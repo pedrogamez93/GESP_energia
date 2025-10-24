@@ -1,7 +1,9 @@
-# app/schemas/unidad.py
 from __future__ import annotations
 from typing import List, Optional, Union, Any
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+# Importa de forma normal; no hay ciclo porque inmuebles.py no importa unidad.py
+from app.schemas.inmuebles import InmuebleDTO
 
 
 # --------- DTOs auxiliares que usa el servicio ---------
@@ -28,7 +30,6 @@ class AreaDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     Id: int
-    # ⚠️ OJO: el servicio usa 'Nombre' (no 'Nomnbre')
     Nombre: Optional[str] = None
 
 
@@ -118,6 +119,25 @@ class UnidadListDTO(BaseModel):
     OrganizacionResponsable: Optional[str] = None
 
 
+# --------- NUEVOS DTOs: bulk-link / expand ---------
+
+class LinkInmueblesRequest(BaseModel):
+    """Body para vincular inmuebles a una unidad (bulk)."""
+    inmuebles: List[int] = Field(..., min_items=1)
+
+
+class LinkResult(BaseModel):
+    created: List[int] = []
+    skipped: List[int] = []
+    not_found: List[int] = []
+    deleted: List[int] = []  # solo se usa en modo sync
+
+
+class UnidadWithInmueblesDTO(UnidadDTO):
+    """Unidad + inmuebles con árbol completo."""
+    InmueblesDetallados: List[InmuebleDTO] = Field(default_factory=list)
+
+
 # Export explícito por claridad
 __all__ = [
     "InmuebleTopDTO",
@@ -127,4 +147,7 @@ __all__ = [
     "UnidadPatchDTO",
     "UnidadDTO",
     "UnidadListDTO",
+    "LinkInmueblesRequest",
+    "LinkResult",
+    "UnidadWithInmueblesDTO",
 ]

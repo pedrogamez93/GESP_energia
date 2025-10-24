@@ -1,4 +1,3 @@
-# app/services/unidad_service.py
 from __future__ import annotations
 from typing import List, Optional, Tuple
 from datetime import datetime
@@ -16,8 +15,14 @@ from app.schemas.unidad import (
     InmuebleTopDTO,
     pisoDTO,
     AreaDTO,
+    LinkResult,
+    UnidadWithInmueblesDTO,
 )
+from app.schemas.inmuebles import InmuebleDTO
 from app.schemas.pagination import Page, PageMeta
+
+# Para expand
+from app.services.inmueble_service import InmuebleService
 
 
 # ---------------------- Helpers ----------------------
@@ -411,3 +416,110 @@ class UnidadService:
     def has_inteligent_measurement(self, old_id: int) -> bool:
         found = self.db.query(Unidad).filter(Unidad.OldId == old_id).first()
         return bool(found)
+
+    # ============================================================
+    #             NUEVAS FUNCIONES (no rompen nada)
+    # ============================================================
+
+    def list_inmuebles_ids(self, unidad_id: int) -> List[int]:
+        return [
+            r.InmuebleId
+            for r in self.db.scalars(
+                select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
+            ).all()
+        ]
+
+    def link_inmuebles_append(self, unidad_id: int, ids: List[int]) -> LinkResult:
+        """Agrega vínculos Unidad<->Inmueble de forma idempotente (no borra existentes)."""
+        res = LinkResult(created=[], skipped=[], not_found=[])
+
+        # Verifica unidad
+        u = self.db.get(Unidad, unidad_id)
+        if not u:
+            raise ValueError("Unidad no encontrada")
+
+        if not ids:
+            return res
+
+        # IDs existentes en Divisiones
+        rows = self.db.execute(
+            text("SELECT Id FROM dbo.Divisiones WITH (NOLOCK) WHERE Id IN :ids"),
+            {"ids": tuple(set(ids))},
+        ).all()
+        existentes = {int(r[0]) for r in rows}
+        res.not_found = list(set(ids) - existentes)
+
+        # Inserta pares no existentes
+        for iid in existentes:
+            ya = self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id, InmuebleId=iid).first()
+            if ya:
+                res.skipped.append(iid)
+            else:
+                self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=iid))
+                res.created.append(iid)
+
+        self.db.commit()
+        return res
+
+    def link_inmuebles_sync(self, unidad_id: int, ids: List[int]) -> LinkResult:
+        """
+        Reemplaza la relación: borra lo que no esté en 'ids' y agrega los faltantes.
+        """
+        res = LinkResult(created=[], skipped=[], not_found=[], deleted=[])
+
+        # Verifica unidad
+        u = self.db.get(Unidad, unidad_id)
+        if not u:
+            raise ValueError("Unidad no encontrada")
+
+        keep = set(ids or [])
+
+        # IDs válidos existentes en Divisiones
+        rows = self.db.execute(
+            text("SELECT Id FROM dbo.Divisiones WITH (NOLOCK) WHERE Id IN :ids"),
+            {"ids": tuple(keep) if keep else tuple([-1])},
+        ).all()
+        existentes = {int(r[0]) for r in rows}
+        res.not_found = list(keep - existentes)
+
+        keep = existentes  # solo mantenemos los válidos
+
+        actuales = {r.InmuebleId for r in self.db.scalars(
+            select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
+        ).all()}
+
+        # Borrar los que sobren
+        to_delete = actuales - keep
+        if to_delete:
+            self.db.query(UnidadInmueble).filter(
+                UnidadInmueble.UnidadId == unidad_id,
+                UnidadInmueble.InmuebleId.in_(to_delete),
+            ).delete(synchronize_session=False)
+            res.deleted = list(to_delete)
+
+        # Agregar los faltantes
+        to_add = keep - actuales
+        for iid in to_add:
+            self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=iid))
+            res.created.append(iid)
+
+        # Los que ya estaban
+        res.skipped = list(keep & actuales)
+
+        self.db.commit()
+        return res
+
+    def get_with_expand(self, unidad_id: int) -> UnidadWithInmueblesDTO:
+        """
+        Devuelve la UnidadDTO tradicional + InmueblesDetallados (árbol completo),
+        reutilizando InmuebleService.get() para cada Division vinculada.
+        """
+        base = self.get(unidad_id)  # mantiene compat total
+        ids = [i.Id for i in base.Inmuebles]
+        det: List[InmuebleDTO] = []
+        isvc = InmuebleService(self.db)
+        for iid in ids:
+            d = isvc.get(iid)
+            if d:
+                det.append(d)
+        return UnidadWithInmueblesDTO(**base.model_dump(), InmueblesDetallados=det)

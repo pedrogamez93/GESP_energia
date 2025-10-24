@@ -1,4 +1,3 @@
-# app/api/v1/unidad_router.py
 from __future__ import annotations
 from typing import List, Optional
 
@@ -12,6 +11,9 @@ from app.schemas.unidad import (
     UnidadListDTO,
     UnidadFilterDTO,
     UnidadPatchDTO,
+    LinkInmueblesRequest,
+    LinkResult,
+    UnidadWithInmueblesDTO,
 )
 from app.services.unidad_service import UnidadService
 
@@ -153,5 +155,60 @@ def get_unidad(
     svc = UnidadService(db, me.id, me.is_admin)
     try:
         return svc.get(unidad_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+
+
+# ==================================================================
+#                     NUEVAS RUTAS (no rompen nada)
+# ==================================================================
+
+@router.get("/{unidad_id}/inmuebles", response_model=List[int])
+def list_inmuebles_ids(
+    unidad_id: int,
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    return svc.list_inmuebles_ids(unidad_id)
+
+
+@router.post("/{unidad_id}/inmuebles", response_model=LinkResult)
+def add_inmuebles_bulk(
+    unidad_id: int,
+    body: LinkInmueblesRequest,
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    try:
+        return svc.link_inmuebles_append(unidad_id, body.inmuebles)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+
+
+@router.put("/{unidad_id}/inmuebles", response_model=LinkResult)
+def sync_inmuebles_bulk(
+    unidad_id: int,
+    body: LinkInmueblesRequest,
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    try:
+        return svc.link_inmuebles_sync(unidad_id, body.inmuebles)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+
+
+@router.get("/{unidad_id}/expand", response_model=UnidadWithInmueblesDTO)
+def get_unidad_expand(
+    unidad_id: int,
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    svc = UnidadService(db, me.id, me.is_admin)
+    try:
+        return svc.get_with_expand(unidad_id)
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
