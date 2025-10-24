@@ -4,6 +4,7 @@ from app.api.v1 import tipos_colectores
 from app.api.v1 import energeticos
 from app.services import tipos_luminarias
 
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -84,6 +85,7 @@ from app.api.v1.reportes import router as reportes_router
 from app.api.v1.parametros_medicion import router as parametros_medicion_router
 from app.api.v1.provincia import router as provincias_router
 from app.api.v1.unidad_router import router as unidades_router
+from app.api.v1 import areas_unidades_router 
 
 from app.audit.context import current_request_meta
 
@@ -330,3 +332,4 @@ app.include_router(tipos_equipos_calefaccion.router)  # ya trae /api/v1/tipos-eq
 app.include_router(tipos_colectores.router)           # ya trae /api/v1/tipos-colectores
 app.include_router(energeticos.router)                # ya trae /api/v1/energeticos
 app.include_router(unidades_router)
+app.include_router(areas_unidades_router.router)
