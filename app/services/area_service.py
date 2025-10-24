@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Tuple, List, Optional
 
 from sqlalchemy.orm import Session
-from sqlalchemy import inspect
+from sqlalchemy import inspect, case  # 👈 importamos case para NULLS LAST en SQL Server
 from app.db.models.area import Area
 from app.schemas.areas import AreaCreate, AreaUpdate
 
@@ -77,11 +77,12 @@ class AreaService:
         size = max(1, min(200, page_size))
         page = max(1, page)
 
-        # Sin 'Orden' en la tabla; orden estable por Nombre (NULLS LAST) y luego Id
-        # SQL Server no soporta nulls_last() nativo, así que ordenamos por IS NULL y luego valor
-        # Primero: las no nulas de Nombre, luego Nombre asc, y finalmente Id asc.
+        # ✅ NULLS LAST compatible con SQL Server:
+        # ORDER BY CASE WHEN Area.Nombre IS NULL THEN 1 ELSE 0 END, Area.Nombre, Area.Id
+        nulls_last = case((Area.Nombre.is_(None), 1), else_=0).asc()
+
         items = (
-            q.order_by((Area.Nombre.is_(None)).asc(), Area.Nombre.asc(), Area.Id.asc())
+            q.order_by(nulls_last, Area.Nombre.asc(), Area.Id.asc())
              .offset((page - 1) * size)
              .limit(size)
              .all()
@@ -92,7 +93,11 @@ class AreaService:
         q = self.db.query(Area).filter(Area.PisoId == piso_id)
         if active is not None:
             q = q.filter(Area.Active == active)
-        return q.order_by((Area.Nombre.is_(None)).asc(), Area.Nombre.asc(), Area.Id.asc()).all()
+
+        # ✅ mismo criterio de orden para SQL Server
+        nulls_last = case((Area.Nombre.is_(None), 1), else_=0).asc()
+
+        return q.order_by(nulls_last, Area.Nombre.asc(), Area.Id.asc()).all()
 
     def get(self, area_id: int) -> Area | None:
         return self.db.query(Area).filter(Area.Id == area_id).first()

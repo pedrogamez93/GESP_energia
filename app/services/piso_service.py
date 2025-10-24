@@ -1,8 +1,9 @@
+# app/services/piso_service.py
 from __future__ import annotations
 from datetime import datetime
 from typing import Tuple, List, Optional, Set, Any
 
-from sqlalchemy import func, text
+from sqlalchemy import func, text, case  # 👈 añadimos `case`
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.inspection import inspect as sa_inspect
@@ -48,8 +49,6 @@ def _resolve_numero_piso_id(db: Session, numero: Optional[str | int]) -> Optiona
 
     # Buscar por nombre (o por alguna columna de texto que tengas)
     s = str(numero).strip()
-    # Intentamos por Nombre; si tu columna se llama distinto (p. ej. "Numero"),
-    # agrega un OR adicional.
     row = db.execute(
         text("""
             SELECT TOP 1 Id
@@ -63,8 +62,10 @@ def _resolve_numero_piso_id(db: Session, numero: Optional[str | int]) -> Optiona
         return int(row[0])
 
     # No encontrado: señalamos error claro (mejor que insertar NULL en NOT NULL)
-    raise HTTPException(status_code=400,
-                        detail=f"No existe un NumeroPiso con nombre/numero '{s}' en dbo.NumeroPisos")
+    raise HTTPException(
+        status_code=400,
+        detail=f"No existe un NumeroPiso con nombre/numero '{s}' en dbo.NumeroPisos"
+    )
 
 
 def _filter_kwargs_for_model(kwargs: dict) -> dict:
@@ -73,14 +74,18 @@ def _filter_kwargs_for_model(kwargs: dict) -> dict:
 
 
 def _order_clause_or_id():
-    """Devuelve la/s columnas de orden: usa Piso.Orden si existe; si no, solo Piso.Id."""
+    """
+    Devuelve la/s columnas de orden:
+      - Si existe Piso.Orden, hacemos NULLS LAST compatible con SQL Server:
+        ORDER BY CASE WHEN Orden IS NULL THEN 1 ELSE 0 END, Orden ASC
+      - Luego siempre Id ASC para estabilidad.
+    """
     cols = []
     if hasattr(Piso, "Orden"):
-        try:
-            # nulls_last solo en SQLA 2.x; si no, cae al except y sigue con Id
-            cols.append(Piso.Orden.asc().nulls_last())
-        except Exception:
-            cols.append(Piso.Orden.asc())
+        # ✅ SQL Server-friendly NULLS LAST:
+        nulls_last = case((Piso.Orden.is_(None), 1), else_=0).asc()
+        cols.extend([nulls_last, Piso.Orden.asc()])
+    # Siempre agregamos Id al final para orden estable
     cols.append(Piso.Id.asc())
     return cols
 
@@ -178,8 +183,10 @@ class PisoService:
             return obj
         except IntegrityError as e:
             self.db.rollback()
-            raise HTTPException(status_code=400,
-                                detail=f"Error de integridad al crear Piso: {str(e.orig)}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error de integridad al crear Piso: {str(e.orig)}"
+            )
 
     # ---------- UPDATE (ADMIN) ----------
     def update_admin(self, piso_id: int, data: PisoUpdate, modified_by: str) -> Piso | None:
