@@ -1,3 +1,4 @@
+# app/schemas/pisos.py
 from __future__ import annotations
 from typing import Optional, List
 from datetime import datetime
@@ -5,11 +6,14 @@ from pydantic import BaseModel, ConfigDict
 
 class PisoListDTO(BaseModel):
     Id: int
-    DivisionId: int
+    # Algunos registros pueden venir con DivisionId = NULL en BD → hacerlo opcional en lecturas
+    DivisionId: Optional[int] = None
     Numero: Optional[str] = None
     Nombre: Optional[str] = None
     Superficie: Optional[float] = None
-    Active: bool
+    # Tolerar Active NULL en BD; si prefieres, puedes dejarlo como bool = True
+    Active: Optional[bool] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 class PisoDTO(PisoListDTO):
@@ -20,6 +24,7 @@ class PisoDTO(PisoListDTO):
     Orden: Optional[int] = None
 
 class PisoCreate(BaseModel):
+    # En creación lo mantenemos requerido (normalmente la BD lo exige)
     DivisionId: int
     Numero: Optional[str] = None
     Nombre: Optional[str] = None
@@ -28,6 +33,7 @@ class PisoCreate(BaseModel):
     Orden: Optional[int] = None
 
 class PisoUpdate(BaseModel):
+    # En update es opcional
     DivisionId: Optional[int] = None
     Numero: Optional[str] = None
     Nombre: Optional[str] = None
