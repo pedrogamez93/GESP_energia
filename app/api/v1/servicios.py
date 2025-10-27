@@ -336,3 +336,38 @@ def eliminar_servicio(
     if not srv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
+
+from app.db.models.institucion import Institucion
+from app.schemas.instituciones import InstitucionListDTO
+
+@router.get(
+    "/lista/servicio/{servicio_id}",
+    response_model=List[InstitucionListDTO],
+    summary="Lista ligera de instituciones por servicio (AllowAnonymous)",
+    description="Valida app y devuelve (Id, Nombre) de la(s) institución(es) dueña(s) del servicio."
+)
+def get_instituciones_by_servicio(
+    servicio_id: Annotated[int, Path(..., ge=1)],
+    request: Request,
+    db: DbDep
+) -> List[InstitucionListDTO]:
+    # Validación anónima simétrica a /lista/institucion/{institucion_id}
+    if not is_app_validate(request):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    # Join directo Servicio -> Institucion (1 institución por servicio hoy)
+    rows = (
+        db.query(Institucion.Id, Institucion.Nombre)
+          .join(Servicio, Servicio.InstitucionId == Institucion.Id)
+          .filter(
+              Servicio.Id == servicio_id,
+              Servicio.Active == True,
+              Institucion.Active == True
+          )
+          .distinct()
+          .order_by(Institucion.Nombre)
+          .all()
+    )
+
+    # Normaliza a DTO de lista
+    return [InstitucionListDTO(Id=r[0], Nombre=r[1]) for r in rows]
