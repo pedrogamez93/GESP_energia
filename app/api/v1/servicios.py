@@ -338,7 +338,7 @@ def eliminar_servicio(
     return ServicioDTO.model_validate(srv)
 
 from app.db.models.institucion import Institucion
-from app.schemas.instituciones import InstitucionListDTO
+from app.schemas.institucion import InstitucionListDTO
 
 @router.get(
     "/lista/servicio/{servicio_id}",
