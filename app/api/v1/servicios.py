@@ -343,19 +343,13 @@ from app.schemas.institucion import InstitucionListDTO
 @router.get(
     "/lista/servicio/{servicio_id}",
     response_model=List[InstitucionListDTO],
-    summary="Lista ligera de instituciones por servicio (AllowAnonymous)",
-    description="Valida app y devuelve (Id, Nombre) de la(s) institución(es) dueña(s) del servicio."
+    summary="Lista ligera de instituciones por servicio (AllowAnonymous real)",
+    description="Devuelve (Id, Nombre) de la(s) institución(es) dueña(s) del servicio sin exigir headers de app."
 )
 def get_instituciones_by_servicio(
     servicio_id: Annotated[int, Path(..., ge=1)],
-    request: Request,
     db: DbDep
 ) -> List[InstitucionListDTO]:
-    # Validación anónima simétrica a /lista/institucion/{institucion_id}
-    if not is_app_validate(request):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-
-    # Join directo Servicio -> Institucion (1 institución por servicio hoy)
     rows = (
         db.query(Institucion.Id, Institucion.Nombre)
           .join(Servicio, Servicio.InstitucionId == Institucion.Id)
@@ -368,6 +362,4 @@ def get_instituciones_by_servicio(
           .order_by(Institucion.Nombre)
           .all()
     )
-
-    # Normaliza a DTO de lista
     return [InstitucionListDTO(Id=r[0], Nombre=r[1]) for r in rows]
