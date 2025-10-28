@@ -9,7 +9,7 @@ from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 
 # Ajusta estos imports a tus schemas reales
-from app.schemas.tipos_luminarias import (
+from app.schemas.tipos_luminaria import (
     TipoLuminariaDTO,
     TipoLuminariaCreate,
     TipoLuminariaUpdate,
