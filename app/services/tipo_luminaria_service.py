@@ -1,67 +1,87 @@
 # app/services/tipo_luminaria_service.py
 from __future__ import annotations
-from datetime import datetime
+
+from typing import Optional
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from fastapi import HTTPException
 
-from app.db.models.tipo_luminaria import TipoLuminaria
+from app.models.tipo_luminaria import TipoLuminaria
+from app.schemas.catalogo_simple import CatalogoCreate, CatalogoUpdate
 
 
-def _now():
-    return datetime.utcnow()
+def _maybe_set(model_obj, **kwargs):
+    """
+    Asigna atributos solo si existen en el modelo,
+    evitando TypeError por columnas que no están mapeadas.
+    """
+    cls = type(model_obj)
+    for k, v in kwargs.items():
+        if hasattr(cls, k):
+            setattr(model_obj, k, v)
+
 
 class TipoLuminariaService:
-    # -------- Listado paginado --------
-    def list(self, db: Session, q: str | None, page: int, page_size: int) -> dict:
-        page = max(1, int(page or 1))
-        size = max(1, min(200, int(page_size or 50)))
-
+    # Listado paginado con filtro por nombre
+    def list(self, db: Session, q: Optional[str], page: int, page_size: int):
         query = db.query(TipoLuminaria)
         if q:
-            like = f"%{q}%"
-            query = query.filter(func.lower(TipoLuminaria.Nombre).like(func.lower(like)))
-
+            # ilike si la BD lo permite; en SQL Server se traduce a LIKE case-insensitive por collation
+            query = query.filter(TipoLuminaria.Nombre.ilike(f"%{q.strip()}%"))
         total = query.count()
-        items = (query.order_by(TipoLuminaria.Nombre, TipoLuminaria.Id)
-                      .offset((page - 1) * size)
-                      .limit(size)
-                      .all())
-        return {"total": total, "page": page, "page_size": size, "items": items}
-
-    # -------- Get --------
-    def get(self, db: Session, id_: int) -> TipoLuminaria:
-        obj = db.query(TipoLuminaria).filter(TipoLuminaria.Id == id_).first()
-        if not obj:
-            raise HTTPException(status_code=404, detail="Tipo de luminaria no encontrado")
-        return obj
-
-    # -------- Create --------
-    def create(self, db: Session, data, user: str | None = None):
-        now = _now()
-        obj = TipoLuminaria(
-            Nombre=(data.Nombre or "").strip() if hasattr(data, "Nombre") else None,
-            CreatedAt=now, UpdatedAt=now, Version=1, Active=True,
-            CreatedBy=user, ModifiedBy=user
+        items = (
+            query.order_by(TipoLuminaria.Id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
         )
-        db.add(obj); db.commit(); db.refresh(obj)
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": items,
+        }
+
+    # Obtener por id
+    def get(self, db: Session, id: int):
+        obj = db.get(TipoLuminaria, id)
+        if not obj:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
         return obj
 
-    # -------- Update --------
-    def update(self, db: Session, id_: int, data, user: str | None = None):
-        obj = self.get(db, id_)
-        if hasattr(data, "Nombre"):
-            obj.Nombre = (data.Nombre or "").strip()
-        if hasattr(data, "Active") and data.Active is not None:
-            obj.Active = bool(data.Active)
-        obj.UpdatedAt = _now()
-        obj.Version = (obj.Version or 0) + 1
-        if user:
-            obj.ModifiedBy = user
-        db.commit(); db.refresh(obj)
+    # Crear (solo usa campos válidos; NO pasa CreatedAt/UpdatedAt)
+    def create(self, db: Session, payload: CatalogoCreate, user: Optional[str] = None):
+        nombre = (payload.Nombre or "").strip()
+        if not nombre:
+            raise HTTPException(status_code=400, detail="Nombre es requerido")
+
+        obj = TipoLuminaria(Nombre=nombre)
+        # opcionales si existen en el modelo
+        _maybe_set(obj,
+                   Active=True,
+                   CreatedBy=user,
+                   ModifiedBy=user)
+
+        db.add(obj)
+        db.commit()
+        db.refresh(obj)
         return obj
 
-    # -------- Delete (duro) --------
-    def delete(self, db: Session, id_: int):
-        obj = self.get(db, id_)
-        db.delete(obj); db.commit()
+    # Actualizar
+    def update(self, db: Session, id: int, payload: CatalogoUpdate, user: Optional[str] = None):
+        obj = self.get(db, id)
+        # setea solo lo que venga en payload
+        if payload.Nombre is not None:
+            obj.Nombre = payload.Nombre.strip()
+        # opcional si la columna existe
+        _maybe_set(obj, ModifiedBy=user)
+
+        db.commit()
+        db.refresh(obj)
+        return obj
+
+    # Eliminar
+    def delete(self, db: Session, id: int):
+        obj = self.get(db, id)
+        db.delete(obj)
+        db.commit()
