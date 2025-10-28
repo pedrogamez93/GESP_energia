@@ -435,3 +435,121 @@ class InmuebleService:
             UnidadInmueble.UnidadId == unidad_id
         ).delete(synchronize_session=False)
         self.db.commit()
+
+# ---------------------------------------- BUSCAR INMUEBLES POR UNIDAD-------------------
+    def _find_inmueble_id_by_unidad(self, unidad_id: int) -> int | None:
+        """
+        Busca el DivisionId (inmueble) vinculado a la unidad, probando:
+        1) UnidadesInmuebles (vínculo directo)
+        2) UnidadesPisos -> Pisos -> DivisionId
+        3) UnidadesAreas -> Areas -> Pisos -> DivisionId
+        Devuelve el primero por prioridad (directo > piso > área), preferentemente TipoInmueble=2 (edificio).
+        """
+        sql = text("""
+            WITH Candidatos AS (
+                -- 1) Vínculo directo unidad <-> inmueble (Divisiones)
+                SELECT dv.Id AS DivisionId, dv.TipoInmueble, 1 AS prio
+                FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)
+                JOIN dbo.Divisiones dv     WITH (NOLOCK) ON dv.Id = ui.InmuebleId
+                WHERE ui.UnidadId = :uid AND ISNULL(dv.Active,0) = 1
+
+                UNION ALL
+
+                -- 2) Vía Piso
+                SELECT p.DivisionId AS DivisionId, dv.TipoInmueble, 2 AS prio
+                FROM dbo.UnidadesPisos up WITH (NOLOCK)
+                JOIN dbo.Pisos p          WITH (NOLOCK) ON p.Id = up.PisoId
+                JOIN dbo.Divisiones dv    WITH (NOLOCK) ON dv.Id = p.DivisionId
+                WHERE up.UnidadId = :uid AND ISNULL(p.Active,0) = 1 AND ISNULL(dv.Active,0) = 1
+
+                UNION ALL
+
+                -- 3) Vía Área
+                SELECT p.DivisionId AS DivisionId, dv.TipoInmueble, 3 AS prio
+                FROM dbo.UnidadesAreas ua WITH (NOLOCK)
+                JOIN dbo.Areas a          WITH (NOLOCK) ON a.Id = ua.AreaId
+                JOIN dbo.Pisos p          WITH (NOLOCK) ON p.Id = a.PisoId
+                JOIN dbo.Divisiones dv    WITH (NOLOCK) ON dv.Id = p.DivisionId
+                WHERE ua.UnidadId = :uid AND ISNULL(a.Active,0) = 1 AND ISNULL(p.Active,0) = 1 AND ISNULL(dv.Active,0) = 1
+            )
+            SELECT TOP 1 DivisionId
+            FROM (
+                SELECT DISTINCT DivisionId, TipoInmueble, prio
+                FROM Candidatos
+            ) x
+            -- Preferimos el vínculo directo (prio baja) y TipoInmueble=2 (edificio) sobre otros
+            ORDER BY prio ASC, 
+                     CASE WHEN TipoInmueble = 2 THEN 0 ELSE 1 END, 
+                     DivisionId ASC;
+        """)
+        row = self.db.execute(sql, {"uid": unidad_id}).fetchone()
+        return int(row[0]) if row else None
+
+    def get_by_unidad(self, unidad_id: int):
+        """ Devuelve el mismo detalle que `get(inmueble_id)` pero resolviendo primero el DivisionId por unidad. """
+        iid = self._find_inmueble_id_by_unidad(unidad_id)
+        if iid is None:
+            return None
+        return self.get(iid)
+
+    def list_by_unidad(self, unidad_id: int) -> list[InmuebleListDTO]:
+        """
+        (Opcional) Devuelve TODOS los inmuebles (DivisionId) relacionados a la unidad
+        en cualquiera de las tres vías, como listado simple (ListDTO).
+        """
+        sql = text("""
+            WITH Candidatos AS (
+                SELECT dv.Id AS DivisionId, dv.TipoInmueble, 1 AS prio, dv.Nombre, dv.ParentId, dv.ServicioId,
+                       dv.Active, dv.RegionId, dv.ComunaId, dv.DireccionInmuebleId, dv.NroRol, dv.GeVersion
+                FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)
+                JOIN dbo.Divisiones dv     WITH (NOLOCK) ON dv.Id = ui.InmuebleId
+                WHERE ui.UnidadId = :uid AND ISNULL(dv.Active,0) = 1
+
+                UNION ALL
+                SELECT dv.Id AS DivisionId, dv.TipoInmueble, 2 AS prio, dv.Nombre, dv.ParentId, dv.ServicioId,
+                       dv.Active, dv.RegionId, dv.ComunaId, dv.DireccionInmuebleId, dv.NroRol, dv.GeVersion
+                FROM dbo.UnidadesPisos up WITH (NOLOCK)
+                JOIN dbo.Pisos p          WITH (NOLOCK) ON p.Id = up.PisoId
+                JOIN dbo.Divisiones dv    WITH (NOLOCK) ON dv.Id = p.DivisionId
+                WHERE up.UnidadId = :uid AND ISNULL(p.Active,0) = 1 AND ISNULL(dv.Active,0) = 1
+
+                UNION ALL
+                SELECT dv.Id AS DivisionId, dv.TipoInmueble, 3 AS prio, dv.Nombre, dv.ParentId, dv.ServicioId,
+                       dv.Active, dv.RegionId, dv.ComunaId, dv.DireccionInmuebleId, dv.NroRol, dv.GeVersion
+                FROM dbo.UnidadesAreas ua WITH (NOLOCK)
+                JOIN dbo.Areas a          WITH (NOLOCK) ON a.Id = ua.AreaId
+                JOIN dbo.Pisos p          WITH (NOLOCK) ON p.Id = a.PisoId
+                JOIN dbo.Divisiones dv    WITH (NOLOCK) ON dv.Id = p.DivisionId
+                WHERE ua.UnidadId = :uid AND ISNULL(a.Active,0) = 1 AND ISNULL(p.Active,0) = 1 AND ISNULL(dv.Active,0) = 1
+            )
+            SELECT DISTINCT DivisionId AS Id, Nombre, TipoInmueble, ParentId, ServicioId, Active,
+                            RegionId, ComunaId, DireccionInmuebleId, NroRol, GeVersion
+            FROM Candidatos
+            ORDER BY CASE WHEN Nombre IS NULL THEN 1 ELSE 0 END, Nombre, Id;
+        """)
+        rows = self.db.execute(sql, {"uid": unidad_id}).mappings().all()
+
+        # Cargar direcciones para las filas que traen DireccionInmuebleId
+        dir_ids = [r["DireccionInmuebleId"] for r in rows if r.get("DireccionInmuebleId")]
+        dir_map: dict[int, dict] = {}
+        if dir_ids:
+            dir_sql = text("""
+                SELECT Id, Calle, Numero, RegionId, ProvinciaId, ComunaId, DireccionCompleta
+                FROM dbo.Direcciones WITH (NOLOCK)
+                WHERE Id IN :ids
+            """).bindparams(bindparam("ids", expanding=True))
+            for d in self.db.execute(dir_sql, {"ids": dir_ids}).mappings():
+                dir_map[d["Id"]] = d
+
+        out: list[InmuebleListDTO] = []
+        for r in rows:
+            r = dict(r)
+            if r.get("DireccionInmuebleId") in dir_map:
+                d = dir_map[r["DireccionInmuebleId"]]
+                r.update({
+                    "DirId": d["Id"], "DirCalle": d["Calle"], "DirNumero": d["Numero"],
+                    "DirRegionId": d["RegionId"], "DirProvinciaId": d["ProvinciaId"],
+                    "DirComunaId": d["ComunaId"], "DirDireccionCompleta": d["DireccionCompleta"],
+                })
+            out.append(self._to_list_dto_row(r))
+        return out

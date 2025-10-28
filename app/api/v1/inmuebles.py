@@ -17,6 +17,7 @@ from app.services.direccion_service import DireccionService
 from app.db.models.division import Division
 from app.db.models.unidad_inmueble import UnidadInmueble
 
+
 router = APIRouter(prefix="/api/v1/inmuebles", tags=["Inmuebles"])
 DbDep = Annotated[Session, Depends(get_db)]
 
@@ -149,3 +150,17 @@ def actualizar_direccion_inmueble(
 def listar_unidades_de_inmueble(inmueble_id: Annotated[int, Path(ge=1)], db: DbDep):
     rows = db.query(UnidadInmueble.UnidadId).filter(UnidadInmueble.InmuebleId == inmueble_id).all()
     return [UnidadVinculadaDTO(UnidadId=r[0]) for r in rows]
+
+
+@router.get("/por-unidad/{unidad_id}", response_model=InmuebleDTO)
+def get_inmueble_por_unidad(unidad_id: int, db: Session = Depends(get_db)):
+    svc = InmuebleService(db)
+    dto = svc.get_by_unidad(unidad_id)
+    if not dto:
+        raise HTTPException(status_code=404, detail="No se encontró inmueble (Division) para la unidad indicada")
+    return dto
+
+@router.get("/por-unidad/{unidad_id}/lista", response_model=List[InmuebleListDTO])
+def list_inmuebles_por_unidad(unidad_id: int, db: Session = Depends(get_db)):
+    svc = InmuebleService(db)
+    return svc.list_by_unidad(unidad_id)
