@@ -1,45 +1,60 @@
 # app/api/v1/tipos_luminarias.py
 from __future__ import annotations
 from typing import Annotated
-from fastapi import APIRouter, Depends, Query, Path, status, Response
+from fastapi import APIRouter, Depends, Path, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.dependencies.db import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
-from app.schemas.catalogo_simple import CatalogoDTO, CatalogoCreate, CatalogoUpdate, CatalogoPage
-from app.services.tipo_luminaria_service import TipoLuminariaService
 
-router = APIRouter(prefix="/api/v1/tipos-luminarias", tags=["Tipos Luminarias"])
+# Ajusta estos imports a tus schemas reales
+from app.schemas.tipos_luminarias import (
+    TipoLuminariaDTO,
+    TipoLuminariaCreate,
+    TipoLuminariaUpdate,
+)
+
+# Ajusta el nombre del servicio al tuyo real
+from app.services.tipos_luminarias_service import TipoLuminariaService
+
+router = APIRouter(prefix="/api/v1/tipos-luminarias", tags=["Tipos - Luminarias"])
 DbDep = Annotated[Session, Depends(get_db)]
 svc = TipoLuminariaService()
 
-@router.get("", response_model=CatalogoPage, summary="Listar (paginado)")
+# ---- Listado paginado: devuelve {"total": int, "data": [..]} ----
+@router.get("", response_model=dict)
 def list_(db: DbDep, q: str | None = Query(None), page: int = 1, page_size: int = 50):
     q = q.strip() if isinstance(q, str) else q
-    data = svc.list(db, q, page, page_size)
-    return {
-        "total": data["total"],
-        "page": data["page"],
-        "page_size": data["page_size"],
-        "items": [CatalogoDTO.model_validate(x) for x in data["items"]],
-    }
+    return svc.list(db, q, page, page_size)
 
-@router.get("/{id}", response_model=CatalogoDTO, summary="Obtener por Id")
-def get_(db: DbDep, id: Annotated[int, Path(..., ge=1)]):
-    return CatalogoDTO.model_validate(svc.get(db, id))
+# ---- Obtener por id ----
+@router.get("/{id}", response_model=TipoLuminariaDTO)
+def get_(id: Annotated[int, Path(ge=1)], db: DbDep):
+    return TipoLuminariaDTO.model_validate(svc.get(db, id))
 
-@router.post("", response_model=CatalogoDTO, status_code=status.HTTP_201_CREATED, summary="(ADMIN) Crear")
-def create_(payload: CatalogoCreate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
-    obj = svc.create(db, payload, user=getattr(u, "Username", None))
-    return CatalogoDTO.model_validate(obj)
+# ---- Crear ----
+@router.post("", response_model=TipoLuminariaDTO, status_code=status.HTTP_201_CREATED)
+def create_(payload: TipoLuminariaCreate, db: DbDep,
+            _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    return TipoLuminariaDTO.model_validate(svc.create(db, payload))
 
-@router.put("/{id}", response_model=CatalogoDTO, summary="(ADMIN) Actualizar")
-def update_(id: Annotated[int, Path(..., ge=1)], payload: CatalogoUpdate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
-    obj = svc.update(db, id, payload, user=getattr(u, "Username", None))
-    return CatalogoDTO.model_validate(obj)
+# ---- Actualizar (completo) con PUT ----
+@router.put("/{id}", response_model=TipoLuminariaDTO)
+def update_(id: Annotated[int, Path(ge=1)], payload: TipoLuminariaUpdate, db: DbDep,
+            _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    return TipoLuminariaDTO.model_validate(svc.update(db, id, payload))
 
-@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMIN) Eliminar")
-def delete_(id: Annotated[int, Path(..., ge=1)], db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+# ---- Actualizar (parcial) con PATCH: acepta el mismo payload por simplicidad ----
+@router.patch("/{id}", response_model=TipoLuminariaDTO)
+def patch_(id: Annotated[int, Path(ge=1)], payload: TipoLuminariaUpdate, db: DbDep,
+           _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+    # Si más adelante quieres parcial-verdadero, crea un schema con todos los campos opcionales
+    return TipoLuminariaDTO.model_validate(svc.update(db, id, payload))
+
+# ---- Eliminar ----
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_(id: Annotated[int, Path(ge=1)], db: DbDep,
+            _u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     svc.delete(db, id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
