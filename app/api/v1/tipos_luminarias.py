@@ -16,7 +16,7 @@ from app.schemas.tipos_luminaria import (
 )
 
 # Ajusta el nombre del servicio al tuyo real
-from app.services.tipos_luminarias_service import TipoLuminariaService
+from app.services.tipos_luminaria_service import TipoLuminariaService
 
 router = APIRouter(prefix="/api/v1/tipos-luminarias", tags=["Tipos - Luminarias"])
 DbDep = Annotated[Session, Depends(get_db)]
