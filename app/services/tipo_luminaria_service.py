@@ -1,67 +1,102 @@
 # app/services/tipo_luminaria_service.py
 from __future__ import annotations
-from datetime import datetime
+
+from typing import Optional
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from fastapi import HTTPException
 
-from app.db.models.tipo_luminaria import TipoLuminaria
+from app.schemas.catalogo_simple import CatalogoCreate, CatalogoUpdate
 
 
-def _now():
-    return datetime.utcnow()
+def _get_model():
+    """
+    Importa el modelo TipoLuminaria probando rutas comunes.
+    Lanza un error claro si no lo encuentra.
+    """
+    try:
+        # Ruta 1: app/models/tipo_luminaria.py -> class TipoLuminaria
+        from app.models.tipo_luminaria import TipoLuminaria as M
+        return M
+    except ModuleNotFoundError:
+        try:
+            # Ruta 2: app/db/models/tipo_luminaria.py -> class TipoLuminaria
+            from app.db.models.tipo_luminaria import TipoLuminaria as M
+            return M
+        except ModuleNotFoundError as e:
+            raise ImportError(
+                "No se encontró el modelo 'TipoLuminaria'. "
+                "Revisa que exista 'app/models/tipo_luminaria.py' o 'app/db/models/tipo_luminaria.py' "
+                "y que declare la clase 'TipoLuminaria'."
+            ) from e
+
+
+def _maybe_set(model_obj, **kwargs):
+    """
+    Asigna atributos solo si existen en el modelo,
+    evitando TypeError por columnas no mapeadas.
+    """
+    cls = type(model_obj)
+    for k, v in kwargs.items():
+        if hasattr(cls, k):
+            setattr(model_obj, k, v)
+
 
 class TipoLuminariaService:
-    # -------- Listado paginado --------
-    def list(self, db: Session, q: str | None, page: int, page_size: int) -> dict:
-        page = max(1, int(page or 1))
-        size = max(1, min(200, int(page_size or 50)))
-
-        query = db.query(TipoLuminaria)
+    def list(self, db: Session, q: Optional[str], page: int, page_size: int):
+        M = _get_model()
+        query = db.query(M)
         if q:
-            like = f"%{q}%"
-            query = query.filter(func.lower(TipoLuminaria.Nombre).like(func.lower(like)))
+            # En SQL Server, collation suele ser case-insensitive;
+            # si tu mapeo no soporta ilike, usa .filter(M.Nombre.like(...))
+            try:
+                query = query.filter(M.Nombre.ilike(f"%{q.strip()}%"))
+            except Exception:
+                query = query.filter(M.Nombre.like(f"%{q.strip()}%"))
 
         total = query.count()
-        items = (query.order_by(TipoLuminaria.Nombre, TipoLuminaria.Id)
-                      .offset((page - 1) * size)
-                      .limit(size)
-                      .all())
-        return {"total": total, "page": page, "page_size": size, "items": items}
-
-    # -------- Get --------
-    def get(self, db: Session, id_: int) -> TipoLuminaria:
-        obj = db.query(TipoLuminaria).filter(TipoLuminaria.Id == id_).first()
-        if not obj:
-            raise HTTPException(status_code=404, detail="Tipo de luminaria no encontrado")
-        return obj
-
-    # -------- Create --------
-    def create(self, db: Session, data, user: str | None = None):
-        now = _now()
-        obj = TipoLuminaria(
-            Nombre=(data.Nombre or "").strip() if hasattr(data, "Nombre") else None,
-            CreatedAt=now, UpdatedAt=now, Version=1, Active=True,
-            CreatedBy=user, ModifiedBy=user
+        items = (
+            query.order_by(M.Id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
         )
-        db.add(obj); db.commit(); db.refresh(obj)
+        return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+    def get(self, db: Session, id: int):
+        M = _get_model()
+        obj = db.get(M, id)
+        if not obj:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
         return obj
 
-    # -------- Update --------
-    def update(self, db: Session, id_: int, data, user: str | None = None):
-        obj = self.get(db, id_)
-        if hasattr(data, "Nombre"):
-            obj.Nombre = (data.Nombre or "").strip()
-        if hasattr(data, "Active") and data.Active is not None:
-            obj.Active = bool(data.Active)
-        obj.UpdatedAt = _now()
-        obj.Version = (obj.Version or 0) + 1
-        if user:
-            obj.ModifiedBy = user
-        db.commit(); db.refresh(obj)
+    def create(self, db: Session, payload: CatalogoCreate, user: Optional[str] = None):
+        M = _get_model()
+        nombre = (payload.Nombre or "").strip()
+        if not nombre:
+            raise HTTPException(status_code=400, detail="Nombre es requerido")
+
+        obj = M(Nombre=nombre)
+        # Asigna solo si existen esas columnas en tu modelo/tabla
+        _maybe_set(obj, Active=True, CreatedBy=user, ModifiedBy=user)
+
+        db.add(obj)
+        db.commit()
+        db.refresh(obj)
         return obj
 
-    # -------- Delete (duro) --------
-    def delete(self, db: Session, id_: int):
-        obj = self.get(db, id_)
-        db.delete(obj); db.commit()
+    def update(self, db: Session, id: int, payload: CatalogoUpdate, user: Optional[str] = None):
+        obj = self.get(db, id)
+
+        if payload.Nombre is not None:
+            obj.Nombre = (payload.Nombre or "").strip()
+
+        _maybe_set(obj, ModifiedBy=user)
+
+        db.commit()
+        db.refresh(obj)
+        return obj
+
+    def delete(self, db: Session, id: int):
+        obj = self.get(db, id)
+        db.delete(obj)
+        db.commit()
