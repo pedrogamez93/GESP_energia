@@ -1,51 +1,80 @@
 from __future__ import annotations
 from datetime import datetime
-from typing import List
-from sqlalchemy.orm import Session
-from sqlalchemy import select, delete
+from typing import List, Optional
 
+from sqlalchemy import select, delete, and_
+from sqlalchemy.orm import Session
 from fastapi import HTTPException
+
 from app.db.models.division import Division
+from app.db.models.energetico import Energetico
 from app.db.models.energetico_division import EnergeticoDivision
 
 ED_TBL = EnergeticoDivision.__table__
 
+def _now():
+    # Tu modelo usa timezone=False, devolvemos naive
+    return datetime.utcnow()
+
 class EnergeticoDivisionService:
-    def list_by_division(self, db: Session, division_id: int) -> List[EnergeticoDivision]:
+    # ... (deja tus métodos existentes tal cual)
+
+    def assign_to_division(
+        self, db: Session, division_id: int, energetico_id: int, numero_cliente_id: Optional[int] = None
+    ) -> EnergeticoDivision:
+        # Validaciones mínimas
         if not db.query(Division).filter(Division.Id == division_id).first():
             raise HTTPException(status_code=404, detail="División no encontrada")
-        return (
+        if not db.query(Energetico).filter(Energetico.Id == energetico_id).first():
+            raise HTTPException(status_code=404, detail="Energético no encontrado")
+
+        # ¿Existe ya esta relación exacta?
+        q = (
             db.query(EnergeticoDivision)
               .filter(EnergeticoDivision.DivisionId == division_id)
-              .order_by(EnergeticoDivision.EnergeticoId, EnergeticoDivision.Id)
-              .all()
+              .filter(EnergeticoDivision.EnergeticoId == energetico_id)
         )
+        if numero_cliente_id is None:
+            q = q.filter(EnergeticoDivision.NumeroClienteId.is_(None))
+        else:
+            q = q.filter(EnergeticoDivision.NumeroClienteId == numero_cliente_id)
 
-    def list_divisiones_by_energetico(self, db: Session, energetico_id: int) -> List[int]:
-        rows = db.execute(
-            select(ED_TBL.c.DivisionId).where(ED_TBL.c.EnergeticoId == energetico_id)
-        ).all()
-        return [r[0] for r in rows]
+        row = q.first()
+        now = _now()
+        if row:
+            row.Active = True
+            row.UpdatedAt = now
+            row.Version = (row.Version or 0) + 1
+            db.commit(); db.refresh(row)
+            return row
 
-    def replace_for_division(self, db: Session, division_id: int, items: List[dict]) -> List[EnergeticoDivision]:
-        if not db.query(Division).filter(Division.Id == division_id).first():
-            raise HTTPException(status_code=404, detail="División no encontrada")
+        new_row = EnergeticoDivision(
+            CreatedAt=now,
+            UpdatedAt=now,
+            Version=0,
+            Active=True,
+            ModifiedBy=None,
+            CreatedBy=None,
+            DivisionId=division_id,
+            EnergeticoId=energetico_id,
+            NumeroClienteId=numero_cliente_id,
+        )
+        db.add(new_row)
+        db.commit(); db.refresh(new_row)
+        return new_row
 
-        db.execute(delete(ED_TBL).where(ED_TBL.c.DivisionId == division_id))
+    def unassign_from_division(
+        self, db: Session, division_id: int, energetico_id: int, numero_cliente_id: Optional[int] = None
+    ) -> int:
+        conds = [
+            ED_TBL.c.DivisionId == division_id,
+            ED_TBL.c.EnergeticoId == energetico_id,
+        ]
+        if numero_cliente_id is None:
+            conds.append(ED_TBL.c.NumeroClienteId.is_(None))
+        else:
+            conds.append(ED_TBL.c.NumeroClienteId == numero_cliente_id)
 
-        now = datetime.utcnow()
-        payload = []
-        for it in items or []:
-            payload.append({
-                "CreatedAt": now, "UpdatedAt": now, "Version": 0, "Active": True,
-                "ModifiedBy": None, "CreatedBy": None,
-                "DivisionId": int(division_id),
-                "EnergeticoId": int(it["EnergeticoId"]),
-                "NumeroClienteId": int(it["NumeroClienteId"]) if it.get("NumeroClienteId") is not None else None,
-            })
-
-        if payload:
-            db.execute(ED_TBL.insert(), payload)
-
+        res = db.execute(delete(ED_TBL).where(and_(*conds)))
         db.commit()
-        return self.list_by_division(db, division_id)
+        return res.rowcount or 0
