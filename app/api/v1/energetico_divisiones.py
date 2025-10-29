@@ -14,7 +14,7 @@ from app.services.energetico_division_service import EnergeticoDivisionService
 router = APIRouter(prefix="/api/v1/energetico-divisiones", tags=["EnergeticoDivision"])
 svc = EnergeticoDivisionService()
 
-# Alias de tipo para evitar el warning de Pylance
+# Alias de tipo para evitar el warning de 
 DbDep: TypeAlias = Annotated[Session, Depends(get_db)]
 
 # =========================

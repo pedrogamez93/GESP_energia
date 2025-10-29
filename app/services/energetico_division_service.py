@@ -1,3 +1,4 @@
+# app/services/energetico_division_service.py
 from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
@@ -12,23 +13,69 @@ from app.db.models.energetico_division import EnergeticoDivision
 
 ED_TBL = EnergeticoDivision.__table__
 
-def _now():
-    # Tu modelo usa timezone=False, devolvemos naive
-    return datetime.utcnow()
 
 class EnergeticoDivisionService:
-    # ... (deja tus métodos existentes tal cual)
+    # ===========================
+    # YA EXISTENTES (se mantienen)
+    # ===========================
+    def list_by_division(self, db: Session, division_id: int) -> List[EnergeticoDivision]:
+        if not db.query(Division).filter(Division.Id == division_id).first():
+            raise HTTPException(status_code=404, detail="División no encontrada")
+        return (
+            db.query(EnergeticoDivision)
+              .filter(EnergeticoDivision.DivisionId == division_id)
+              .order_by(EnergeticoDivision.EnergeticoId, EnergeticoDivision.Id)
+              .all()
+        )
 
+    def list_divisiones_by_energetico(self, db: Session, energetico_id: int) -> List[int]:
+        rows = db.execute(
+            select(ED_TBL.c.DivisionId).where(ED_TBL.c.EnergeticoId == energetico_id)
+        ).all()
+        return [r[0] for r in rows]
+
+    def replace_for_division(self, db: Session, division_id: int, items: List[dict]) -> List[EnergeticoDivision]:
+        if not db.query(Division).filter(Division.Id == division_id).first():
+            raise HTTPException(status_code=404, detail="División no encontrada")
+
+        # Limpia set actual
+        db.execute(delete(ED_TBL).where(ED_TBL.c.DivisionId == division_id))
+
+        # Inserta nuevo set (si aplica)
+        now = datetime.utcnow()  # naive para calzar con timezone=False del modelo
+        payload = []
+        for it in items or []:
+            payload.append({
+                "CreatedAt": now, "UpdatedAt": now, "Version": 0, "Active": True,
+                "ModifiedBy": None, "CreatedBy": None,
+                "DivisionId": int(division_id),
+                "EnergeticoId": int(it["EnergeticoId"]),
+                "NumeroClienteId": int(it["NumeroClienteId"]) if it.get("NumeroClienteId") is not None else None,
+            })
+
+        if payload:
+            db.execute(ED_TBL.insert(), payload)
+
+        db.commit()
+        return self.list_by_division(db, division_id)
+
+    # ==================================
+    # NUEVOS (toggle ON/OFF por cada fila)
+    # ==================================
     def assign_to_division(
         self, db: Session, division_id: int, energetico_id: int, numero_cliente_id: Optional[int] = None
     ) -> EnergeticoDivision:
+        """
+        Crea (o re-activa) la relación exacta Division/Energetico/(NumeroClienteId).
+        Idempotente: si ya existe, solo actualiza Active/UpdatedAt/Version.
+        """
         # Validaciones mínimas
         if not db.query(Division).filter(Division.Id == division_id).first():
             raise HTTPException(status_code=404, detail="División no encontrada")
         if not db.query(Energetico).filter(Energetico.Id == energetico_id).first():
             raise HTTPException(status_code=404, detail="Energético no encontrado")
 
-        # ¿Existe ya esta relación exacta?
+        # ¿Ya existe esa combinación exacta?
         q = (
             db.query(EnergeticoDivision)
               .filter(EnergeticoDivision.DivisionId == division_id)
@@ -40,7 +87,8 @@ class EnergeticoDivisionService:
             q = q.filter(EnergeticoDivision.NumeroClienteId == numero_cliente_id)
 
         row = q.first()
-        now = _now()
+        now = datetime.utcnow()
+
         if row:
             row.Active = True
             row.UpdatedAt = now
@@ -66,6 +114,10 @@ class EnergeticoDivisionService:
     def unassign_from_division(
         self, db: Session, division_id: int, energetico_id: int, numero_cliente_id: Optional[int] = None
     ) -> int:
+        """
+        Elimina (hard delete) la relación exacta Division/Energetico/(NumeroClienteId).
+        Retorna cantidad de filas afectadas.
+        """
         conds = [
             ED_TBL.c.DivisionId == division_id,
             ED_TBL.c.EnergeticoId == energetico_id,
