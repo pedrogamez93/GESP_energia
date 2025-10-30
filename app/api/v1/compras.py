@@ -1,8 +1,7 @@
 # app/api/routes/compras.py
 from __future__ import annotations
 from typing import Annotated, List
-
-from fastapi import APIRouter, Depends, Query, Path, status
+from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -12,7 +11,8 @@ from app.schemas.compra import (
     CompraDTO, CompraListDTO, CompraCreate, CompraUpdate,
     CompraMedidorItemDTO, CompraItemsPayload, CompraPage
 )
-from app.schemas.compra import CompraFullPage, CompraListFullDTO, CompraFullDTO
+from app.schemas.compra import CompraFullPage, CompraListFullDTO
+from app.schemas.compra import CompraFullDTO
 from app.services.compra_service import CompraService
 
 router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
@@ -65,10 +65,19 @@ def get_compra_detalle(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
 
 
 @router.get("/{compra_id}/full", response_model=CompraListFullDTO,
-            summary="Detalle enriquecido de compra por Id (fila completa del buscador)")
+            summary="Detalle enriquecido de compra por Id (incluye institución, servicio, unidad, energético, cliente, medidor, región, edificio, etc.)")
 def get_compra_full(compra_id: int, db: DbDep):
-    data = svc.get_full(db, compra_id)   # mismo payload que el buscador enriquecido
-    return CompraListFullDTO.model_validate(data)
+    total, items = svc.list_full(
+        db, q=None, page=1, page_size=1,
+        division_id=None, servicio_id=None, energetico_id=None,
+        numero_cliente_id=None, fecha_desde=None, fecha_hasta=None,
+        active=None, medidor_id=None, estado_validacion_id=None,
+        region_id=None, edificio_id=None, nombre_opcional=None
+    )
+    result = [x for x in items if x["Id"] == compra_id]
+    if not result:
+        raise HTTPException(status_code=404, detail="Compra no encontrada")
+    return CompraListFullDTO.model_validate(result[0])
 
 
 @router.post("", response_model=CompraDTO, status_code=status.HTTP_201_CREATED, summary="(ADMINISTRADOR) Crear compra/consumo")
