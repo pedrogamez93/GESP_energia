@@ -93,21 +93,22 @@ app = FastAPI(title="API GESP", version="1.0.0", openapi_tags=tags_metadata)
 # Respeta X-Forwarded-* si estás detrás de Nginx/ALB
 app.add_middleware(ProxyHeadersMiddleware)
 
-# CORS (incluye OPTIONS para preflight)
+# CORS (incluye OPTIONS/preflight y expone cabeceras de trazabilidad)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOW_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
-    expose_headers=["Content-Disposition"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["x-request-id", "x-error-id", "content-disposition"],
+    max_age=86400,
 )
 
 # ====== Auditoría: captura body en métodos de escritura, con redacción ======
 SENSITIVE_KEYS = {
     "password", "pass", "contrasena", "contraseña",
     "token", "access_token", "refresh_token", "authorization",
-    "api_key", "secret", "client_secret", "clave", "key"
+    "api_key", "secret", "client_secret", "clave", "key",
 }
 MAX_BODY_LOG = 64 * 1024  # 64 KB
 EXCLUDED_PATHS = {"/api/v1/auth/login"}
@@ -135,9 +136,29 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     except Exception:
         body_preview = "<no-body-read>"
 
-    logger.error("[422] %s %s\nBody: %s\nDetail: %s",
-                 request.method, request.url.path, body_preview, exc.errors())
+    logger.error(
+        "[422] %s %s\nBody: %s\nDetail: %s",
+        request.method, request.url.path, body_preview, exc.errors()
+    )
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+# 👉 Manejador global para devolver error_id y request_id
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    error_id = str(uuid4())
+    req_meta = getattr(request.state, "audit_meta", {}) or {}
+    request_id = req_meta.get("request_id")
+
+    logger.exception(
+        "UNHANDLED %s %s error_id=%s request_id=%s",
+        request.method, request.url.path, error_id, request_id
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "error_id": error_id, "request_id": request_id},
+        headers={"X-Error-Id": error_id, "X-Request-Id": request_id or ""},
+    )
 
 @app.middleware("http")
 async def attach_request_meta(request: Request, call_next):
@@ -164,11 +185,8 @@ async def attach_request_meta(request: Request, call_next):
 
         log.info("[AUTH-CHK] path=%s auth=%s", request.url.path, redact(auth))
 
-    capture_body = (
-        request.method in {"POST", "PUT", "PATCH", "DELETE"} and
-        request.url.path not in EXCLUDED_PATHS
-    )
-
+    # Captura body para auditoría en métodos de escritura
+    capture_body = request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in EXCLUDED_PATHS
     body_json_str = None
     body_hash = None
     if capture_body:
@@ -177,7 +195,7 @@ async def attach_request_meta(request: Request, call_next):
         async def _receive():
             return {"type": "http.request", "body": body_bytes, "more_body": False}
 
-        request._receive = _receive
+        request._receive = _receive  # reinyecta el body al endpoint
         if body_bytes:
             sample = body_bytes[:MAX_BODY_LOG]
             body_hash = sha256(body_bytes).hexdigest()
@@ -193,15 +211,9 @@ async def attach_request_meta(request: Request, call_next):
                     from json import dumps
                     body_json_str = dumps(parsed, ensure_ascii=False)
                 else:
-                    body_json_str = json.dumps(
-                        {"_raw_preview": sample.decode("utf-8", errors="ignore")},
-                        ensure_ascii=False,
-                    )
+                    body_json_str = json.dumps({"_raw_preview": sample.decode("utf-8", errors="ignore")}, ensure_ascii=False)
             except Exception:
-                body_json_str = json.dumps(
-                    {"_raw_preview": sample.decode("utf-8", errors="ignore")},
-                    ensure_ascii=False,
-                )
+                body_json_str = json.dumps({"_raw_preview": sample.decode("utf-8", errors="ignore")}, ensure_ascii=False)
 
     meta["request_body_json"] = body_json_str
     meta["request_body_sha256"] = body_hash
@@ -212,6 +224,8 @@ async def attach_request_meta(request: Request, call_next):
     try:
         resp = await call_next(request)
         meta["status_code"] = resp.status_code
+        # 👉 agrega request-id a la respuesta para que el front pueda leerlo
+        resp.headers["X-Request-Id"] = meta["request_id"]
         return resp
     except asyncio.CancelledError:
         meta["status_code"] = 499
