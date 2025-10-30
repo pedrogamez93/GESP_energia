@@ -21,11 +21,9 @@ def _to_dt(s: str | datetime | None) -> datetime | None:
         return None
     if isinstance(s, datetime):
         return s
-    # Normaliza 'Z' => '+00:00'
     try:
         return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except Exception:
-        # Fallback a solo fecha
         return datetime.strptime(str(s)[:10], "%Y-%m-%d")
 
 
@@ -44,11 +42,18 @@ class CompraService:
         page: int,
         page_size: int,
         division_id: Optional[int] = None,
+        servicio_id: Optional[int] = None,          # ← NUEVO (vía DimensionServicios)
         energetico_id: Optional[int] = None,
         numero_cliente_id: Optional[int] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
         active: Optional[bool] = True,
+        # extras ya añadidos
+        medidor_id: Optional[int] = None,
+        estado_validacion_id: Optional[str] = None,
+        region_id: Optional[int] = None,
+        edificio_id: Optional[int] = None,
+        nombre_opcional: Optional[str] = None,
     ) -> Tuple[int, List[dict]]:
         # Evitar bloqueos de lectura grandes (equivalente al NOLOCK)
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
@@ -62,6 +67,19 @@ class CompraService:
         if division_id is not None:
             where_parts.append("c.DivisionId = :division_id")
             params["division_id"] = int(division_id)
+
+        # Servicio: usa tabla puente DimensionServicios (Servicio ←→ División)
+        if servicio_id is not None:
+            where_parts.append("""
+                EXISTS (
+                  SELECT 1
+                  FROM dbo.DimensionServicios ds WITH (NOLOCK)
+                  WHERE ds.DivisionId = c.DivisionId
+                    AND ds.ServicioId = :servicio_id
+                )
+            """)
+            params["servicio_id"] = int(servicio_id)
+
         if energetico_id is not None:
             where_parts.append("c.EnergeticoId = :energetico_id")
             params["energetico_id"] = int(energetico_id)
@@ -77,6 +95,56 @@ class CompraService:
         if q:
             where_parts.append("LOWER(ISNULL(c.Observacion,'')) LIKE LOWER(:q_like)")
             params["q_like"] = f"%{q}%"
+
+        # ----------- filtros extra -----------
+        if estado_validacion_id:
+            where_parts.append("c.EstadoValidacionId = :estado_validacion_id")
+            params["estado_validacion_id"] = estado_validacion_id
+
+        if medidor_id is not None:
+            where_parts.append("""
+                EXISTS (
+                  SELECT 1
+                  FROM dbo.CompraMedidor cm WITH (NOLOCK)
+                  WHERE cm.CompraId = c.Id AND cm.MedidorId = :medidor_id
+                )
+            """)
+            params["medidor_id"] = int(medidor_id)
+
+        # Región (Divisiones -> Direcciones.RegionId)
+        if region_id is not None:
+            where_parts.append("""
+                c.DivisionId IN (
+                  SELECT d.Id
+                  FROM dbo.Divisiones d WITH (NOLOCK)
+                  JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.Id = d.DireccionId
+                  WHERE dir.RegionId = :region_id
+                )
+            """)
+            params["region_id"] = int(region_id)
+
+        # Edificio (en Divisiones)
+        if edificio_id is not None:
+            where_parts.append("""
+                c.DivisionId IN (
+                  SELECT d.Id
+                  FROM dbo.Divisiones d WITH (NOLOCK)
+                  WHERE d.EdificioId = :edificio_id
+                )
+            """)
+            params["edificio_id"] = int(edificio_id)
+
+        # NombreOpcional (en Divisiones)
+        if nombre_opcional:
+            where_parts.append("""
+                c.DivisionId IN (
+                  SELECT d.Id
+                  FROM dbo.Divisiones d WITH (NOLOCK)
+                  WHERE LOWER(ISNULL(d.NombreOpcional,'')) LIKE LOWER(:nombre_opcional_like)
+                )
+            """)
+            params["nombre_opcional_like"] = f"%{nombre_opcional}%"
+        # ------------------------------------
 
         where_sql = " AND ".join(where_parts)
         size = max(1, min(200, page_size))
