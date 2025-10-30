@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Optional, Iterable
+from typing import Annotated, Iterable
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security.utils import get_authorization_scheme_param
@@ -14,12 +14,17 @@ from app.db.session import SessionLocal
 from app.db.models.identity import AspNetUser
 from app.schemas.auth import UserPublic
 from app.utils.identity_password import verify_aspnet_password
-from app.core.roles import ADMIN, ADMIN_VARIANTS  # para mapear variantes
+from app.core.roles import ADMIN, ADMIN_VARIANTS
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# ✅ Compatibilidad con auth_service
+LOCKOUT_MAX_FAILED = 5
+LOCKOUT_WINDOW_MINUTES = 15
+# ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
 # JWT helpers
-# ───────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────
 def create_access_token(
     sub: str,
     roles: list[str],
@@ -40,10 +45,9 @@ def create_access_token(
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 # DB dep
-# ───────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────
 def get_db():
     db = SessionLocal()
     try:
@@ -53,15 +57,10 @@ def get_db():
 
 DbDep = Annotated[Session, Depends(get_db)]
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 # Roles helpers
-# ───────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────
 def _normalize_role(name: str | None) -> str | None:
-    """
-    Normaliza nombres de rol a MAYÚSCULAS y corrige variantes conocidas.
-    - Mapea cualquier variante en ADMIN_VARIANTS -> ADMIN
-    """
     if not name:
         return None
     up = name.strip().upper()
@@ -70,9 +69,6 @@ def _normalize_role(name: str | None) -> str | None:
     return up
 
 def _merge_roles(*groups: Iterable[str]) -> list[str]:
-    """
-    Une, normaliza y deduplica roles.
-    """
     seen = set()
     out: list[str] = []
     for g in groups:
@@ -85,17 +81,13 @@ def _merge_roles(*groups: Iterable[str]) -> list[str]:
                 out.append(nr)
     return out
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 # Bearer extractor con errores detallados
-# ───────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────
 def _raise_401(msg: str, err: str | None = None, desc: str | None = None) -> None:
     hdr = 'Bearer'
     if err:
-        if desc:
-            hdr = f'Bearer error="{err}", error_description="{desc}"'
-        else:
-            hdr = f'Bearer error="{err}"'
+        hdr = f'Bearer error="{err}"' if not desc else f'Bearer error="{err}", error_description="{desc}"'
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=msg,
@@ -103,9 +95,6 @@ def _raise_401(msg: str, err: str | None = None, desc: str | None = None) -> Non
     )
 
 def bearer_token_required(request: Request) -> str:
-    """
-    Extrae y valida el esquema Bearer. Lanza 401 con motivo claro si falta.
-    """
     authorization: str | None = request.headers.get("authorization")
     scheme, param = get_authorization_scheme_param(authorization)
     if not authorization or scheme.lower() != "bearer" or not param:
@@ -116,10 +105,9 @@ def bearer_token_required(request: Request) -> str:
         )
     return param.strip()
 
-# ───────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 # Current user / Roles
-# ───────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────
 def get_current_user(token: Annotated[str, Depends(bearer_token_required)], db: DbDep) -> UserPublic:
     try:
         payload = decode_token(token)
@@ -133,12 +121,10 @@ def get_current_user(token: Annotated[str, Depends(bearer_token_required)], db: 
     if not sub:
         _raise_401("Token inválido: falta 'sub'", "invalid_token", "El token no contiene el subject (sub)")
 
-    # Busca usuario; si no existe, también 401 (credenciales no válidas)
     user = db.query(AspNetUser).filter(AspNetUser.Id == sub).first()
     if not user:
         _raise_401("Usuario no encontrado", "invalid_token", "El 'sub' del token no corresponde a un usuario válido")
 
-    # Combina roles del token + BD (normalizados)
     roles_db_raw = [
         (getattr(r, "NormalizedName", None) or getattr(r, "Name", None) or "")
         for r in (user.roles or [])
@@ -155,10 +141,6 @@ def get_current_user(token: Annotated[str, Depends(bearer_token_required)], db: 
     )
 
 def require_roles(*required: str):
-    """
-    - '*'  => solo autenticado (sin chequear rol)
-    - Si se pasan roles, se normalizan (corrige variantes de ADMIN)
-    """
     if len(required) == 1 and required[0] == "*":
         def _dep_any(user: Annotated[UserPublic, Depends(get_current_user)]):
             return user
@@ -169,7 +151,6 @@ def require_roles(*required: str):
     def _dep(user: Annotated[UserPublic, Depends(get_current_user)]):
         user_roles = {_normalize_role(r) for r in (user.roles or []) if _normalize_role(r)}
         if required_norm and required_norm.isdisjoint(user_roles):
-            # 403 con detalle explícito
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -184,10 +165,9 @@ def require_roles(*required: str):
 
     return _dep
 
-# ───────────────────────────────────────────────────────────────────────────────
-# Password helpers (bcrypt/ASP.NET)
-# ───────────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────
+# Password helpers
+# ─────────────────────────────────────────────────────────────
 _pwd_ctx = None  # CryptContext perezoso
 
 def _ctx():
@@ -200,13 +180,11 @@ def _ctx():
 def verify_password_any(plain_password: str, stored_hash: str | None) -> bool:
     if not stored_hash:
         return False
-    # bcrypt local
     if stored_hash.startswith("$2"):
         try:
             return _ctx().verify(plain_password, stored_hash)
         except Exception:
             pass
-    # ASP.NET Identity v2/v3
     return verify_aspnet_password(stored_hash, plain_password)
 
 def hash_password(plain_password: str) -> str:
