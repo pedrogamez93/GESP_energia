@@ -60,7 +60,7 @@ def get_compra(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
 @router.get(
     "/{compra_id}/detalle",
     response_model=CompraFullDTO,
-    summary="Detalle enriquecido (compra + servicio/institución + región/edificio + medidores)"
+    summary="Detalle enriquecido (compra + items + servicio/institución + región/edificio + medidores)"
 )
 def get_compra_detalle(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     data = svc.get_full(db, compra_id)
@@ -70,9 +70,10 @@ def get_compra_detalle(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
 @router.get(
     "/{compra_id}/full",
     response_model=CompraListFullDTO,
-    summary="Detalle enriquecido de compra por Id (vista del buscador)"
+    summary="Detalle enriquecido de compra por Id (incluye institución, servicio, unidad, energético, cliente, medidor, región, edificio, etc.)"
 )
 def get_compra_full(compra_id: int, db: DbDep):
+    # Usamos list_full con page_size=1 y luego filtramos por Id
     total, items = svc.list_full(
         db, q=None, page=1, page_size=1,
         division_id=None, servicio_id=None, energetico_id=None,
@@ -86,8 +87,12 @@ def get_compra_full(compra_id: int, db: DbDep):
     return CompraListFullDTO.model_validate(result[0])
 
 
-@router.post("", response_model=CompraDTO, status_code=status.HTTP_201_CREATED,
-             summary="(ADMINISTRADOR) Crear compra/consumo")
+@router.post(
+    "",
+    response_model=CompraDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="(ADMINISTRADOR) Crear compra/consumo"
+)
 def create_compra(
     payload: CompraCreate, db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
@@ -98,8 +103,7 @@ def create_compra(
     return dto
 
 
-@router.put("/{compra_id}", response_model=CompraDTO,
-            summary="(ADMINISTRADOR) Actualizar compra/consumo")
+@router.put("/{compra_id}", response_model=CompraDTO, summary="(ADMINISTRADOR) Actualizar compra/consumo")
 def update_compra(
     compra_id: int, payload: CompraUpdate, db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
@@ -110,8 +114,11 @@ def update_compra(
     return dto
 
 
-@router.delete("/{compra_id}", status_code=status.HTTP_204_NO_CONTENT,
-               summary="(ADMINISTRADOR) Eliminar compra/consumo (soft-delete)")
+@router.delete(
+    "/{compra_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="(ADMINISTRADOR) Eliminar compra/consumo (soft-delete)"
+)
 def delete_compra(
     compra_id: int, db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
@@ -120,8 +127,7 @@ def delete_compra(
     return None
 
 
-@router.patch("/{compra_id}/reactivar", response_model=CompraDTO,
-              summary="(ADMINISTRADOR) Reactivar compra/consumo")
+@router.patch("/{compra_id}/reactivar", response_model=CompraDTO, summary="(ADMINISTRADOR) Reactivar compra/consumo")
 def reactivate_compra(
     compra_id: int, db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
@@ -133,8 +139,11 @@ def reactivate_compra(
     return dto
 
 
-@router.put("/{compra_id}/medidores", response_model=List[CompraMedidorItemDTO],
-            summary="(ADMINISTRADOR) Reemplaza los items de medidor para la compra")
+@router.put(
+    "/{compra_id}/medidores",
+    response_model=List[CompraMedidorItemDTO],
+    summary="(ADMINISTRADOR) Reemplaza los items de medidor para la compra"
+)
 def replace_items_compra(
     compra_id: int, payload: CompraItemsPayload, db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
@@ -143,8 +152,11 @@ def replace_items_compra(
     return [CompraMedidorItemDTO.model_validate(x) for x in rows]
 
 
-@router.get("/resumen/mensual", response_model=List[dict],
-            summary="Resumen mensual por División/Energético (suma de Consumo y Costo)")
+@router.get(
+    "/resumen/mensual",
+    response_model=List[dict],
+    summary="Resumen mensual por División/Energético (suma de Consumo y Costo)"
+)
 def resumen_mensual(
     db: DbDep,
     DivisionId: int = Query(..., ge=1),
@@ -155,8 +167,11 @@ def resumen_mensual(
     return svc.resumen_mensual(db, DivisionId, EnergeticoId, Desde, Hasta)
 
 
-@router.get("/busqueda", response_model=CompraFullPage,
-            summary="Listado enriquecido para buscador (institución, servicio, región, edificio, medidores, etc.)")
+@router.get(
+    "/busqueda",
+    response_model=CompraFullPage,
+    summary="Listado enriquecido para buscador (con institución, servicio, región, edificio, medidores, etc.)"
+)
 def list_compras_full(
     db: DbDep,
     q: str | None = Query(default=None, description="Busca en Observacion"),
