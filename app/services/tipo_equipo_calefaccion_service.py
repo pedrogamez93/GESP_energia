@@ -134,7 +134,17 @@ class TipoEquipoCalefaccionService:
         Crea un registro nuevo convirtiendo claves a snake_case y
         seteando created_at/created_by si existen.
         """
-        raw = _as_dict(payload)
+        # 1) normaliza el payload (dict o Pydantic)
+        if hasattr(payload, "model_dump"):  # Pydantic v2
+            raw = payload.model_dump(exclude_unset=True)
+        elif hasattr(payload, "dict"):  # Pydantic v1
+            raw = payload.dict(exclude_unset=True)
+        elif isinstance(payload, dict):
+            raw = dict(payload)
+        else:
+            raise TypeError("El payload debe ser un dict o un BaseModel de Pydantic.")
+
+        # 2) CamelCase/PascalCase -> snake_case
         normalized = {_to_snake(k): v for k, v in raw.items()}
 
         cols, _ = _model_field_names(TipoEquipoCalefaccion)
@@ -148,7 +158,7 @@ class TipoEquipoCalefaccionService:
         if "is_active" in cols and "is_active" not in normalized:
             normalized["is_active"] = True
 
-        # IMPORTANTÍSIMO: filtrar solo campos válidos para evitar el error 'CreatedAt'
+        # Filtrar solo campos válidos para evitar errores con nombres no válidos
         data = _filter_to_model_fields(TipoEquipoCalefaccion, normalized)
 
         obj = TipoEquipoCalefaccion(**data)
