@@ -14,10 +14,6 @@ CM_TBL = CompraMedidor.__table__
 
 
 def _to_dt(s: str | datetime | None) -> datetime | None:
-    """
-    Acepta ISO string (con o sin 'Z'), solo fecha 'YYYY-MM-DD',
-    datetime ya construido, o None.
-    """
     if s is None or s == "":
         return None
     if isinstance(s, datetime):
@@ -29,7 +25,6 @@ def _to_dt(s: str | datetime | None) -> datetime | None:
 
 
 def _fmt_dt(dt: datetime | None) -> str | None:
-    """Formatea a ISO sin microsegundos (se usa en list())."""
     if not dt:
         return None
     return dt.replace(microsecond=0).isoformat()
@@ -37,7 +32,7 @@ def _fmt_dt(dt: datetime | None) -> str | None:
 
 class CompraService:
     # ─────────────────────────────────────────────────────────────────────────────
-    # LISTA BÁSICA (paginada)
+    # LISTA BÁSICA
     # ─────────────────────────────────────────────────────────────────────────────
     def list(
         self,
@@ -46,7 +41,7 @@ class CompraService:
         page: int,
         page_size: int,
         division_id: Optional[int] = None,
-        servicio_id: Optional[int] = None,          # via Divisiones.ServicioId
+        servicio_id: Optional[int] = None,          # Divisiones.ServicioId
         energetico_id: Optional[int] = None,
         numero_cliente_id: Optional[int] = None,
         fecha_desde: Optional[str] = None,
@@ -59,7 +54,6 @@ class CompraService:
         edificio_id: Optional[int] = None,
         nombre_opcional: Optional[str] = None,
     ) -> Tuple[int, List[dict]]:
-        # Evitar bloqueos de lectura grandes (equivalente al NOLOCK)
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
         where_parts: list[str] = ["1=1"]
@@ -72,7 +66,7 @@ class CompraService:
             where_parts.append("c.DivisionId = :division_id")
             params["division_id"] = int(division_id)
 
-        # Servicio por Divisiones.ServicioId
+        # Servicio directo en Divisiones
         if servicio_id is not None:
             where_parts.append("""
                 EXISTS (
@@ -99,7 +93,6 @@ class CompraService:
             where_parts.append("LOWER(ISNULL(c.Observacion,'')) LIKE LOWER(:q_like)")
             params["q_like"] = f"%{q}%"
 
-        # ----------- filtros extra -----------
         if estado_validacion_id:
             where_parts.append("c.EstadoValidacionId = :estado_validacion_id")
             params["estado_validacion_id"] = estado_validacion_id
@@ -114,69 +107,65 @@ class CompraService:
             """)
             params["medidor_id"] = int(medidor_id)
 
-        # Región usando Divisiones → Edificios → Direcciones → Comunas.RegionId
+        # Región: Divisiones → Edificios → Direcciones(ComunalId) → Comunas.RegionId
         if region_id is not None:
             where_parts.append("""
                 EXISTS (
                   SELECT 1
                   FROM dbo.Divisiones d  WITH (NOLOCK)
                   LEFT JOIN dbo.Edificios   e   WITH (NOLOCK) ON e.Id   = d.EdificioId
-                  LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.Id = e.DireccionId
+                  LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.EdificioId = e.Id
                   LEFT JOIN dbo.Comunas     com WITH (NOLOCK) ON com.Id = dir.ComunalId
                   WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
                 )
             """)
             params["region_id"] = int(region_id)
 
-        # Edificio (en Divisiones)
+        # Edificio
         if edificio_id is not None:
             where_parts.append("""
                 EXISTS (
-                  SELECT 1
-                  FROM dbo.Divisiones d WITH (NOLOCK)
+                  SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
                   WHERE d.Id = c.DivisionId AND d.EdificioId = :edificio_id
                 )
             """)
             params["edificio_id"] = int(edificio_id)
 
-        # NombreOpcional (en Divisiones)
+        # Nombre opcional (Divisiones)
         if nombre_opcional:
             where_parts.append("""
                 EXISTS (
-                  SELECT 1
-                  FROM dbo.Divisiones d WITH (NOLOCK)
+                  SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
                   WHERE d.Id = c.DivisionId
                     AND LOWER(ISNULL(d.NombreOpcional,'')) LIKE LOWER(:nombre_opcional_like)
                 )
             """)
             params["nombre_opcional_like"] = f"%{nombre_opcional}%"
-        # ------------------------------------
 
         where_sql = " AND ".join(where_parts)
         size = max(1, min(200, page_size))
         offset = (page - 1) * size
 
-        count_sql = f"""
+        total = int(db.execute(text(f"""
             SELECT COUNT_BIG(1)
             FROM dbo.Compras c WITH (NOLOCK)
             WHERE {where_sql}
             OPTION (RECOMPILE)
-        """
-        total = int(db.execute(text(count_sql), params).scalar() or 0)
+        """), params).scalar() or 0)
 
-        rows_sql = f"""
-            SELECT
-                c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
-                c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active
-            FROM dbo.Compras c WITH (NOLOCK)
-            WHERE {where_sql}
-            ORDER BY c.FechaCompra DESC, c.Id DESC
-            OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
-            OPTION (RECOMPILE)
-        """
-        rows_params = dict(params)
-        rows_params.update({"offset": offset, "size": size})
-        rs = db.execute(text(rows_sql), rows_params).mappings().all()
+        rs = db.execute(
+            text(f"""
+                SELECT
+                    c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
+                    c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active
+                FROM dbo.Compras c WITH (NOLOCK)
+                WHERE {where_sql}
+                ORDER BY c.FechaCompra DESC, c.Id DESC
+                OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
+                OPTION (RECOMPILE)
+            """),
+            {**params, "offset": offset, "size": size},
+        ).mappings().all()
 
         items: List[dict] = []
         for r in rs:
@@ -195,7 +184,7 @@ class CompraService:
         return total, items
 
     # ─────────────────────────────────────────────────────────────────────────────
-    # CRUD BÁSICO
+    # CRUD
     # ─────────────────────────────────────────────────────────────────────────────
     def get(self, db: Session, compra_id: int) -> Compra:
         obj = db.query(Compra).filter(Compra.Id == compra_id).first()
@@ -298,8 +287,8 @@ class CompraService:
                 "Consumo": float(it["Consumo"]),
                 "MedidorId": int(it["MedidorId"]),
                 "CompraId": int(compra_id),
-                "ParametroMedicionId": int(it.get("ParametroMedicionId")) if it.get("ParametroMedicionId") is not None else None,
-                "UnidadMedidaId": int(it.get("UnidadMedidaId")) if it.get("UnidadMedidaId") is not None else None,
+                "ParametroMedicionId": int(it["ParametroMedicionId"]) if it.get("ParametroMedicionId") is not None else None,
+                "UnidadMedidaId": int(it["UnidadMedidaId"]) if it.get("UnidadMedidaId") is not None else None,
             })
         if payload:
             db.execute(CM_TBL.insert(), payload)
@@ -359,12 +348,10 @@ class CompraService:
             where_parts.append("c.DivisionId = :division_id")
             params["division_id"] = int(division_id)
 
-        # Servicio via Divisiones.ServicioId
         if servicio_id is not None:
             where_parts.append("""
                 EXISTS (
-                  SELECT 1
-                  FROM dbo.Divisiones d WITH (NOLOCK)
+                  SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
                   WHERE d.Id = c.DivisionId AND d.ServicioId = :servicio_id
                 )
             """)
@@ -393,23 +380,23 @@ class CompraService:
         if medidor_id is not None:
             where_parts.append("""
                 EXISTS (
-                SELECT 1
-                FROM dbo.CompraMedidor cm WITH (NOLOCK)
-                WHERE cm.CompraId = c.Id AND cm.MedidorId = :medidor_id
+                  SELECT 1
+                  FROM dbo.CompraMedidor cm WITH (NOLOCK)
+                  WHERE cm.CompraId = c.Id AND cm.MedidorId = :medidor_id
                 )
             """)
             params["medidor_id"] = int(medidor_id)
 
-        # Región usando Divisiones → Edificios → Direcciones → Comunas.RegionId
+        # Región (cadena completa)
         if region_id is not None:
             where_parts.append("""
                 EXISTS (
-                SELECT 1
-                FROM dbo.Divisiones d  WITH (NOLOCK)
-                LEFT JOIN dbo.Edificios   e   WITH (NOLOCK) ON e.Id   = d.EdificioId
-                LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.Id = e.DireccionId
-                LEFT JOIN dbo.Comunas     com WITH (NOLOCK) ON com.Id = dir.ComunalId
-                WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
+                  SELECT 1
+                  FROM dbo.Divisiones d  WITH (NOLOCK)
+                  LEFT JOIN dbo.Edificios   e   WITH (NOLOCK) ON e.Id   = d.EdificioId
+                  LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.EdificioId = e.Id
+                  LEFT JOIN dbo.Comunas     com WITH (NOLOCK) ON com.Id = dir.ComunalId
+                  WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
                 )
             """)
             params["region_id"] = int(region_id)
@@ -417,9 +404,8 @@ class CompraService:
         if edificio_id is not None:
             where_parts.append("""
                 EXISTS (
-                SELECT 1
-                FROM dbo.Divisiones d WITH (NOLOCK)
-                WHERE d.Id = c.DivisionId AND d.EdificioId = :edificio_id
+                  SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
+                  WHERE d.Id = c.DivisionId AND d.EdificioId = :edificio_id
                 )
             """)
             params["edificio_id"] = int(edificio_id)
@@ -427,9 +413,8 @@ class CompraService:
         if nombre_opcional:
             where_parts.append("""
                 EXISTS (
-                SELECT 1
-                FROM dbo.Divisiones d WITH (NOLOCK)
-                WHERE d.Id = c.DivisionId
+                  SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
+                  WHERE d.Id = c.DivisionId
                     AND LOWER(ISNULL(d.NombreOpcional,'')) LIKE LOWER(:nombre_opcional_like)
                 )
             """)
@@ -439,93 +424,77 @@ class CompraService:
         size = max(1, min(200, page_size))
         offset = (page - 1) * size
 
-        # Count
-        total_sql = f"""
+        total = int(db.execute(text(f"""
             SELECT COUNT_BIG(1)
             FROM dbo.Compras c WITH (NOLOCK)
             WHERE {where_sql}
             OPTION (RECOMPILE)
-        """
-        total = int(db.execute(text(total_sql), params).scalar() or 0)
+        """), params).scalar() or 0)
 
-        # Rows enriquecidas (sin DimensionServicios)
         rows_sql = f"""
             WITH base AS (
-            SELECT
+              SELECT
                 c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
                 c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura,
                 c.Active, c.EstadoValidacionId
-            FROM dbo.Compras c WITH (NOLOCK)
-            WHERE {where_sql}
+              FROM dbo.Compras c WITH (NOLOCK)
+              WHERE {where_sql}
             )
             SELECT
-                b.*,
+              b.*,
 
-                -- Servicio/Institución desde Divisiones -> Servicios
-                (
-                  SELECT TOP 1 d.ServicioId
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  WHERE d.Id = b.DivisionId
-                ) AS ServicioId,
-                (
-                  SELECT TOP 1 s.Nombre
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = d.ServicioId
-                  WHERE d.Id = b.DivisionId
-                ) AS ServicioNombre,
-                (
-                  SELECT TOP 1 s.InstitucionId
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = d.ServicioId
-                  WHERE d.Id = b.DivisionId
-                ) AS InstitucionId,
+              -- Servicio / Institución (Divisiones -> Servicios)
+              (SELECT TOP 1 d.ServicioId
+                 FROM dbo.Divisiones d WITH (NOLOCK)
+                WHERE d.Id = b.DivisionId) AS ServicioId,
+              (SELECT TOP 1 s.Nombre
+                 FROM dbo.Divisiones d WITH (NOLOCK)
+                 LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = d.ServicioId
+                WHERE d.Id = b.DivisionId) AS ServicioNombre,
+              (SELECT TOP 1 s.InstitucionId
+                 FROM dbo.Divisiones d WITH (NOLOCK)
+                 LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = d.ServicioId
+                WHERE d.Id = b.DivisionId) AS InstitucionId,
 
-                -- Región/Edificio/NombreOpcional/ReportaPMG
-                (
-                  SELECT TOP 1 com.RegionId
-                  FROM dbo.Divisiones  d   WITH (NOLOCK)
-                  LEFT JOIN dbo.Edificios   e   WITH (NOLOCK) ON e.Id   = d.EdificioId
-                  LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.Id = e.DireccionId
-                  LEFT JOIN dbo.Comunas     com WITH (NOLOCK) ON com.Id = dir.ComunalId
-                  WHERE d.Id = b.DivisionId
-                ) AS RegionId,
-                (
-                  SELECT TOP 1 d.EdificioId
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  WHERE d.Id = b.DivisionId
-                ) AS EdificioId,
-                (
-                  SELECT TOP 1 d.NombreOpcional
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  WHERE d.Id = b.DivisionId
-                ) AS NombreOpcional,
-                (
-                  SELECT TOP 1 d.ReportaPMG
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  WHERE d.Id = b.DivisionId
-                ) AS UnidadReportaPMG,
+              -- Región/Edificio/NombreOpcional/ReportaPMG
+              (SELECT TOP 1 com.RegionId
+                 FROM dbo.Divisiones d  WITH (NOLOCK)
+                 LEFT JOIN dbo.Edificios   e   WITH (NOLOCK) ON e.Id   = d.EdificioId
+                 LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.EdificioId = e.Id
+                 LEFT JOIN dbo.Comunas     com WITH (NOLOCK) ON com.Id = dir.ComunalId
+                WHERE d.Id = b.DivisionId) AS RegionId,
 
-                -- Medidores (primer medidor y lista completa)
-                (
-                  SELECT TOP 1 cm.MedidorId
-                  FROM dbo.CompraMedidor cm WITH (NOLOCK)
-                  WHERE cm.CompraId = b.Id
-                  ORDER BY cm.Id ASC
-                ) AS PrimerMedidorId,
-                (
-                  SELECT STRING_AGG(CONVERT(varchar(32), cm.MedidorId), ',')
-                  FROM dbo.CompraMedidor cm WITH (NOLOCK)
-                  WHERE cm.CompraId = b.Id
-                ) AS MedidorIdsCSV
+              (SELECT TOP 1 d.EdificioId
+                 FROM dbo.Divisiones d WITH (NOLOCK)
+                WHERE d.Id = b.DivisionId) AS EdificioId,
+
+              (SELECT TOP 1 d.NombreOpcional
+                 FROM dbo.Divisiones d WITH (NOLOCK)
+                WHERE d.Id = b.DivisionId) AS NombreOpcional,
+
+              (SELECT TOP 1 d.ReportaPMG
+                 FROM dbo.Divisiones d WITH (NOLOCK)
+                WHERE d.Id = b.DivisionId) AS UnidadReportaPMG,
+
+              -- Medidores
+              (SELECT TOP 1 cm.MedidorId
+                 FROM dbo.CompraMedidor cm WITH (NOLOCK)
+                WHERE cm.CompraId = b.Id
+                ORDER BY cm.Id ASC) AS PrimerMedidorId,
+
+              (SELECT STRING_AGG(CONVERT(varchar(32), cm.MedidorId), ',')
+                 FROM dbo.CompraMedidor cm WITH (NOLOCK)
+                WHERE cm.CompraId = b.Id) AS MedidorIdsCSV
 
             FROM base b
             ORDER BY b.FechaCompra DESC, b.Id DESC
             OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
             OPTION (RECOMPILE)
         """
-
-        rows_params = dict(params); rows_params.update({"offset": offset, "size": size})
-        rs = db.execute(text(rows_sql), rows_params).mappings().all()
+        rs = db.execute(
+            text(rows_sql),
+            {**params, "offset": offset, "size": size},
+        ).mappings().all()
 
         items: List[dict] = []
         for r in rs:
@@ -535,7 +504,7 @@ class CompraService:
                 "Id": int(r["Id"]),
                 "DivisionId": int(r["DivisionId"]),
                 "EnergeticoId": int(r["EnergeticoId"]),
-                "NumeroClienteId": int(r["NumeroClienteId"]) if r["NumeroClienteId"] is not None else None,
+                "NumeroClienteId": int(r["NumeroClienteId"]) if r.get("NumeroClienteId") is not None else None,
                 "FechaCompra": _fmt_dt(r["FechaCompra"]),
                 "Consumo": float(r["Consumo"] or 0),
                 "Costo": float(r["Costo"] or 0),
@@ -543,16 +512,13 @@ class CompraService:
                 "FinLectura": _fmt_dt(r["FinLectura"]),
                 "Active": bool(r["Active"]),
                 "EstadoValidacionId": r.get("EstadoValidacionId"),
-
                 "ServicioId": int(r["ServicioId"]) if r.get("ServicioId") is not None else None,
                 "ServicioNombre": r.get("ServicioNombre"),
                 "InstitucionId": int(r["InstitucionId"]) if r.get("InstitucionId") is not None else None,
-
                 "RegionId": int(r["RegionId"]) if r.get("RegionId") is not None else None,
                 "EdificioId": int(r["EdificioId"]) if r.get("EdificioId") is not None else None,
                 "NombreOpcional": r.get("NombreOpcional"),
                 "UnidadReportaPMG": int(r["UnidadReportaPMG"]) if r.get("UnidadReportaPMG") is not None else None,
-
                 "PrimerMedidorId": int(r["PrimerMedidorId"]) if r.get("PrimerMedidorId") is not None else None,
                 "MedidorIds": med_list,
             })
@@ -562,45 +528,44 @@ class CompraService:
     # DETALLE ENRIQUECIDO POR ID
     # ─────────────────────────────────────────────────────────────────────────────
     def get_context(self, db: Session, division_id: int, compra_id: int) -> dict:
-        # Servicio / Institución directo en Divisiones -> Servicios
-        serv_sql = """
+        # Servicio / Institución
+        serv = db.execute(text("""
             SELECT TOP 1 d.ServicioId, s.Nombre AS ServicioNombre, s.InstitucionId
             FROM dbo.Divisiones d WITH (NOLOCK)
             LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = d.ServicioId
             WHERE d.Id = :div_id
-        """
-        serv = db.execute(text(serv_sql), {"div_id": int(division_id)}).mappings().first()
-        servicio_id = int(serv["ServicioId"]) if serv and serv["ServicioId"] is not None else None
-        servicio_nombre = str(serv["ServicioNombre"]) if serv and serv["ServicioNombre"] is not None else None
-        institucion_id = int(serv["InstitucionId"]) if serv and serv["InstitucionId"] is not None else None
+        """), {"div_id": int(division_id)}).mappings().first()
 
-        # División -> Edificios -> Direcciones -> Comunas (RegionId) + otros de Divisiones
-        div_sql = """
-            SELECT TOP 1 
-                   com.RegionId, 
-                   d.EdificioId, 
-                   d.NombreOpcional, 
-                   d.ReportaPMG
-            FROM dbo.Divisiones  d   WITH (NOLOCK)
+        servicio_id     = int(serv["ServicioId"])     if serv and serv["ServicioId"]     is not None else None
+        servicio_nombre = str(serv["ServicioNombre"]) if serv and serv["ServicioNombre"] is not None else None
+        institucion_id  = int(serv["InstitucionId"])  if serv and serv["InstitucionId"]  is not None else None
+
+        # Región (cadena correcta) + otros campos de Divisiones
+        drow = db.execute(text("""
+            SELECT TOP 1
+                d.EdificioId,
+                d.NombreOpcional,
+                d.ReportaPMG,
+                com.RegionId
+            FROM dbo.Divisiones d  WITH (NOLOCK)
             LEFT JOIN dbo.Edificios   e   WITH (NOLOCK) ON e.Id   = d.EdificioId
-            LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.Id = e.DireccionId
+            LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.EdificioId = e.Id
             LEFT JOIN dbo.Comunas     com WITH (NOLOCK) ON com.Id = dir.ComunalId
             WHERE d.Id = :div_id
-        """
-        drow = db.execute(text(div_sql), {"div_id": int(division_id)}).mappings().first()
-        region_id = int(drow["RegionId"]) if drow and drow["RegionId"] is not None else None
-        edificio_id = int(drow["EdificioId"]) if drow and drow["EdificioId"] is not None else None
-        nombre_opcional = str(drow["NombreOpcional"]) if drow and drow["NombreOpcional"] is not None else None
-        unidad_reporta_pmg = int(drow["ReportaPMG"]) if drow and drow["ReportaPMG"] is not None else None
+        """), {"div_id": int(division_id)}).mappings().first()
+
+        region_id        = int(drow["RegionId"])        if drow and drow["RegionId"]        is not None else None
+        edificio_id      = int(drow["EdificioId"])      if drow and drow["EdificioId"]      is not None else None
+        nombre_opcional  = str(drow["NombreOpcional"])  if drow and drow["NombreOpcional"]  is not None else None
+        unidad_reporta   = int(drow["ReportaPMG"])      if drow and drow["ReportaPMG"]      is not None else None
 
         # Medidores de la compra
-        meds_sql = """
+        med_ids = [int(r[0]) for r in db.execute(text("""
             SELECT cm.MedidorId
             FROM dbo.CompraMedidor cm WITH (NOLOCK)
             WHERE cm.CompraId = :cid
             ORDER BY cm.Id
-        """
-        med_ids = [int(r[0]) for r in db.execute(text(meds_sql), {"cid": int(compra_id)}).all()]
+        """), {"cid": int(compra_id)}).all()]
         primer_medidor = med_ids[0] if med_ids else None
 
         return {
@@ -610,13 +575,12 @@ class CompraService:
             "RegionId": region_id,
             "EdificioId": edificio_id,
             "NombreOpcional": nombre_opcional,
-            "UnidadReportaPMG": unidad_reporta_pmg,
+            "UnidadReportaPMG": unidad_reporta,
             "MedidorIds": med_ids,
             "PrimerMedidorId": primer_medidor,
         }
 
     def get_full(self, db: Session, compra_id: int) -> dict:
-        """Devuelve dict de detalle enriquecido (Compra + relaciones)."""
         c = self.get(db, compra_id)
         items = self._items_by_compra(db, compra_id)
         base = {
