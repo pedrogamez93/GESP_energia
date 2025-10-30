@@ -27,7 +27,7 @@ def list_compras(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     DivisionId: int | None = Query(default=None),
-    ServicioId: int | None = Query(default=None),
+    ServicioId: int | None = Query(default=None),   # via Divisiones.ServicioId
     EnergeticoId: int | None = Query(default=None),
     NumeroClienteId: int | None = Query(default=None),
     FechaDesde: str | None = Query(default=None),
@@ -57,15 +57,21 @@ def get_compra(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return dto
 
 
-@router.get("/{compra_id}/detalle", response_model=CompraFullDTO,
-            summary="Detalle enriquecido (compra + items + servicio/institución + región/edificio + medidores)")
+@router.get(
+    "/{compra_id}/detalle",
+    response_model=CompraFullDTO,
+    summary="Detalle enriquecido (compra + items + servicio/institución + región/edificio + medidores)"
+)
 def get_compra_detalle(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     data = svc.get_full(db, compra_id)
     return CompraFullDTO.model_validate(data)
 
 
-@router.get("/{compra_id}/full", response_model=CompraListFullDTO,
-            summary="Detalle enriquecido de compra por Id (incluye institución, servicio, unidad, energético, cliente, medidor, región, edificio, etc.)")
+@router.get(
+    "/{compra_id}/full",
+    response_model=CompraListFullDTO,
+    summary="Detalle enriquecido de compra por Id (misma forma de list_full, filtrada por Id)"
+)
 def get_compra_full(compra_id: int, db: DbDep):
     total, items = svc.list_full(
         db, q=None, page=1, page_size=1,
