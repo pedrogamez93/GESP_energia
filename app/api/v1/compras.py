@@ -11,6 +11,7 @@ from app.schemas.compra import (
     CompraMedidorItemDTO, CompraItemsPayload, CompraPage
 )
 from app.schemas.compra import CompraFullPage, CompraListFullDTO
+from app.schemas.compra import CompraFullDTO 
 from app.services.compra_service import CompraService
 
 router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
@@ -53,6 +54,12 @@ def get_compra(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     dto = CompraDTO.model_validate(c)
     dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
     return dto
+
+@router.get("/{compra_id}/detalle", response_model=CompraFullDTO,
+            summary="Detalle enriquecido (compra + items + servicio/institución + región/edificio + medidores)")
+def get_compra_detalle(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
+    data = svc.get_full(db, compra_id)
+    return CompraFullDTO.model_validate(data)
 
 
 @router.post("", response_model=CompraDTO, status_code=status.HTTP_201_CREATED, summary="(ADMINISTRADOR) Crear compra/consumo")

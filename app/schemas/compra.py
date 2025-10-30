@@ -128,3 +128,26 @@ class CompraFullPage(BaseModel):
     page: int
     page_size: int
     items: List[CompraListFullDTO]
+
+    # --- CONTEXTO PARA DETALLE ENRIQUECIDO (AÑADIR) ---
+class CompraContextoDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    # Servicio / Institución (DimensionServicios -> Servicios)
+    ServicioId: Optional[int] = None
+    ServicioNombre: Optional[str] = None
+    InstitucionId: Optional[int] = None
+
+    # División enriquecida
+    RegionId: Optional[int] = None
+    EdificioId: Optional[int] = None
+    NombreOpcional: Optional[str] = None
+    UnidadReportaPMG: Optional[int] = None  # respeta tu tipo actual (0/1)
+
+    # Medidores asociados a la compra
+    MedidorIds: List[int] = Field(default_factory=list)
+    PrimerMedidorId: Optional[int] = None
+
+
+class CompraFullDTO(CompraDTO, CompraContextoDTO):
+    """Detalle por ID enriquecido: CompraDTO + contexto jerárquico."""
+    pass

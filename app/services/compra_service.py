@@ -542,3 +542,92 @@ class CompraService:
                 "MedidorIds": med_list,
             })
         return total, items
+    
+        # --- CONTEXTO PARA DETALLE ENRIQUECIDO (AÑADIR) ---
+    def get_context(self, db: Session, division_id: int, compra_id: int) -> dict:
+        # Servicio / Institución (último vínculo en DimensionServicios)
+        serv_sql = """
+            SELECT TOP 1 ds.ServicioId, s.Nombre AS ServicioNombre, s.InstitucionId
+            FROM dbo.DimensionServicios ds WITH (NOLOCK)
+            LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = ds.ServicioId
+            WHERE ds.DivisionId = :div_id
+            ORDER BY ds.Id DESC
+        """
+        serv = db.execute(text(serv_sql), {"div_id": int(division_id)}).mappings().first()
+        servicio_id = int(serv["ServicioId"]) if serv and serv["ServicioId"] is not None else None
+        servicio_nombre = str(serv["ServicioNombre"]) if serv and serv["ServicioNombre"] is not None else None
+        institucion_id = int(serv["InstitucionId"]) if serv and serv["InstitucionId"] is not None else None
+
+        # División -> Región / Edificio / NombreOpcional / ReportaPMG
+        div_sql = """
+            SELECT TOP 1 dir.RegionId, d.EdificioId, d.NombreOpcional, d.ReportaPMG
+            FROM dbo.Divisiones d WITH (NOLOCK)
+            LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.Id = d.DireccionId
+            WHERE d.Id = :div_id
+        """
+        drow = db.execute(text(div_sql), {"div_id": int(division_id)}).mappings().first()
+        region_id = int(drow["RegionId"]) if drow and drow["RegionId"] is not None else None
+        edificio_id = int(drow["EdificioId"]) if drow and drow["EdificioId"] is not None else None
+        nombre_opcional = str(drow["NombreOpcional"]) if drow and drow["NombreOpcional"] is not None else None
+        unidad_reporta_pmg = int(drow["ReportaPMG"]) if drow and drow["ReportaPMG"] is not None else None
+
+        # Medidores de la compra
+        meds_sql = """
+            SELECT cm.MedidorId
+            FROM dbo.CompraMedidor cm WITH (NOLOCK)
+            WHERE cm.CompraId = :cid
+            ORDER BY cm.Id
+        """
+        med_ids = [int(r[0]) for r in db.execute(text(meds_sql), {"cid": int(compra_id)}).all()]
+        primer_medidor = med_ids[0] if med_ids else None
+
+        return {
+            "ServicioId": servicio_id,
+            "ServicioNombre": servicio_nombre,
+            "InstitucionId": institucion_id,
+            "RegionId": region_id,
+            "EdificioId": edificio_id,
+            "NombreOpcional": nombre_opcional,
+            "UnidadReportaPMG": unidad_reporta_pmg,
+            "MedidorIds": med_ids,
+            "PrimerMedidorId": primer_medidor,
+        }
+
+    def get_full(self, db: Session, compra_id: int) -> dict:
+        """Devuelve dict con CompraDTO + contexto (para CompraFullDTO)."""
+        c = self.get(db, compra_id)
+        items = self._items_by_compra(db, compra_id)
+        base = {
+            # Campos de CompraDTO
+            "Id": c.Id,
+            "DivisionId": c.DivisionId,
+            "EnergeticoId": c.EnergeticoId,
+            "NumeroClienteId": c.NumeroClienteId,
+            "FechaCompra": c.FechaCompra,
+            "Consumo": c.Consumo,
+            "Costo": c.Costo,
+            "InicioLectura": c.InicioLectura,
+            "FinLectura": c.FinLectura,
+            "Active": bool(c.Active),
+            "UnidadMedidaId": c.UnidadMedidaId,
+            "Observacion": c.Observacion,
+            "FacturaId": c.FacturaId,
+            "EstadoValidacionId": c.EstadoValidacionId,
+            "RevisadoPor": c.RevisadoPor,
+            "ReviewedAt": c.ReviewedAt,
+            "CreatedByDivisionId": c.CreatedByDivisionId,
+            "ObservacionRevision": c.ObservacionRevision,
+            "SinMedidor": bool(c.SinMedidor),
+            "Items": [
+                {
+                    "Id": it.Id,
+                    "Consumo": it.Consumo,
+                    "MedidorId": it.MedidorId,
+                    "ParametroMedicionId": it.ParametroMedicionId,
+                    "UnidadMedidaId": it.UnidadMedidaId,
+                } for it in items
+            ],
+        }
+        ctx = self.get_context(db, c.DivisionId, compra_id)
+        base.update(ctx)
+        return base
