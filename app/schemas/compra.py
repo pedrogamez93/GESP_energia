@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Optional, List
+from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
+
 
 class CompraMedidorItemDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -10,11 +12,13 @@ class CompraMedidorItemDTO(BaseModel):
     ParametroMedicionId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
 
+
 class CompraMedidorItemCreate(BaseModel):
     Consumo: float
     MedidorId: int
     ParametroMedicionId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
+
 
 class CompraListDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -22,12 +26,13 @@ class CompraListDTO(BaseModel):
     DivisionId: int
     EnergeticoId: int
     NumeroClienteId: Optional[int] = None
-    FechaCompra: str
+    FechaCompra: datetime
     Consumo: float
     Costo: float
-    InicioLectura: str
-    FinLectura: str
+    InicioLectura: datetime
+    FinLectura: datetime
     Active: bool = True
+
 
 class CompraDTO(CompraListDTO):
     model_config = ConfigDict(from_attributes=True)
@@ -36,19 +41,20 @@ class CompraDTO(CompraListDTO):
     FacturaId: int
     EstadoValidacionId: Optional[str] = None
     RevisadoPor: Optional[str] = None
-    ReviewedAt: Optional[str] = None
+    ReviewedAt: Optional[datetime] = None
     CreatedByDivisionId: int
     ObservacionRevision: Optional[str] = None
     SinMedidor: bool = False
     Items: List[CompraMedidorItemDTO] = Field(default_factory=list)
 
+
 class CompraCreate(BaseModel):
     Consumo: float
-    InicioLectura: str
-    FinLectura: str
+    InicioLectura: datetime
+    FinLectura: datetime
     DivisionId: int
     EnergeticoId: int
-    FechaCompra: str
+    FechaCompra: datetime
     Costo: float
     FacturaId: int
     NumeroClienteId: Optional[int] = None
@@ -59,13 +65,14 @@ class CompraCreate(BaseModel):
     SinMedidor: bool = False
     Items: List[CompraMedidorItemCreate] = Field(default_factory=list)
 
+
 class CompraUpdate(BaseModel):
     Consumo: Optional[float] = None
-    InicioLectura: Optional[str] = None
-    FinLectura: Optional[str] = None
+    InicioLectura: Optional[datetime] = None
+    FinLectura: Optional[datetime] = None
     DivisionId: Optional[int] = None
     EnergeticoId: Optional[int] = None
-    FechaCompra: Optional[str] = None
+    FechaCompra: Optional[datetime] = None
     Costo: Optional[float] = None
     FacturaId: Optional[int] = None
     NumeroClienteId: Optional[int] = None
@@ -73,13 +80,15 @@ class CompraUpdate(BaseModel):
     Observacion: Optional[str] = None
     EstadoValidacionId: Optional[str] = None
     RevisadoPor: Optional[str] = None
-    ReviewedAt: Optional[str] = None
+    ReviewedAt: Optional[datetime] = None
     CreatedByDivisionId: Optional[int] = None
     ObservacionRevision: Optional[str] = None
     SinMedidor: Optional[bool] = None
 
+
 class CompraItemsPayload(BaseModel):
     Items: List[CompraMedidorItemCreate] = Field(default_factory=list)
+
 
 class CompraPage(BaseModel):
     total: int

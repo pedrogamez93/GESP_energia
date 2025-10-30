@@ -1,26 +1,40 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional, List, Tuple
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, delete, extract, text
+
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
 
 CM_TBL = CompraMedidor.__table__
 
-def _to_dt(s: str | None) -> datetime | None:
-    if not s:
+
+def _to_dt(s: str | datetime | None) -> datetime | None:
+    """
+    Acepta ISO string (con o sin 'Z'), solo fecha 'YYYY-MM-DD',
+    datetime ya construido, o None.
+    """
+    if s is None or s == "":
         return None
+    if isinstance(s, datetime):
+        return s
+    # Normaliza 'Z' => '+00:00'
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except Exception:
-        return datetime.strptime(s[:10], "%Y-%m-%d")
+        # Fallback a solo fecha
+        return datetime.strptime(str(s)[:10], "%Y-%m-%d")
+
 
 def _fmt_dt(dt: datetime | None) -> str | None:
+    """Formatea a ISO sin microsegundos (se usa en list())."""
     if not dt:
         return None
     return dt.replace(microsecond=0).isoformat()
+
 
 class CompraService:
     def list(
@@ -36,7 +50,7 @@ class CompraService:
         fecha_hasta: Optional[str] = None,
         active: Optional[bool] = True,
     ) -> Tuple[int, List[dict]]:
-        # Evitar bloqueos de lectura grandes (equivalente al NOLOCK de EF/Dapper)
+        # Evitar bloqueos de lectura grandes (equivalente al NOLOCK)
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
         where_parts: list[str] = ["1=1"]
@@ -86,7 +100,8 @@ class CompraService:
             OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
             OPTION (RECOMPILE)
         """
-        rows_params = dict(params); rows_params.update({"offset": offset, "size": size})
+        rows_params = dict(params)
+        rows_params.update({"offset": offset, "size": size})
         rs = db.execute(text(rows_sql), rows_params).mappings().all()
 
         items: List[dict] = []
