@@ -1,28 +1,25 @@
-# app/services/tipo_equipo_calefaccion_service.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Iterable
 
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.inspection import inspect as sa_inspect
+from sqlalchemy.exc import SQLAlchemyError
 
-# Ajusta este import a tu estructura real:
-# Si tu modelo vive en otra ruta, por ejemplo app.models.catalogos, cámbialo.
-from app.db.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
+# Ajusta este import a tu estructura real de modelos
+from app.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
+
 
 def _to_snake(name: str) -> str:
     """
-    Convierte claves CamelCase/PascalCase a snake_case.
-    Ej: 'CreatedAt' -> 'created_at', 'tipoEquipo' -> 'tipo_equipo'
+    Convierte CamelCase/PascalCase a snake_case.
+    Ej: CreatedAt -> created_at ; Nombre -> nombre
     """
-    if not name:
-        return name
-    out = []
-    prev_lower = False
+    out, prev_lower = [], False
     prev_char = ""
-    for ch in name:
+    for ch in name or "":
         if ch.isupper() and (prev_lower or (prev_char and prev_char.isalpha())):
             out.append("_")
         out.append(ch.lower())
@@ -31,139 +28,80 @@ def _to_snake(name: str) -> str:
     return "".join(out)
 
 
-def _as_dict(payload: Any) -> Dict[str, Any]:
+def _only_model_fields(model, data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Convierte el payload a dict sin campos no seteados si es BaseModel.
-    """
-    if hasattr(payload, "model_dump"):  # Pydantic v2
-        return payload.model_dump(exclude_unset=True)
-    if hasattr(payload, "dict"):  # Pydantic v1
-        return payload.dict(exclude_unset=True)
-    if isinstance(payload, dict):
-        return dict(payload)
-    raise TypeError("El payload debe ser un dict o un BaseModel de Pydantic.")
-
-
-def _model_field_names(model) -> Tuple[set, set]:
-    """
-    Retorna dos sets: (column_names, relationship_names) del modelo SQLAlchemy.
-    Sirve para filtrar kwargs válidos para el constructor.
+    Filtra el dict dejando únicamente claves que existen en el modelo
+    (columnas y relaciones). Evita TypeError por kwargs inválidos.
     """
     mapper = sa_inspect(model)
     cols = {attr.key for attr in mapper.attrs if hasattr(attr, "columns")}
     rels = {rel.key for rel in mapper.relationships}
-    return cols, rels
-
-
-def _filter_to_model_fields(model, data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Deja solo las claves que el modelo soporta: columnas + relaciones.
-    """
-    column_names, relationship_names = _model_field_names(model)
-    allowed = column_names | relationship_names
+    allowed = cols | rels
     return {k: v for k, v in data.items() if k in allowed}
+
+
+def _normalize_payload(payload: Any) -> Dict[str, Any]:
+    """
+    Acepta BaseModel v2, BaseModel v1 o dict. Convierte claves a snake_case.
+    """
+    if hasattr(payload, "model_dump"):  # Pydantic v2
+        raw = payload.model_dump(exclude_unset=True)
+    elif hasattr(payload, "dict"):  # Pydantic v1
+        raw = payload.dict(exclude_unset=True)
+    elif isinstance(payload, dict):
+        raw = dict(payload)
+    else:
+        raise TypeError("payload debe ser dict o Pydantic BaseModel")
+
+    return {_to_snake(k): v for k, v in raw.items()}
 
 
 class TipoEquipoCalefaccionService:
     """
-    Servicio para el catálogo de Tipos de Equipos de Calefacción.
-    Maneja CRUD, paginación y campos de auditoría si existen en el modelo.
+    Servicio CRUD para TipoEquipoCalefaccion con:
+    - Normalización de claves (Camel/Pascal -> snake_case)
+    - Auditoría created_at/created_by/updated_at/updated_by
+    - Filtrado estricto de campos válidos del modelo
     """
 
-    # --------------------------
-    # Lectura / Listado
-    # --------------------------
+    # ---------- READ ----------
+    def get(self, db: Session, id_: int) -> Optional[TipoEquipoCalefaccion]:
+        return db.get(TipoEquipoCalefaccion, id_)
+
     def list(
         self,
         db: Session,
-        page: int = 1,
-        page_size: int = 10,
-        search: Optional[str] = None,
-        is_active: Optional[bool] = None,
-        order_by: Optional[Any] = None,
-    ) -> Dict[str, Any]:
-        """
-        Retorna una página del catálogo. Aplica filtros simples.
-        """
+        *,
+        skip: int = 0,
+        limit: int = 100,
+        only_active: Optional[bool] = None,
+        order_by: Optional[Iterable[Any]] = None,
+    ) -> list[TipoEquipoCalefaccion]:
         q = db.query(TipoEquipoCalefaccion)
+        if only_active is True:
+            if "is_active" in {c.key for c in sa_inspect(TipoEquipoCalefaccion).attrs if hasattr(c, "columns")}:
+                q = q.filter(TipoEquipoCalefaccion.is_active.is_(True))
+        if order_by:
+            q = q.order_by(*order_by)
+        return q.offset(skip).limit(limit).all()
 
-        # Filtro por is_active si la columna existe
-        cols, _ = _model_field_names(TipoEquipoCalefaccion)
-        if is_active is not None and "is_active" in cols:
-            q = q.filter(TipoEquipoCalefaccion.is_active == is_active)
-
-        # Búsqueda simple por nombre/descripcion si existen
-        if search:
-            if "nombre" in cols and "descripcion" in cols:
-                q = q.filter(
-                    (TipoEquipoCalefaccion.nombre.ilike(f"%{search}%"))
-                    | (TipoEquipoCalefaccion.descripcion.ilike(f"%{search}%"))
-                )
-            elif "nombre" in cols:
-                q = q.filter(TipoEquipoCalefaccion.nombre.ilike(f"%{search}%"))
-
-        total = q.count()
-
-        # Orden
-        if order_by is not None:
-            q = q.order_by(order_by)
-        elif "nombre" in cols:
-            q = q.order_by(TipoEquipoCalefaccion.nombre.asc())
-
-        # Paginación
-        page = max(1, int(page or 1))
-        page_size = max(1, min(100, int(page_size or 10)))
-        items = q.offset((page - 1) * page_size).limit(page_size).all()
-
-        return {
-            "items": items,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "pages": (total + page_size - 1) // page_size,
-        }
-
-    def get(self, db: Session, id_: int) -> Optional[TipoEquipoCalefaccion]:
-        return db.query(TipoEquipoCalefaccion).get(id_)
-
-    # --------------------------
-    # Creación
-    # --------------------------
+    # ---------- CREATE ----------
     def create(self, db: Session, payload: Any, user: Optional[str] = None) -> TipoEquipoCalefaccion:
-        """
-        Crea un registro nuevo convirtiendo claves a snake_case y
-        seteando created_at/created_by si existen.
-        """
-        # 1) normaliza el payload (dict o Pydantic)
-        if hasattr(payload, "model_dump"):  # Pydantic v2
-            raw = payload.model_dump(exclude_unset=True)
-        elif hasattr(payload, "dict"):  # Pydantic v1
-            raw = payload.dict(exclude_unset=True)
-        elif isinstance(payload, dict):
-            raw = dict(payload)
-        else:
-            raise TypeError("El payload debe ser un dict o un BaseModel de Pydantic.")
+        normalized = _normalize_payload(payload)
 
-        # 2) CamelCase/PascalCase -> snake_case
-        normalized = {_to_snake(k): v for k, v in raw.items()}
-
-        cols, _ = _model_field_names(TipoEquipoCalefaccion)
-
-        # Campos de auditoría (si existen en el modelo)
+        # Auditoría si existen esas columnas
+        cols = {c.key for c in sa_inspect(TipoEquipoCalefaccion).attrs if hasattr(c, "columns")}
         if "created_at" in cols and "created_at" not in normalized:
             normalized["created_at"] = datetime.now(timezone.utc)
         if "created_by" in cols and user:
             normalized["created_by"] = user
-        # Si el modelo tiene is_active y no viene, por defecto True
         if "is_active" in cols and "is_active" not in normalized:
             normalized["is_active"] = True
 
-        # Filtrar solo campos válidos para evitar errores con nombres no válidos
-        data = _filter_to_model_fields(TipoEquipoCalefaccion, normalized)
+        data = _only_model_fields(TipoEquipoCalefaccion, normalized)
 
-        obj = TipoEquipoCalefaccion(**data)
+        obj = TipoEquipoCalefaccion(**data)  # ← ya no pasará kwargs inválidos (e.g., CreatedAt)
         db.add(obj)
-
         try:
             db.commit()
             db.refresh(obj)
@@ -172,32 +110,21 @@ class TipoEquipoCalefaccionService:
             db.rollback()
             raise
 
-    # --------------------------
-    # Actualización
-    # --------------------------
-    def update(
-        self,
-        db: Session,
-        id_: int,
-        payload: Any,
-        user: Optional[str] = None,
-    ) -> TipoEquipoCalefaccion:
+    # ---------- UPDATE ----------
+    def update(self, db: Session, id_: int, payload: Any, user: Optional[str] = None) -> TipoEquipoCalefaccion:
         obj = self.get(db, id_)
         if not obj:
             raise ValueError(f"TipoEquipoCalefaccion id={id_} no encontrado")
 
-        raw = _as_dict(payload)
-        normalized = {_to_snake(k): v for k, v in raw.items()}
+        normalized = _normalize_payload(payload)
 
-        cols, _ = _model_field_names(TipoEquipoCalefaccion)
-
-        # Auditoría de update
+        cols = {c.key for c in sa_inspect(TipoEquipoCalefaccion).attrs if hasattr(c, "columns")}
         if "updated_at" in cols:
             normalized["updated_at"] = datetime.now(timezone.utc)
         if "updated_by" in cols and user:
             normalized["updated_by"] = user
 
-        data = _filter_to_model_fields(TipoEquipoCalefaccion, normalized)
+        data = _only_model_fields(TipoEquipoCalefaccion, normalized)
 
         for k, v in data.items():
             setattr(obj, k, v)
@@ -210,19 +137,27 @@ class TipoEquipoCalefaccionService:
             db.rollback()
             raise
 
-    # --------------------------
-    # Activar / Desactivar (opcional)
-    # --------------------------
+    # ---------- DELETE ----------
+    def delete(self, db: Session, id_: int) -> None:
+        obj = self.get(db, id_)
+        if not obj:
+            return
+        db.delete(obj)
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            raise
+
+    # ---------- ACTIVATE / DEACTIVATE ----------
     def set_active(self, db: Session, id_: int, active: bool, user: Optional[str] = None) -> TipoEquipoCalefaccion:
         obj = self.get(db, id_)
         if not obj:
             raise ValueError(f"TipoEquipoCalefaccion id={id_} no encontrado")
 
-        cols, _ = _model_field_names(TipoEquipoCalefaccion)
-        if "is_active" not in cols:
-            raise ValueError("El modelo no tiene columna is_active")
-
-        obj.is_active = bool(active)
+        cols = {c.key for c in sa_inspect(TipoEquipoCalefaccion).attrs if hasattr(c, "columns")}
+        if "is_active" in cols:
+            obj.is_active = active
         if "updated_at" in cols:
             obj.updated_at = datetime.now(timezone.utc)
         if "updated_by" in cols and user:
@@ -236,42 +171,6 @@ class TipoEquipoCalefaccionService:
             db.rollback()
             raise
 
-    # --------------------------
-    # Borrado (soft/hard)
-    # --------------------------
-    def delete(self, db: Session, id_: int, hard: bool = False, user: Optional[str] = None) -> None:
-        obj = self.get(db, id_)
-        if not obj:
-            return
 
-        cols, _ = _model_field_names(TipoEquipoCalefaccion)
-
-        if not hard and ("is_active" in cols or "deleted_at" in cols):
-            # Soft delete
-            if "is_active" in cols:
-                obj.is_active = False
-            if "deleted_at" in cols:
-                obj.deleted_at = datetime.now(timezone.utc)
-            if "updated_at" in cols:
-                obj.updated_at = datetime.now(timezone.utc)
-            if "updated_by" in cols and user:
-                obj.updated_by = user
-
-            try:
-                db.commit()
-                return
-            except SQLAlchemyError:
-                db.rollback()
-                raise
-        else:
-            # Hard delete
-            try:
-                db.delete(obj)
-                db.commit()
-            except SQLAlchemyError:
-                db.rollback()
-                raise
-
-
-# Instancia reutilizable del servicio
-svc = TipoEquipoCalefaccionService()
+# Instancia reusable del servicio
+svc_tipo_equipo_calefaccion = TipoEquipoCalefaccionService()
