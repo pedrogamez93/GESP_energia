@@ -3,7 +3,6 @@ from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 
-
 class CompraMedidorItemDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     Id: int
@@ -95,3 +94,37 @@ class CompraPage(BaseModel):
     page: int
     page_size: int
     items: List[CompraListDTO]
+
+class CompraListFullDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    Id: int
+    DivisionId: int
+    EnergeticoId: int
+    NumeroClienteId: Optional[int] = None
+    FechaCompra: str
+    Consumo: float
+    Costo: float
+    InicioLectura: str
+    FinLectura: str
+    Active: bool = True
+
+    # Enriquecidos
+    ServicioId: Optional[int] = None
+    ServicioNombre: Optional[str] = None
+    InstitucionId: Optional[int] = None
+    RegionId: Optional[int] = None
+    EdificioId: Optional[int] = None
+    NombreOpcional: Optional[str] = None
+    UnidadReportaPMG: Optional[int] = None  # 0/1 en origen
+    EstadoValidacionId: Optional[str] = None
+
+    # Puede haber varios medidores; devuelvo ambos formatos:
+    MedidorIds: List[int] = Field(default_factory=list)
+    PrimerMedidorId: Optional[int] = None
+
+
+class CompraFullPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[CompraListFullDTO]
