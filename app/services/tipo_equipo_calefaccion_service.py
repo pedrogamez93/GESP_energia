@@ -10,8 +10,7 @@ from sqlalchemy.inspection import inspect as sa_inspect
 
 # Ajusta este import a tu estructura real:
 # Si tu modelo vive en otra ruta, por ejemplo app.models.catalogos, cámbialo.
-from app.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion  # <- AJUSTAR SI ES NECESARIO
-
+from app.db.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
 
 def _to_snake(name: str) -> str:
     """
