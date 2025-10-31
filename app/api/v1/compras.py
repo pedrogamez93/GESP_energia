@@ -67,23 +67,18 @@ def get_compra_detalle(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return CompraFullDTO.model_validate(data)
 
 
-@router.get(
-    "/{compra_id}/full",
-    response_model=CompraListFullDTO,
-    summary="Detalle enriquecido de compra por Id (para buscador)"
-)
-def get_compra_full(compra_id: int, db: DbDep):
-    total, items = svc.list_full(
-        db, q=None, page=1, page_size=1,
-        division_id=None, servicio_id=None, energetico_id=None,
-        numero_cliente_id=None, fecha_desde=None, fecha_hasta=None,
-        active=None, medidor_id=None, estado_validacion_id=None,
-        region_id=None, edificio_id=None, nombre_opcional=None
-    )
-    result = [x for x in items if x["Id"] == compra_id]
-    if not result:
-        raise HTTPException(status_code=404, detail="Compra no encontrada")
-    return CompraListFullDTO.model_validate(result[0])
+@router.get("/{compra_id}/detalle", summary="Detalle enriquecido (compra + items + servicio/institución + región + medidores)")
+def get_compra_detalle(
+    compra_id: Annotated[int, Path(ge=1)],
+    db: DbDep
+):
+    """
+    Devuelve **detalle enriquecido** (Compra + Items + Servicio/Institución + Región + Medidores)
+    usando el service centralizado (sin SQL crudo en el endpoint).
+    """
+    svc = CompraService()
+    data = svc.get_full(db, compra_id)   # <-- usa get_context con Direcciones->ComunaId
+    return data
 
 
 @router.post("", response_model=CompraDTO, status_code=status.HTTP_201_CREATED, summary="(ADMINISTRADOR) Crear compra/consumo")
