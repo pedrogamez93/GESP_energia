@@ -1,5 +1,6 @@
 # app/services/compra_service.py
 from __future__ import annotations
+import logging
 from datetime import datetime
 from typing import Optional, List, Tuple
 
@@ -9,6 +10,8 @@ from sqlalchemy import func, and_, delete, extract, text
 
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
+
+Log = logging.getLogger(__name__)
 
 CM_TBL = CompraMedidor.__table__
 
@@ -523,7 +526,9 @@ class CompraService:
     # DETALLE ENRIQUECIDO POR ID (ahora con Dirección completa)
     # ─────────────────────────────────────────────────────────────────────────────
     def get_context(self, db: Session, division_id: int, compra_id: int) -> dict:
-        # Servicio / Institución directo en Divisiones -> Servicios
+        Log.debug(f"[get_context] Iniciando con division_id={division_id}, compra_id={compra_id}")
+
+        # 1️⃣ SERVICIO / INSTITUCIÓN
         serv_sql = """
             SELECT TOP 1 d.ServicioId, s.Nombre AS ServicioNombre, s.InstitucionId
             FROM dbo.Divisiones d WITH (NOLOCK)
@@ -531,71 +536,80 @@ class CompraService:
             WHERE d.Id = :div_id
         """
         serv = db.execute(text(serv_sql), {"div_id": int(division_id)}).mappings().first()
-        servicio_id = int(serv["ServicioId"]) if serv and serv["ServicioId"] is not None else None
-        servicio_nombre = str(serv["ServicioNombre"]) if serv and serv["ServicioNombre"] is not None else None
-        institucion_id = int(serv["InstitucionId"]) if serv and serv["InstitucionId"] is not None else None
+        servicio_id = serv.get("ServicioId") if serv else None
+        servicio_nombre = serv.get("ServicioNombre") if serv else None
+        institucion_id = serv.get("InstitucionId") if serv else None
+        Log.debug(f"[get_context] Servicio → id={servicio_id}, nombre={servicio_nombre}, institucion={institucion_id}")
 
-        # División base para obtener edificio y otros campos
+        # 2️⃣ DIVISIÓN BASE
         div_sql = """
             SELECT TOP 1
                 d.EdificioId,
-                d.Nombre       AS NombreOpcional,
-                d.ReportaPMG   AS ReportaPMG,
-                d.ComunaId     AS DivisionComunaId
+                d.Nombre AS NombreOpcional,
+                d.ReportaPMG AS ReportaPMG,
+                d.ComunaId AS DivisionComunaId
             FROM dbo.Divisiones d WITH (NOLOCK)
             WHERE d.Id = :div_id
         """
         drow = db.execute(text(div_sql), {"div_id": int(division_id)}).mappings().first()
-        edificio_id = int(drow["EdificioId"]) if drow and drow["EdificioId"] is not None else None
-        nombre_opcional = str(drow["NombreOpcional"]) if drow and drow["NombreOpcional"] is not None else None
-        unidad_reporta_pmg = int(drow["ReportaPMG"]) if drow and drow["ReportaPMG"] is not None else None
-        division_comuna_id = int(drow["DivisionComunaId"]) if drow and drow["DivisionComunaId"] is not None else None
+        edificio_id = drow.get("EdificioId") if drow else None
+        nombre_opcional = drow.get("NombreOpcional") if drow else None
+        unidad_reporta_pmg = drow.get("ReportaPMG") if drow else None
+        division_comuna_id = drow.get("DivisionComunaId") if drow else None
+        Log.debug(f"[get_context] División → edificio={edificio_id}, nombre={nombre_opcional}, comuna_div={division_comuna_id}")
 
-        # Dirección completa desde el edificio
-        direccion_sql = """
-            SELECT TOP 1
-                e.Direccion,
-                e.Numero,
-                e.Calle,
-                com.Id       AS ComunaId,
-                com.Nombre   AS ComunaNombre,
-                reg.Id       AS RegionId,
-                reg.Nombre   AS RegionNombre
-            FROM dbo.Edificios e WITH (NOLOCK)
-            LEFT JOIN dbo.Comunas  com WITH (NOLOCK) ON com.Id = e.ComunaId
-            LEFT JOIN dbo.Regiones reg WITH (NOLOCK) ON reg.Id = com.RegionId
-            WHERE e.Id = :eid
-        """
-
+        # 3️⃣ DIRECCIÓN (por edificio)
         direccion = None
         region_id = None
         if edificio_id:
+            direccion_sql = """
+                SELECT TOP 1
+                    e.Direccion,
+                    e.Calle,
+                    e.Numero,
+                    e.ComunaId,
+                    com.Id AS ComunaIdCheck,
+                    com.Nombre AS ComunaNombre,
+                    reg.Id AS RegionId,
+                    reg.Nombre AS RegionNombre
+                FROM dbo.Edificios e WITH (NOLOCK)
+                LEFT JOIN dbo.Comunas com ON com.Id = e.ComunaId
+                LEFT JOIN dbo.Regiones reg ON reg.Id = com.RegionId
+                WHERE e.Id = :eid
+            """
             dir_res = db.execute(text(direccion_sql), {"eid": int(edificio_id)}).mappings().first()
+            Log.debug(f"[get_context] Resultado dirección edificio {edificio_id}: {dir_res}")
+
             if dir_res:
                 direccion = {
                     "DireccionLibre": dir_res.get("Direccion"),
                     "Calle": dir_res.get("Calle"),
                     "Numero": dir_res.get("Numero"),
-                    "ComunaId": dir_res.get("ComunaId"),
+                    "ComunaId": dir_res.get("ComunaId") or dir_res.get("ComunaIdCheck"),
                     "ComunaNombre": dir_res.get("ComunaNombre"),
                     "RegionId": dir_res.get("RegionId"),
                     "RegionNombre": dir_res.get("RegionNombre"),
                 }
-                region_id = int(dir_res["RegionId"]) if dir_res.get("RegionId") else None
+                region_id = dir_res.get("RegionId")
+            else:
+                Log.debug(f"[get_context] No se encontró dirección para edificio {edificio_id}")
+        else:
+            Log.debug(f"[get_context] No hay edificio asociado a la división {division_id}")
 
-        # Fallback si no hay edificio o comuna en edificio
+        # 4️⃣ FALLBACK (por comuna de división)
         if direccion is None and division_comuna_id:
+            Log.debug(f"[get_context] Aplicando fallback por ComunaId={division_comuna_id}")
             fallback_sql = """
                 SELECT TOP 1
-                    com.Id       AS ComunaId,
-                    com.Nombre   AS ComunaNombre,
-                    reg.Id       AS RegionId,
-                    reg.Nombre   AS RegionNombre
+                    com.Id AS ComunaId,
+                    com.Nombre AS ComunaNombre,
+                    reg.Id AS RegionId,
+                    reg.Nombre AS RegionNombre
                 FROM dbo.Comunas com WITH (NOLOCK)
-                LEFT JOIN dbo.Regiones reg WITH (NOLOCK) ON reg.Id = com.RegionId
+                LEFT JOIN dbo.Regiones reg ON reg.Id = com.RegionId
                 WHERE com.Id = :cid
             """
-            fb = db.execute(text(fallback_sql), {"cid": division_comuna_id}).mappings().first()
+            fb = db.execute(text(fallback_sql), {"cid": int(division_comuna_id)}).mappings().first()
             if fb:
                 direccion = {
                     "DireccionLibre": None,
@@ -606,9 +620,11 @@ class CompraService:
                     "RegionId": fb.get("RegionId"),
                     "RegionNombre": fb.get("RegionNombre"),
                 }
-                region_id = int(fb["RegionId"]) if fb.get("RegionId") else None
+                region_id = fb.get("RegionId")
+            else:
+                Log.debug(f"[get_context] No se encontró comuna de fallback para id={division_comuna_id}")
 
-        # Medidores de la compra
+        # 5️⃣ MEDIDORES DE LA COMPRA
         meds_sql = """
             SELECT cm.MedidorId
             FROM dbo.CompraMedidor cm WITH (NOLOCK)
@@ -617,9 +633,10 @@ class CompraService:
         """
         med_ids = [int(r[0]) for r in db.execute(text(meds_sql), {"cid": int(compra_id)}).all()]
         primer_medidor = med_ids[0] if med_ids else None
+        Log.debug(f"[get_context] Medidores asociados → {med_ids}")
 
-        # Retorno final
-        return {
+        # 6️⃣ RETORNO FINAL
+        resultado = {
             "ServicioId": servicio_id,
             "ServicioNombre": servicio_nombre,
             "InstitucionId": institucion_id,
@@ -631,6 +648,9 @@ class CompraService:
             "PrimerMedidorId": primer_medidor,
             "Direccion": direccion,
         }
+
+        Log.debug(f"[get_context] Resultado final → {resultado}")
+        return resultado
 
     def get_full(self, db: Session, compra_id: int) -> dict:
         c = self.get(db, compra_id)
