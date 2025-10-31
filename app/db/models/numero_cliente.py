@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Text
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.db.base import Base
+
 
 class NumeroCliente(Base):
     __tablename__ = "NumeroClientes"
@@ -21,8 +23,8 @@ class NumeroCliente(Base):
     CreatedBy:  Mapped[str | None] = mapped_column(Text)
 
     # Datos de negocio (según SQL)
-    Numero:           Mapped[str | None] = mapped_column(Text)
-    NombreCliente:    Mapped[str | None] = mapped_column(Text)
+    Numero:                 Mapped[str | None] = mapped_column(Text)
+    NombreCliente:          Mapped[str | None] = mapped_column(Text)
     EmpresaDistribuidoraId: Mapped[int | None] = mapped_column(BigInteger)
     TipoTarifaId:           Mapped[int | None] = mapped_column(BigInteger)
     DivisionId:             Mapped[int | None] = mapped_column(BigInteger)
