@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Annotated, List
 
-from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
+from fastapi import APIRouter, Depends, Query, Path, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -11,13 +11,13 @@ from app.schemas.auth import UserPublic
 from app.schemas.compra import (
     CompraDTO, CompraListDTO, CompraCreate, CompraUpdate,
     CompraMedidorItemDTO, CompraItemsPayload, CompraPage,
-    CompraFullPage, CompraListFullDTO, CompraFullDTO, CompraFullDetalleDTO
+    CompraFullPage, CompraListFullDTO, CompraFullDetalleDTO
 )
 from app.services.compra_service import CompraService
 
 router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
-svc = CompraService()
 DbDep = Annotated[Session, Depends(get_db)]
+svc = CompraService()
 
 
 @router.get("", response_model=CompraPage, summary="Listado paginado de compras/consumos")
@@ -60,25 +60,19 @@ def get_compra(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
 @router.get(
     "/{compra_id}/detalle",
     response_model=CompraFullDetalleDTO,
-    summary="Detalle enriquecido (compra + items + servicio/institución + región + medidores)"
+    summary="Detalle enriquecido (compra + items + servicio/institución + región/comuna + dirección + medidores)"
 )
-def get_compra_detalle(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
-    data = svc.get_full(db, compra_id)
-    return CompraFullDTO.model_validate(data)
-
-
-@router.get("/{compra_id}/detalle", summary="Detalle enriquecido (compra + items + servicio/institución + región + medidores)")
 def get_compra_detalle(
-    compra_id: Annotated[int, Path(ge=1)],
+    compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep
 ):
     """
-    Devuelve **detalle enriquecido** (Compra + Items + Servicio/Institución + Región + Medidores)
-    usando el service centralizado (sin SQL crudo en el endpoint).
+    Devuelve **detalle enriquecido** (Compra + Items + Servicio/Institución + Región/Comuna + Dirección + Medidores).
+    Usa el service centralizado (get_full -> get_context incluye `Direccion`).
     """
-    svc = CompraService()
-    data = svc.get_full(db, compra_id)   # <-- usa get_context con Direcciones->ComunaId
-    return data
+    data = svc.get_full(db, compra_id)
+    # MUY IMPORTANTE: validar contra el schema que SÍ incluye Direccion
+    return CompraFullDetalleDTO(**data)
 
 
 @router.post("", response_model=CompraDTO, status_code=status.HTTP_201_CREATED, summary="(ADMINISTRADOR) Crear compra/consumo")
