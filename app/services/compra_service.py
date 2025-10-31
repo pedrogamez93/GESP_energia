@@ -10,7 +10,6 @@ from sqlalchemy import func, and_, delete, extract, text
 
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
-
 Log = logging.getLogger(__name__)
 
 CM_TBL = CompraMedidor.__table__
@@ -525,7 +524,7 @@ class CompraService:
     # ─────────────────────────────────────────────────────────────────────────────
     # DETALLE ENRIQUECIDO POR ID (ahora con Dirección completa)
     # ─────────────────────────────────────────────────────────────────────────────
-    def get_context(self, db: Session, division_id: int, compra_id: int) -> dict:
+    def get_context(db: Session, division_id: int, compra_id: int) -> dict:
         Log.debug(f"[get_context] Iniciando con division_id={division_id}, compra_id={compra_id}")
 
         # 1️⃣ SERVICIO / INSTITUCIÓN
@@ -536,12 +535,13 @@ class CompraService:
             WHERE d.Id = :div_id
         """
         serv = db.execute(text(serv_sql), {"div_id": int(division_id)}).mappings().first()
+
         servicio_id = serv.get("ServicioId") if serv else None
         servicio_nombre = serv.get("ServicioNombre") if serv else None
         institucion_id = serv.get("InstitucionId") if serv else None
         Log.debug(f"[get_context] Servicio → id={servicio_id}, nombre={servicio_nombre}, institucion={institucion_id}")
 
-        # 2️⃣ DIVISIÓN BASE
+        # 2️⃣ DIVISIÓN
         div_sql = """
             SELECT TOP 1
                 d.EdificioId,
@@ -556,19 +556,20 @@ class CompraService:
         nombre_opcional = drow.get("NombreOpcional") if drow else None
         unidad_reporta_pmg = drow.get("ReportaPMG") if drow else None
         division_comuna_id = drow.get("DivisionComunaId") if drow else None
-        Log.debug(f"[get_context] División → edificio={edificio_id}, nombre={nombre_opcional}, comuna_div={division_comuna_id}")
+        Log.debug(f"[get_context] División → edificio_id={edificio_id}, nombre={nombre_opcional}, comuna_div={division_comuna_id}")
 
         # 3️⃣ DIRECCIÓN (por edificio)
         direccion = None
         region_id = None
+
         if edificio_id:
+            Log.debug(f"[get_context] Consultando dirección para edificio_id={edificio_id}")
             direccion_sql = """
                 SELECT TOP 1
-                    e.Direccion,
-                    e.Calle,
-                    e.Numero,
-                    e.ComunaId,
-                    com.Id AS ComunaIdCheck,
+                    e.Direccion AS DireccionLibre,
+                    e.Calle AS Calle,
+                    e.Numero AS Numero,
+                    e.ComunaId AS ComunaId,
                     com.Nombre AS ComunaNombre,
                     reg.Id AS RegionId,
                     reg.Nombre AS RegionNombre
@@ -582,23 +583,21 @@ class CompraService:
 
             if dir_res:
                 direccion = {
-                    "DireccionLibre": dir_res.get("Direccion"),
+                    "DireccionLibre": dir_res.get("DireccionLibre"),
                     "Calle": dir_res.get("Calle"),
                     "Numero": dir_res.get("Numero"),
-                    "ComunaId": dir_res.get("ComunaId") or dir_res.get("ComunaIdCheck"),
+                    "ComunaId": dir_res.get("ComunaId"),
                     "ComunaNombre": dir_res.get("ComunaNombre"),
                     "RegionId": dir_res.get("RegionId"),
                     "RegionNombre": dir_res.get("RegionNombre"),
                 }
                 region_id = dir_res.get("RegionId")
             else:
-                Log.debug(f"[get_context] No se encontró dirección para edificio {edificio_id}")
-        else:
-            Log.debug(f"[get_context] No hay edificio asociado a la división {division_id}")
+                Log.debug(f"[get_context] No se encontró dirección asociada al edificio {edificio_id}")
 
-        # 4️⃣ FALLBACK (por comuna de división)
-        if direccion is None and division_comuna_id:
-            Log.debug(f"[get_context] Aplicando fallback por ComunaId={division_comuna_id}")
+        # 4️⃣ FALLBACK: si no hay edificio, usar comuna de división
+        if not direccion and division_comuna_id:
+            Log.debug(f"[get_context] Aplicando fallback por comuna_id={division_comuna_id}")
             fallback_sql = """
                 SELECT TOP 1
                     com.Id AS ComunaId,
@@ -622,7 +621,7 @@ class CompraService:
                 }
                 region_id = fb.get("RegionId")
             else:
-                Log.debug(f"[get_context] No se encontró comuna de fallback para id={division_comuna_id}")
+                Log.debug(f"[get_context] No se encontró comuna fallback para id={division_comuna_id}")
 
         # 5️⃣ MEDIDORES DE LA COMPRA
         meds_sql = """
@@ -646,10 +645,10 @@ class CompraService:
             "UnidadReportaPMG": unidad_reporta_pmg,
             "MedidorIds": med_ids,
             "PrimerMedidorId": primer_medidor,
-            "Direccion": direccion,
+            "Direccion": direccion,  # ✅ Aquí se inyecta correctamente
         }
 
-        Log.debug(f"[get_context] Resultado final → {resultado}")
+        Log.debug(f"[get_context] Resultado final: {resultado}")
         return resultado
 
     def get_full(self, db: Session, compra_id: int) -> dict:
