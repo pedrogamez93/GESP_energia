@@ -523,7 +523,7 @@ class CompraService:
     # DETALLE ENRIQUECIDO POR ID (ahora con Dirección completa)
     # ─────────────────────────────────────────────────────────────────────────────
     def get_context(self, db: Session, division_id: int, compra_id: int) -> dict:
-        # 1) Servicio / Institución directo (Divisiones -> Servicios)
+        # Servicio / Institución desde División -> Servicio
         serv_sql = """
             SELECT TOP 1 d.ServicioId,
                         s.Nombre        AS ServicioNombre,
@@ -533,16 +533,16 @@ class CompraService:
             WHERE d.Id = :div_id
         """
         serv = db.execute(text(serv_sql), {"div_id": int(division_id)}).mappings().first()
-        servicio_id      = int(serv["ServicioId"])      if serv and serv["ServicioId"]      is not None else None
-        servicio_nombre  = str(serv["ServicioNombre"])  if serv and serv["ServicioNombre"]  is not None else None
-        institucion_id   = int(serv["InstitucionId"])   if serv and serv["InstitucionId"]   is not None else None
+        servicio_id     = int(serv["ServicioId"])     if serv and serv["ServicioId"]     is not None else None
+        servicio_nombre = str(serv["ServicioNombre"]) if serv and serv["ServicioNombre"] is not None else None
+        institucion_id  = int(serv["InstitucionId"])  if serv and serv["InstitucionId"]  is not None else None
 
-        # 2) Datos base de la División (para EdificioId y fallback)
+        # Datos base de División (NOTA: usamos Nombre, no NombreOpcional)
         div_base_sql = """
             SELECT TOP 1
                 d.EdificioId,
                 d.ComunaId       AS DivComunaId,
-                d.NombreOpcional AS NombreOpcional,
+                d.Nombre         AS DivisionNombre,
                 d.ReportaPMG     AS ReportaPMG,
                 d.Calle          AS DivCalle,
                 d.Numero         AS DivNumero
@@ -550,14 +550,14 @@ class CompraService:
             WHERE d.Id = :div_id
         """
         dbase = db.execute(text(div_base_sql), {"div_id": int(division_id)}).mappings().first()
-        edificio_id        = int(dbase["EdificioId"])      if dbase and dbase["EdificioId"]      is not None else None
-        div_comuna_id      = int(dbase["DivComunaId"])     if dbase and dbase["DivComunaId"]     is not None else None
-        nombre_opcional    = str(dbase["NombreOpcional"])  if dbase and dbase["NombreOpcional"]  is not None else None
-        unidad_reporta_pmg = int(dbase["ReportaPMG"])      if dbase and dbase["ReportaPMG"]      is not None else None
-        div_calle          = str(dbase["DivCalle"])        if dbase and dbase["DivCalle"]        is not None else None
-        div_numero         = str(dbase["DivNumero"])       if dbase and dbase["DivNumero"]       is not None else None
+        edificio_id        = int(dbase["EdificioId"])     if dbase and dbase["EdificioId"]     is not None else None
+        div_comuna_id      = int(dbase["DivComunaId"])    if dbase and dbase["DivComunaId"]    is not None else None
+        division_nombre    = str(dbase["DivisionNombre"]) if dbase and dbase["DivisionNombre"] is not None else None
+        unidad_reporta_pmg = int(dbase["ReportaPMG"])     if dbase and dbase["ReportaPMG"]     is not None else None
+        div_calle          = str(dbase["DivCalle"])       if dbase and dbase["DivCalle"]       is not None else None
+        div_numero         = str(dbase["DivNumero"])      if dbase and dbase["DivNumero"]      is not None else None
 
-        # 3) Dirección preferentemente por EDIFICIO -> (Comuna -> Región).
+        # Dirección preferente por EDIFICIO
         dir_row = None
         if edificio_id:
             dir_sql = """
@@ -576,7 +576,7 @@ class CompraService:
             """
             dir_row = db.execute(text(dir_sql), {"eid": edificio_id}).mappings().first()
 
-        # 4) Fallback por DIVISIÓN si no hay edificio o no encontró fila
+        # Fallback por DIVISIÓN si no hubiese fila de edificio
         if not dir_row:
             dir_fallback_sql = """
                 SELECT TOP 1
@@ -594,18 +594,17 @@ class CompraService:
             """
             dir_row = db.execute(text(dir_fallback_sql), {"div_id": int(division_id)}).mappings().first()
 
-        # 5) Normalización de dirección
         direccion = {
-            "Calle":          (dir_row.get("Calle") or div_calle),
-            "Numero":         (dir_row.get("Numero") or div_numero),
+            "Calle":          dir_row.get("Calle")  or div_calle,
+            "Numero":         dir_row.get("Numero") or div_numero,
             "DireccionLibre": dir_row.get("DireccionLibre"),
-            "ComunaId":       int(dir_row["ComunaId"])    if dir_row and dir_row.get("ComunaId")    is not None else None,
+            "ComunaId":       int(dir_row["ComunaId"])  if dir_row and dir_row.get("ComunaId")  is not None else div_comuna_id,
             "ComunaNombre":   dir_row.get("ComunaNombre"),
-            "RegionId":       int(dir_row["RegionId"])    if dir_row and dir_row.get("RegionId")    is not None else None,
+            "RegionId":       int(dir_row["RegionId"])  if dir_row and dir_row.get("RegionId")  is not None else None,
             "RegionNombre":   dir_row.get("RegionNombre"),
         }
 
-        # 6) Medidores de la compra
+        # Medidores de la compra
         meds_sql = """
             SELECT cm.MedidorId
             FROM dbo.CompraMedidor cm WITH (NOLOCK)
@@ -616,19 +615,18 @@ class CompraService:
         primer_medidor = med_ids[0] if med_ids else None
 
         return {
-            "ServicioId":         servicio_id,
-            "ServicioNombre":     servicio_nombre,
-            "InstitucionId":      institucion_id,
-            # Región “oficial” por Comuna (del edificio si existe, si no, de la división)
-            "RegionId":           direccion["RegionId"],
-            "EdificioId":         edificio_id,
-            "NombreOpcional":     nombre_opcional,
-            "UnidadReportaPMG":   unidad_reporta_pmg,
-            "MedidorIds":         med_ids,
-            "PrimerMedidorId":    primer_medidor,
-            # Bloque de dirección completo
-            "Direccion":          direccion,
+            "ServicioId":       servicio_id,
+            "ServicioNombre":   servicio_nombre,
+            "InstitucionId":    institucion_id,
+            "RegionId":         direccion["RegionId"],  # consistente con Dirección
+            "EdificioId":       edificio_id,
+            "NombreOpcional":   division_nombre,        # mantenemos la clave esperada en el front
+            "UnidadReportaPMG": unidad_reporta_pmg,
+            "MedidorIds":       med_ids,
+            "PrimerMedidorId":  primer_medidor,
+            "Direccion":        direccion,
         }
+
 
     def get_full(self, db: Session, compra_id: int) -> dict:
         c = self.get(db, compra_id)
