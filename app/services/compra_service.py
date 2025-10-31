@@ -524,7 +524,7 @@ class CompraService:
     # ─────────────────────────────────────────────────────────────────────────────
     # DETALLE ENRIQUECIDO POR ID (ahora con Dirección completa)
     # ─────────────────────────────────────────────────────────────────────────────
-    def get_context(db: Session, division_id: int, compra_id: int) -> dict:
+    def get_context(self, db: Session, division_id: int, compra_id: int) -> dict:
         Log.debug(f"[get_context] Iniciando con division_id={division_id}, compra_id={compra_id}")
 
         # 1️⃣ SERVICIO / INSTITUCIÓN
