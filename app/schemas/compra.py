@@ -151,3 +151,20 @@ class CompraContextoDTO(BaseModel):
 class CompraFullDTO(CompraDTO, CompraContextoDTO):
     """Detalle por ID enriquecido: CompraDTO + contexto jerárquico."""
     pass
+
+# --- NUEVO BLOQUE PARA DIRECCIÓN COMPLETA ---
+
+class DireccionDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    Calle: Optional[str] = None
+    Numero: Optional[str] = None
+    DireccionLibre: Optional[str] = None
+    ComunaId: Optional[int] = None
+    ComunaNombre: Optional[str] = None
+    RegionId: Optional[int] = None
+    RegionNombre: Optional[str] = None
+
+
+# Extiende el detalle enriquecido para incluir dirección
+class CompraFullDetalleDTO(CompraFullDTO):
+    Direccion: Optional[DireccionDTO] = None

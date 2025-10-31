@@ -11,7 +11,7 @@ from app.schemas.auth import UserPublic
 from app.schemas.compra import (
     CompraDTO, CompraListDTO, CompraCreate, CompraUpdate,
     CompraMedidorItemDTO, CompraItemsPayload, CompraPage,
-    CompraFullPage, CompraListFullDTO, CompraFullDTO
+    CompraFullPage, CompraListFullDTO, CompraFullDTO, CompraFullDetalleDTO
 )
 from app.services.compra_service import CompraService
 
@@ -59,7 +59,7 @@ def get_compra(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
 
 @router.get(
     "/{compra_id}/detalle",
-    response_model=CompraFullDTO,
+    response_model=CompraFullDetalleDTO,
     summary="Detalle enriquecido (compra + items + servicio/institución + región + medidores)"
 )
 def get_compra_detalle(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
