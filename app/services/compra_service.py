@@ -535,13 +535,13 @@ class CompraService:
         servicio_nombre = str(serv["ServicioNombre"]) if serv and serv["ServicioNombre"] is not None else None
         institucion_id = int(serv["InstitucionId"]) if serv and serv["InstitucionId"] is not None else None
 
-        # División base (para obtener edificio y datos complementarios)
+        # División base para obtener edificio y otros campos
         div_sql = """
             SELECT TOP 1
                 d.EdificioId,
-                d.Nombre         AS NombreOpcional,
-                d.ReportaPMG     AS ReportaPMG,
-                d.ComunaId       AS DivisionComunaId
+                d.Nombre       AS NombreOpcional,
+                d.ReportaPMG   AS ReportaPMG,
+                d.ComunaId     AS DivisionComunaId
             FROM dbo.Divisiones d WITH (NOLOCK)
             WHERE d.Id = :div_id
         """
@@ -551,11 +551,12 @@ class CompraService:
         unidad_reporta_pmg = int(drow["ReportaPMG"]) if drow and drow["ReportaPMG"] is not None else None
         division_comuna_id = int(drow["DivisionComunaId"]) if drow and drow["DivisionComunaId"] is not None else None
 
-        # Dirección completa desde Edificio (si existe)
+        # Dirección completa desde el edificio
         direccion_sql = """
             SELECT TOP 1
-                e.Calle,
+                e.Direccion,
                 e.Numero,
+                e.Calle,
                 com.Id       AS ComunaId,
                 com.Nombre   AS ComunaNombre,
                 reg.Id       AS RegionId,
@@ -565,13 +566,14 @@ class CompraService:
             LEFT JOIN dbo.Regiones reg WITH (NOLOCK) ON reg.Id = com.RegionId
             WHERE e.Id = :eid
         """
+
         direccion = None
         region_id = None
-
         if edificio_id:
             dir_res = db.execute(text(direccion_sql), {"eid": int(edificio_id)}).mappings().first()
             if dir_res:
                 direccion = {
+                    "DireccionLibre": dir_res.get("Direccion"),
                     "Calle": dir_res.get("Calle"),
                     "Numero": dir_res.get("Numero"),
                     "ComunaId": dir_res.get("ComunaId"),
@@ -581,7 +583,7 @@ class CompraService:
                 }
                 region_id = int(dir_res["RegionId"]) if dir_res.get("RegionId") else None
 
-        # Si no hay edificio o comuna, se intenta con la comuna de la División
+        # Fallback si no hay edificio o comuna en edificio
         if direccion is None and division_comuna_id:
             fallback_sql = """
                 SELECT TOP 1
@@ -596,6 +598,7 @@ class CompraService:
             fb = db.execute(text(fallback_sql), {"cid": division_comuna_id}).mappings().first()
             if fb:
                 direccion = {
+                    "DireccionLibre": None,
                     "Calle": None,
                     "Numero": None,
                     "ComunaId": fb.get("ComunaId"),
@@ -628,8 +631,6 @@ class CompraService:
             "PrimerMedidorId": primer_medidor,
             "Direccion": direccion,
         }
-
-
 
     def get_full(self, db: Session, compra_id: int) -> dict:
         c = self.get(db, compra_id)
