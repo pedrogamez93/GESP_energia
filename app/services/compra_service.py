@@ -523,90 +523,89 @@ class CompraService:
     # DETALLE ENRIQUECIDO POR ID (ahora con Dirección completa)
     # ─────────────────────────────────────────────────────────────────────────────
     def get_context(self, db: Session, division_id: int, compra_id: int) -> dict:
-        # Servicio / Institución (Divisiones -> Servicios)
+        # 1) Servicio / Institución directo (Divisiones -> Servicios)
         serv_sql = """
-            SELECT TOP 1 d.ServicioId, s.Nombre AS ServicioNombre, s.InstitucionId
+            SELECT TOP 1 d.ServicioId,
+                        s.Nombre        AS ServicioNombre,
+                        s.InstitucionId
             FROM dbo.Divisiones d WITH (NOLOCK)
             LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = d.ServicioId
             WHERE d.Id = :div_id
         """
         serv = db.execute(text(serv_sql), {"div_id": int(division_id)}).mappings().first()
-        servicio_id = int(serv["ServicioId"]) if serv and serv["ServicioId"] is not None else None
-        servicio_nombre = str(serv["ServicioNombre"]) if serv and serv["ServicioNombre"] is not None else None
-        institucion_id = int(serv["InstitucionId"]) if serv and serv["InstitucionId"] is not None else None
+        servicio_id      = int(serv["ServicioId"])      if serv and serv["ServicioId"]      is not None else None
+        servicio_nombre  = str(serv["ServicioNombre"])  if serv and serv["ServicioNombre"]  is not None else None
+        institucion_id   = int(serv["InstitucionId"])   if serv and serv["InstitucionId"]   is not None else None
 
-        # Datos básicos de la división (incluye EdificioId/ComunaId/Calle/Numero/ReportaPMG/Nombre)
+        # 2) Datos base de la División (para EdificioId y fallback)
         div_base_sql = """
             SELECT TOP 1
                 d.EdificioId,
-                d.ComunaId,
-                d.Calle,
-                d.Numero,
-                d.ReportaPMG,
-                d.Nombre AS NombreOpcional
+                d.ComunaId       AS DivComunaId,
+                d.NombreOpcional AS NombreOpcional,
+                d.ReportaPMG     AS ReportaPMG,
+                d.Calle          AS DivCalle,
+                d.Numero         AS DivNumero
             FROM dbo.Divisiones d WITH (NOLOCK)
             WHERE d.Id = :div_id
         """
         dbase = db.execute(text(div_base_sql), {"div_id": int(division_id)}).mappings().first()
-        edificio_id = int(dbase["EdificioId"]) if dbase and dbase["EdificioId"] is not None else None
-        div_comuna_id = int(dbase["ComunaId"]) if dbase and dbase["ComunaId"] is not None else None
-        div_calle = dbase["Calle"] if dbase else None
-        div_numero = dbase["Numero"] if dbase else None
-        nombre_opcional = dbase["NombreOpcional"] if dbase else None
-        unidad_reporta_pmg = int(dbase["ReportaPMG"]) if dbase and dbase["ReportaPMG"] is not None else None
+        edificio_id        = int(dbase["EdificioId"])      if dbase and dbase["EdificioId"]      is not None else None
+        div_comuna_id      = int(dbase["DivComunaId"])     if dbase and dbase["DivComunaId"]     is not None else None
+        nombre_opcional    = str(dbase["NombreOpcional"])  if dbase and dbase["NombreOpcional"]  is not None else None
+        unidad_reporta_pmg = int(dbase["ReportaPMG"])      if dbase and dbase["ReportaPMG"]      is not None else None
+        div_calle          = str(dbase["DivCalle"])        if dbase and dbase["DivCalle"]        is not None else None
+        div_numero         = str(dbase["DivNumero"])       if dbase and dbase["DivNumero"]       is not None else None
 
-        # 1) Preferir dirección desde el Edificio → Direcciones → Comunas → Regiones
+        # 3) Dirección preferentemente por EDIFICIO -> (Comuna -> Región).
         dir_row = None
-        if edificio_id and edificio_id > 0:
+        if edificio_id:
             dir_sql = """
                 SELECT TOP 1
-                    dir.Calle,
-                    dir.Numero,
-                    com.Id       AS ComunaId,
-                    com.Nombre   AS ComunaNombre,
-                    reg.Id       AS RegionId,
-                    reg.Nombre   AS RegionNombre
+                    e.Calle                 AS Calle,
+                    e.Numero                AS Numero,
+                    e.Direccion             AS DireccionLibre,
+                    e.ComunaId              AS ComunaId,
+                    com.Nombre              AS ComunaNombre,
+                    reg.Id                  AS RegionId,
+                    reg.Nombre              AS RegionNombre
                 FROM dbo.Edificios e WITH (NOLOCK)
-                LEFT JOIN dbo.Direcciones dir WITH (NOLOCK) ON dir.Id = e.DireccionId
-                LEFT JOIN dbo.Comunas     com WITH (NOLOCK) ON com.Id = dir.ComunaId
-                LEFT JOIN dbo.Regiones    reg WITH (NOLOCK) ON reg.Id = com.RegionId
-                WHERE e.Id = :edif_id
-            """
-            dir_row = db.execute(text(dir_sql), {"edif_id": edificio_id}).mappings().first()
-
-        # 2) Fallback: usar comuna de la División para obtener región (si no hubo dirección por edificio)
-        if not dir_row:
-            fb_sql = """
-                SELECT TOP 1
-                    :calle      AS Calle,
-                    :numero     AS Numero,
-                    com.Id      AS ComunaId,
-                    com.Nombre  AS ComunaNombre,
-                    reg.Id      AS RegionId,
-                    reg.Nombre  AS RegionNombre
-                FROM dbo.Comunas com WITH (NOLOCK)
+                LEFT JOIN dbo.Comunas  com WITH (NOLOCK) ON com.Id = e.ComunaId
                 LEFT JOIN dbo.Regiones reg WITH (NOLOCK) ON reg.Id = com.RegionId
-                WHERE com.Id = :comuna_id
+                WHERE e.Id = :eid
             """
-            dir_row = db.execute(
-                text(fb_sql),
-                {
-                    "calle": div_calle,
-                    "numero": div_numero,
-                    "comuna_id": div_comuna_id,
-                },
-            ).mappings().first()
+            dir_row = db.execute(text(dir_sql), {"eid": edificio_id}).mappings().first()
 
+        # 4) Fallback por DIVISIÓN si no hay edificio o no encontró fila
+        if not dir_row:
+            dir_fallback_sql = """
+                SELECT TOP 1
+                    d.Calle                 AS Calle,
+                    d.Numero                AS Numero,
+                    CAST(NULL AS NVARCHAR(200)) AS DireccionLibre,
+                    d.ComunaId              AS ComunaId,
+                    com.Nombre              AS ComunaNombre,
+                    reg.Id                  AS RegionId,
+                    reg.Nombre              AS RegionNombre
+                FROM dbo.Divisiones d WITH (NOLOCK)
+                LEFT JOIN dbo.Comunas  com WITH (NOLOCK) ON com.Id = d.ComunaId
+                LEFT JOIN dbo.Regiones reg WITH (NOLOCK) ON reg.Id = com.RegionId
+                WHERE d.Id = :div_id
+            """
+            dir_row = db.execute(text(dir_fallback_sql), {"div_id": int(division_id)}).mappings().first()
+
+        # 5) Normalización de dirección
         direccion = {
-            "Calle":        dir_row["Calle"] if dir_row else None,
-            "Numero":       dir_row["Numero"] if dir_row else None,
-            "ComunaId":     int(dir_row["ComunaId"]) if dir_row and dir_row["ComunaId"] is not None else None,
-            "ComunaNombre": dir_row["ComunaNombre"] if dir_row else None,
-            "RegionId":     int(dir_row["RegionId"]) if dir_row and dir_row["RegionId"] is not None else None,
-            "RegionNombre": dir_row["RegionNombre"] if dir_row else None,
+            "Calle":          (dir_row.get("Calle") or div_calle),
+            "Numero":         (dir_row.get("Numero") or div_numero),
+            "DireccionLibre": dir_row.get("DireccionLibre"),
+            "ComunaId":       int(dir_row["ComunaId"])    if dir_row and dir_row.get("ComunaId")    is not None else None,
+            "ComunaNombre":   dir_row.get("ComunaNombre"),
+            "RegionId":       int(dir_row["RegionId"])    if dir_row and dir_row.get("RegionId")    is not None else None,
+            "RegionNombre":   dir_row.get("RegionNombre"),
         }
 
-        # Medidores de la compra
+        # 6) Medidores de la compra
         meds_sql = """
             SELECT cm.MedidorId
             FROM dbo.CompraMedidor cm WITH (NOLOCK)
@@ -617,17 +616,18 @@ class CompraService:
         primer_medidor = med_ids[0] if med_ids else None
 
         return {
-            "ServicioId": servicio_id,
-            "ServicioNombre": servicio_nombre,
-            "InstitucionId": institucion_id,
-            "RegionId": direccion["RegionId"],   # por compatibilidad con lo que ya consumías
-            "EdificioId": edificio_id,
-            "NombreOpcional": nombre_opcional,
-            "UnidadReportaPMG": unidad_reporta_pmg,
-            "MedidorIds": med_ids,
-            "PrimerMedidorId": primer_medidor,
-            # NUEVO bloque con detalle de dirección
-            "Direccion": direccion,
+            "ServicioId":         servicio_id,
+            "ServicioNombre":     servicio_nombre,
+            "InstitucionId":      institucion_id,
+            # Región “oficial” por Comuna (del edificio si existe, si no, de la división)
+            "RegionId":           direccion["RegionId"],
+            "EdificioId":         edificio_id,
+            "NombreOpcional":     nombre_opcional,
+            "UnidadReportaPMG":   unidad_reporta_pmg,
+            "MedidorIds":         med_ids,
+            "PrimerMedidorId":    primer_medidor,
+            # Bloque de dirección completo
+            "Direccion":          direccion,
         }
 
     def get_full(self, db: Session, compra_id: int) -> dict:
