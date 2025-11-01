@@ -1,16 +1,12 @@
 # app/schemas/tipo_equipo_calefaccion.py
 from __future__ import annotations
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 from typing import Optional, List
-
 
 class TipoEquipoCalefaccionSelectDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
-
-    class Config:
-        from_attributes = True
-
+    class Config: from_attributes = True
 
 class TipoEquipoCalefaccionDTO(TipoEquipoCalefaccionSelectDTO):
     Rendimiento: float
@@ -31,7 +27,6 @@ class TipoEquipoCalefaccionDTO(TipoEquipoCalefaccionSelectDTO):
     AC: bool
     CA: bool
     FR: bool
-
 
 class TipoEquipoCalefaccionCreate(BaseModel):
     Nombre: Optional[str] = None
@@ -54,14 +49,6 @@ class TipoEquipoCalefaccionCreate(BaseModel):
     CA: bool = False
     FR: bool = False
 
-    @field_validator("Rendimiento")
-    @classmethod
-    def _chk_rendimiento(cls, v: float) -> float:
-        if v < 0 or v > 1:
-            raise ValueError("Rendimiento debe estar entre 0 y 1")
-        return v
-
-
 class TipoEquipoCalefaccionUpdate(BaseModel):
     Nombre: Optional[str] = None
     Rendimiento: Optional[float] = None
@@ -83,20 +70,15 @@ class TipoEquipoCalefaccionUpdate(BaseModel):
     CA: Optional[bool] = None
     FR: Optional[bool] = None
 
-
 # N:M con energéticos
 class TECEnergeticoDTO(BaseModel):
     Id: int
     TipoEquipoCalefaccionId: int
     EnergeticoId: int
-
-    class Config:
-        from_attributes = True
-
+    class Config: from_attributes = True
 
 class TECEnergeticoCreate(BaseModel):
     EnergeticoId: int
-
 
 class TECEnergeticoListDTO(BaseModel):
     Items: List[TECEnergeticoDTO]

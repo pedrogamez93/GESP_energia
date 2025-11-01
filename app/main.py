@@ -35,9 +35,6 @@ try:
             "http://localhost:4200",
             "http://energia.metasoft-testing.com",
             "https://energia.metasoft-testing.com",
-            # Opcional: si pruebas Swagger o front desde la IP
-            "http://66.29.140.76",
-            "http://66.29.140.76:8000",
         ],
     )
 except Exception:
@@ -45,19 +42,7 @@ except Exception:
         "http://localhost:4200",
         "http://energia.metasoft-testing.com",
         "https://energia.metasoft-testing.com",
-        "http://66.29.140.76",
-        "http://66.29.140.76:8000",
     ]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOW_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["x-request-id", "x-error-id", "content-disposition"],
-    max_age=86400,
-)
 
 # ───────────────────────────────────────────────────────────────────────────────
 # OpenAPI tags
