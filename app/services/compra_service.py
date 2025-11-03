@@ -36,10 +36,6 @@ def _fmt_dt(dt: datetime | None) -> str | None:
 
 
 def _safe_fetch_one(db: Session, sql: str, params: Dict[str, Any]) -> Optional[dict]:
-    """
-    Ejecuta una consulta y devuelve un mapping() o None.
-    Nunca levanta excepción: loggea y devuelve None.
-    """
     try:
         row = db.execute(text(sql), params).mappings().first()
         return dict(row) if row else None
@@ -55,6 +51,61 @@ def _safe_fetch_all(db: Session, sql: str, params: Dict[str, Any]) -> List[dict]
     except Exception as ex:
         Log.warning("SAFE_FETCH_ALL failed: %s | SQL: %s | params=%s", ex, sql, params)
         return []
+
+
+def _numero_cliente_info(db: Session, nc_id: int | None) -> Dict[str, Optional[str]]:
+    """
+    Devuelve info del Número de Cliente:
+      - Numero: valor en columna [Numero] si existe
+      - NombreCliente: valor en columna [NombreCliente] si existe
+    Si en alguna instancia hay otras columnas históricas, las consideramos.
+    """
+    if not nc_id:
+        return {"Numero": None, "NombreCliente": None, "CodigoCompat": None}
+
+    # Buscamos qué columnas existen en tu tabla
+    cols = db.execute(text("""
+        SELECT name
+        FROM sys.columns
+        WHERE object_id = OBJECT_ID('dbo.NumeroClientes')
+          AND name IN ('Numero','NombreCliente','Codigo','CodigoCliente','Identificador')
+    """)).scalars().all()
+    have = set(c.lower() for c in cols)
+
+    numero = None
+    nombre = None
+    codigo_compat = None
+
+    # 1) Numero
+    if "numero" in have:
+        r = db.execute(
+            text("SELECT CAST(Numero AS NVARCHAR(255)) AS v FROM dbo.NumeroClientes WITH (NOLOCK) WHERE Id = :id"),
+            {"id": nc_id},
+        ).mappings().first()
+        numero = r["v"] if r else None
+
+    # 2) NombreCliente
+    if "nombrecliente" in have:
+        r = db.execute(
+            text("SELECT CAST(NombreCliente AS NVARCHAR(255)) AS v FROM dbo.NumeroClientes WITH (NOLOCK) WHERE Id = :id"),
+            {"id": nc_id},
+        ).mappings().first()
+        nombre = r["v"] if r else None
+
+    # 3) Compat (por si hay instancias antiguas)
+    compat_col = None
+    for c in ("Codigo", "CodigoCliente", "Identificador"):
+        if c.lower() in have:
+            compat_col = c
+            break
+    if compat_col:
+        r = db.execute(
+            text(f"SELECT CAST({compat_col} AS NVARCHAR(255)) AS v FROM dbo.NumeroClientes WITH (NOLOCK) WHERE Id = :id"),
+            {"id": nc_id},
+        ).mappings().first()
+        codigo_compat = r["v"] if r else None
+
+    return {"Numero": numero, "NombreCliente": nombre, "CodigoCompat": codigo_compat}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,10 +131,10 @@ class CompraService:
         medidor_id: Optional[int] = None,
         estado_validacion_id: Optional[str] = None,
         region_id: Optional[int] = None,
-        edificio_id: Optional[int] = None,  # (no se usa aún como filtro directo)
+        edificio_id: Optional[int] = None,  # ignorado en el listado por ahora
         nombre_opcional: Optional[str] = None,
     ) -> Tuple[int, List[dict]]:
-        # Aislamos como .NET (NOLOCK) y evitamos locks relevantes
+        # Aislamos como .NET (NOLOCK)
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
         where_parts: list[str] = ["1=1"]
@@ -144,7 +195,7 @@ class CompraService:
             params["medidor_id"] = int(medidor_id)
 
         if region_id is not None:
-            # Región vía División -> Edificios -> Comunas -> Regiones
+            # Región vía División -> Edificios -> Comunas -> Regiones (tal como mostraste)
             where_parts.append("""
                 EXISTS (
                     SELECT 1
@@ -279,11 +330,10 @@ class CompraService:
         db.refresh(obj)
         return obj, self._items_by_compra(db, obj.Id)
 
-    def update(self, db: Session, compra_id: int, data, modified_by: Optional[str] = None) -> Tuple[Compra, List[CompraMedidor]]:
+    def update(self, db: Session, compra_id: int, data, modified_by: Optional[str] = None) -> Tuple[Compra, List[CompraMedidor]]:  # noqa: E501
         obj = self.get(db, compra_id)
         payload = data.model_dump(exclude_unset=True)
 
-        # Normaliza fechas que puedan venir como string
         for k in ("InicioLectura", "FinLectura", "FechaCompra", "ReviewedAt"):
             if k in payload and payload[k] is not None:
                 payload[k] = _to_dt(payload[k])
@@ -324,14 +374,8 @@ class CompraService:
     # DETALLE ENRIQUECIDO
     # ======================================================================
     def get_full(self, db: Session, compra_id: int) -> dict:
-        """
-        Devuelve el formato que espera el response_model:
-        - Campos de la compra en el nivel raíz (aplanados)
-        - Secciones extra (Items, Division, Servicio, etc.) como campos adyacentes
-        """
         ctx = self.get_context(db, compra_id)
 
-        # Campos exigidos en raíz + añadidos para UI
         required_root = [
             "Id", "DivisionId", "EnergeticoId", "NumeroClienteId",
             "FechaCompra", "Consumo", "Costo",
@@ -339,27 +383,21 @@ class CompraService:
             "FacturaId", "CreatedByDivisionId",
             "EstadoValidacionId", "Observacion", "Active",
             "UnidadMedidaId",
-
-            # derivados (se rellenan abajo)
+            # derivados
             "ServicioId", "ServicioNombre", "InstitucionId",
             "RegionId", "EdificioId", "NombreOpcional",
             "UnidadReportaPMG", "MedidorIds", "PrimerMedidorId",
         ]
 
         base = ctx.get("Compra", {}) if isinstance(ctx, dict) else {}
-        out: Dict[str, Any] = {}
-
-        for k in required_root:
-            out[k] = base.get(k, None)
+        out: Dict[str, Any] = {k: base.get(k, None) for k in required_root}
         for k, v in base.items():
             if k not in out:
                 out[k] = v
         for k, v in ctx.items():
-            if k == "Compra":
-                continue
-            out[k] = v
+            if k != "Compra":
+                out[k] = v
 
-        # === Derivados al nivel raíz ===
         div = ctx.get("Division") or {}
         serv = ctx.get("Servicio") or {}
         comu = ctx.get("Comuna") or {}
@@ -372,26 +410,13 @@ class CompraService:
         out["EdificioId"]       = div.get("EdificioId")
         out["UnidadReportaPMG"] = div.get("UnidadReportaPMG")
 
-        # Opcionales/UI
         out.setdefault("NombreOpcional", None)
-        out["MedidorIds"] = [
-            it.get("MedidorId") for it in out.get("Items", []) if it and it.get("MedidorId") is not None
-        ]
+        out["MedidorIds"] = [it.get("MedidorId") for it in out.get("Items", []) if it and it.get("MedidorId") is not None]
         out["PrimerMedidorId"] = out["MedidorIds"][0] if out["MedidorIds"] else None
 
         return out
 
     def get_context(self, db: Session, compra_id: int) -> dict:
-        """
-        Devuelve detalle enriquecido:
-          - compra base
-          - División (ServicioId, EdificioId, ReportaPMG)
-          - Servicio e Institución (InstitucionId desde Servicio)
-          - Edificio -> Comuna -> Región y dirección (Calle/Numero desde Edificios)
-          - Número de cliente / Energético
-          - Items + Medidor
-        Todo con LEFT JOIN + NOLOCK.
-        """
         cab = db.execute(text("""
             SELECT TOP 1
                 -- Compra
@@ -425,7 +450,7 @@ class CompraService:
                 i.Id            AS I_Id,
                 i.Nombre        AS I_Nombre,
 
-                -- Edificio -> Comuna -> Región
+                -- Edificio -> Comuna -> Región (tal como existe en tu BD)
                 efi.Id          AS EDI_Id,
                 efi.Calle       AS EDI_Calle,
                 efi.Numero      AS EDI_Numero,
@@ -436,9 +461,8 @@ class CompraService:
                 r.Id            AS R_Id,
                 r.Nombre        AS R_Nombre,
 
-                -- Número de cliente
+                -- Sólo Id del número de cliente (datos se resuelven aparte)
                 nc.Id           AS NC_Id,
-                nc.Codigo       AS NC_Codigo,
 
                 -- Energético
                 e.Id            AS E_Id,
@@ -447,7 +471,7 @@ class CompraService:
             FROM dbo.Compras c           WITH (NOLOCK)
             LEFT JOIN dbo.Divisiones d   WITH (NOLOCK) ON d.Id   = c.DivisionId
             LEFT JOIN dbo.Servicios  s   WITH (NOLOCK) ON s.Id   = d.ServicioId
-            LEFT JOIN dbo.Instituciones iWITH (NOLOCK) ON i.Id   = s.InstitucionId
+            LEFT JOIN dbo.Instituciones i WITH (NOLOCK) ON i.Id  = s.InstitucionId
             LEFT JOIN dbo.Edificios  efi WITH (NOLOCK) ON efi.Id = d.EdificioId
             LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
             LEFT JOIN dbo.Regiones    r  WITH (NOLOCK) ON r.Id   = com.RegionId
@@ -460,7 +484,6 @@ class CompraService:
         if not cab:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
 
-        # Compra base
         compra = {
             "Id":                   int(cab["C_Id"]),
             "DivisionId":           int(cab["C_DivisionId"])        if cab["C_DivisionId"]       is not None else None,
@@ -479,7 +502,6 @@ class CompraService:
             "Active":               bool(cab["C_Active"]),
         }
 
-        # Secciones relacionadas
         division = None
         if cab["D_Id"] is not None:
             division = {
@@ -491,13 +513,8 @@ class CompraService:
                 "UnidadReportaPMG": bool(cab["D_UnidadReportaPMG"]) if cab["D_UnidadReportaPMG"] is not None else None,
             }
 
-        servicio = None
-        if cab["S_Id"] is not None:
-            servicio = {"Id": int(cab["S_Id"]), "ServicioNombre": cab["S_Nombre"]}
-
-        institucion = None
-        if cab["I_Id"] is not None:
-            institucion = {"Id": int(cab["I_Id"]), "InstitucionNombre": cab["I_Nombre"]}
+        servicio = {"Id": int(cab["S_Id"]), "ServicioNombre": cab["S_Nombre"]} if cab["S_Id"] is not None else None
+        institucion = {"Id": int(cab["I_Id"]), "InstitucionNombre": cab["I_Nombre"]} if cab["I_Id"] is not None else None
 
         comuna = None
         if cab["COM_Id"] is not None:
@@ -507,19 +524,20 @@ class CompraService:
                 "RegionId": int(cab["COM_RegionId"]) if cab["COM_RegionId"] is not None else None,
             }
 
-        region = None
-        if cab["R_Id"] is not None:
-            region = {"Id": int(cab["R_Id"]), "RegionNombre": cab["R_Nombre"]}
+        region = {"Id": int(cab["R_Id"]), "RegionNombre": cab["R_Nombre"]} if cab["R_Id"] is not None else None
 
         numero_cliente = None
         if cab["NC_Id"] is not None:
-            numero_cliente = {"Id": int(cab["NC_Id"]), "NumeroClienteCodigo": cab["NC_Codigo"]}
+            nc_info = _numero_cliente_info(db, int(cab["NC_Id"]))
+            numero_cliente = {
+                "Id": int(cab["NC_Id"]),
+                "Numero": nc_info["Numero"],
+                "NombreCliente": nc_info["NombreCliente"],
+                "NumeroClienteCodigo": nc_info["Numero"] or nc_info["CodigoCompat"],  # por compatibilidad con UI antigua
+            }
 
-        energetico = None
-        if cab["E_Id"] is not None:
-            energetico = {"Id": int(cab["E_Id"]), "EnergeticoNombre": cab["E_Nombre"]}
+        energetico = {"Id": int(cab["E_Id"]), "EnergeticoNombre": cab["E_Nombre"]} if cab["E_Id"] is not None else None
 
-        # Items + Medidor
         items_rows = db.execute(text("""
             SELECT
                 cm.Id,
@@ -560,7 +578,6 @@ class CompraService:
                 item["Medidor"] = None
             items.append(item)
 
-        # Dirección desde Edificios (campos reales en tu BD)
         direccion = None
         if cab["EDI_Id"] is not None:
             direccion = {
@@ -573,8 +590,7 @@ class CompraService:
                 "RegionNombre": cab["R_Nombre"],
             }
 
-        # Contexto final
-        contexto = {
+        return {
             "Compra": compra,
             "Division": division,
             "Servicio": servicio,
@@ -586,4 +602,3 @@ class CompraService:
             "Direccion": direccion,
             "Items": items,
         }
-        return contexto
