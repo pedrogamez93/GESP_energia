@@ -423,10 +423,28 @@ class CompraService:
         return out
 
     def get_context(self, db: Session, compra_id: int) -> dict:
-        cab = (
-            db.execute(
-                text(
-                    """
+        # === Detección dinámica de columnas para la dirección ===
+        has_efi_dir = _col_exists(db, "dbo", "Edificios", "DireccionId")
+
+        dir_select = (
+            "dir.Calle AS DIR_Calle, dir.Numero AS DIR_Numero, "
+            "com.Id AS COM_Id, com.Nombre AS COM_Nombre, "
+            "com.RegionId AS COM_RegionId, r.Id AS R_Id, r.Nombre AS R_Nombre"
+            if has_efi_dir
+            else "NULL AS DIR_Calle, NULL AS DIR_Numero, "
+                 "NULL AS COM_Id, NULL AS COM_Nombre, "
+                 "NULL AS COM_RegionId, NULL AS R_Id, NULL AS R_Nombre"
+        )
+
+        dir_joins = (
+            "LEFT JOIN dbo.Direcciones   dir  WITH (NOLOCK) ON dir.Id = efi.DireccionId "
+            "LEFT JOIN dbo.Comunas       com  WITH (NOLOCK) ON com.Id = dir.ComunaId "
+            "LEFT JOIN dbo.Regiones      r    WITH (NOLOCK) ON r.Id   = com.RegionId "
+            if has_efi_dir
+            else ""
+        )
+
+        cab_sql = f"""
             SELECT TOP 1
                 -- Compra
                 c.Id                  AS C_Id,
@@ -459,15 +477,9 @@ class CompraService:
                 i.Id            AS I_Id,
                 i.Nombre        AS I_Nombre,
 
-                -- Edificio -> Direcciones -> Comuna -> Región
+                -- Edificio -> Direcciones -> Comuna -> Región (dinámico)
                 efi.Id          AS EDI_Id,
-                dir.Calle       AS DIR_Calle,
-                dir.Numero      AS DIR_Numero,
-                com.Id          AS COM_Id,
-                com.Nombre      AS COM_Nombre,
-                com.RegionId    AS COM_RegionId,
-                r.Id            AS R_Id,
-                r.Nombre        AS R_Nombre,
+                {dir_select},
 
                 -- Número de cliente
                 nc.Id           AS NC_Id,
@@ -481,24 +493,19 @@ class CompraService:
             LEFT JOIN dbo.Servicios     s    WITH (NOLOCK) ON s.Id   = d.ServicioId
             LEFT JOIN dbo.Instituciones i    WITH (NOLOCK) ON i.Id   = s.InstitucionId
             LEFT JOIN dbo.Edificios     efi  WITH (NOLOCK) ON efi.Id = d.EdificioId
-            LEFT JOIN dbo.Direcciones   dir  WITH (NOLOCK) ON dir.Id = efi.DireccionId
-            LEFT JOIN dbo.Comunas       com  WITH (NOLOCK) ON com.Id = dir.ComunaId
-            LEFT JOIN dbo.Regiones      r    WITH (NOLOCK) ON r.Id   = com.RegionId
+            {dir_joins}
             LEFT JOIN dbo.NumeroClientes nc  WITH (NOLOCK) ON nc.Id  = c.NumeroClienteId
             LEFT JOIN dbo.Energeticos   e    WITH (NOLOCK) ON e.Id   = c.EnergeticoId
             WHERE c.Id = :id
             OPTION (RECOMPILE)
-                    """
-                ),
-                {"id": compra_id},
-            )
-            .mappings()
-            .first()
-        )
+        """
+
+        cab = db.execute(text(cab_sql), {"id": compra_id}).mappings().first()
 
         if not cab:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
 
+        # Normaliza compra base
         compra = {
             "Id": int(cab["C_Id"]),
             "DivisionId": int(cab["C_DivisionId"]) if cab["C_DivisionId"] is not None else None,
@@ -517,6 +524,7 @@ class CompraService:
             "Active": bool(cab["C_Active"]),
         }
 
+        # Secciones relacionadas (si existen)
         division = None
         if cab["D_Id"] is not None:
             division = {
@@ -528,13 +536,8 @@ class CompraService:
                 "UnidadReportaPMG": bool(cab["D_UnidadReportaPMG"]) if cab["D_UnidadReportaPMG"] is not None else None,
             }
 
-        servicio = None
-        if cab["S_Id"] is not None:
-            servicio = {"Id": int(cab["S_Id"]), "ServicioNombre": cab["S_Nombre"]}
-
-        institucion = None
-        if cab["I_Id"] is not None:
-            institucion = {"Id": int(cab["I_Id"]), "InstitucionNombre": cab["I_Nombre"]}
+        servicio = {"Id": int(cab["S_Id"]), "ServicioNombre": cab["S_Nombre"]} if cab["S_Id"] is not None else None
+        institucion = {"Id": int(cab["I_Id"]), "InstitucionNombre": cab["I_Nombre"]} if cab["I_Id"] is not None else None
 
         comuna = None
         if cab["COM_Id"] is not None:
@@ -544,17 +547,10 @@ class CompraService:
                 "RegionId": int(cab["COM_RegionId"]) if cab["COM_RegionId"] is not None else None,
             }
 
-        region = None
-        if cab["R_Id"] is not None:
-            region = {"Id": int(cab["R_Id"]), "RegionNombre": cab["R_Nombre"]}
+        region = {"Id": int(cab["R_Id"]), "RegionNombre": cab["R_Nombre"]} if cab["R_Id"] is not None else None
 
-        numero_cliente = None
-        if cab["NC_Id"] is not None:
-            numero_cliente = {"Id": int(cab["NC_Id"]), "NumeroClienteNumero": cab["NC_Numero"]}
-
-        energetico = None
-        if cab["E_Id"] is not None:
-            energetico = {"Id": int(cab["E_Id"]), "EnergeticoNombre": cab["E_Nombre"]}
+        numero_cliente = {"Id": int(cab["NC_Id"]), "NumeroClienteNumero": cab["NC_Numero"]} if cab["NC_Id"] is not None else None
+        energetico = {"Id": int(cab["E_Id"]), "EnergeticoNombre": cab["E_Nombre"]} if cab["E_Id"] is not None else None
 
         # ====== Items + Medidor (con detección de columnas) ======
         has_numero = _col_exists(db, "dbo", "Medidores", "Numero")
@@ -608,15 +604,16 @@ class CompraService:
                 item["Medidor"] = None
             items.append(item)
 
+        # Dirección (si la parte dinámica aportó IDs/valores)
         direccion = None
         try:
             if cab["EDI_Id"] is not None:
                 direccion = {
                     "Calle": cab.get("DIR_Calle"),
                     "Numero": cab.get("DIR_Numero"),
-                    "ComunaId": int(cab["COM_Id"]) if cab["COM_Id"] is not None else None,
+                    "ComunaId": int(cab["COM_Id"]) if cab.get("COM_Id") is not None else None,
                     "ComunaNombre": cab.get("COM_Nombre"),
-                    "RegionId": int(cab["R_Id"]) if cab["R_Id"] is not None else None,
+                    "RegionId": int(cab["R_Id"]) if cab.get("R_Id") is not None else None,
                     "RegionNombre": cab.get("R_Nombre"),
                 }
         except Exception as ex:
