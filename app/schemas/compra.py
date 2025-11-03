@@ -31,6 +31,8 @@ class CompraListDTO(BaseModel):
     InicioLectura: datetime
     FinLectura: datetime
     Active: bool = True
+    ServicioId: Optional[int] = None
+    ServicioNombre: Optional[str] = None
 
 
 class CompraDTO(CompraListDTO):

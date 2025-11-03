@@ -56,6 +56,11 @@ class CompraService:
         edificio_id: Optional[int] = None,          # ignorado
         nombre_opcional: Optional[str] = None,
     ) -> Tuple[int, List[dict]]:
+        """
+        Listado básico paginado de Compras.
+        Ahora incluye ServicioId y ServicioNombre (derivados de la División de la compra).
+        """
+        # Lecturas sin bloquear
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
         where_parts: list[str] = ["1=1"]
@@ -64,6 +69,7 @@ class CompraService:
         if active is not None:
             where_parts.append("c.Active = :active")
             params["active"] = 1 if active else 0
+
         if division_id is not None:
             where_parts.append("c.DivisionId = :division_id")
             params["division_id"] = int(division_id)
@@ -71,9 +77,9 @@ class CompraService:
         if servicio_id is not None:
             where_parts.append("""
                 EXISTS (
-                  SELECT 1
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  WHERE d.Id = c.DivisionId AND d.ServicioId = :servicio_id
+                SELECT 1
+                FROM dbo.Divisiones d WITH (NOLOCK)
+                WHERE d.Id = c.DivisionId AND d.ServicioId = :servicio_id
                 )
             """)
             params["servicio_id"] = int(servicio_id)
@@ -81,15 +87,19 @@ class CompraService:
         if energetico_id is not None:
             where_parts.append("c.EnergeticoId = :energetico_id")
             params["energetico_id"] = int(energetico_id)
+
         if numero_cliente_id is not None:
             where_parts.append("c.NumeroClienteId = :numero_cliente_id")
             params["numero_cliente_id"] = int(numero_cliente_id)
+
         if fecha_desde:
             where_parts.append("c.FechaCompra >= :desde")
             params["desde"] = _to_dt(fecha_desde)
+
         if fecha_hasta:
             where_parts.append("c.FechaCompra < :hasta")
             params["hasta"] = _to_dt(fecha_hasta)
+
         if q:
             where_parts.append("LOWER(ISNULL(c.Observacion,'')) LIKE LOWER(:q_like)")
             params["q_like"] = f"%{q}%"
@@ -101,9 +111,9 @@ class CompraService:
         if medidor_id is not None:
             where_parts.append("""
                 EXISTS (
-                  SELECT 1
-                  FROM dbo.CompraMedidor cm WITH (NOLOCK)
-                  WHERE cm.CompraId = c.Id AND cm.MedidorId = :medidor_id
+                SELECT 1
+                FROM dbo.CompraMedidor cm WITH (NOLOCK)
+                WHERE cm.CompraId = c.Id AND cm.MedidorId = :medidor_id
                 )
             """)
             params["medidor_id"] = int(medidor_id)
@@ -112,10 +122,10 @@ class CompraService:
         if region_id is not None:
             where_parts.append("""
                 EXISTS (
-                  SELECT 1
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  LEFT JOIN dbo.Comunas com WITH (NOLOCK) ON com.Id = d.ComunaId
-                  WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
+                SELECT 1
+                FROM dbo.Divisiones d WITH (NOLOCK)
+                LEFT JOIN dbo.Comunas com WITH (NOLOCK) ON com.Id = d.ComunaId
+                WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
                 )
             """)
             params["region_id"] = int(region_id)
@@ -124,9 +134,9 @@ class CompraService:
         if nombre_opcional:
             where_parts.append("""
                 EXISTS (
-                  SELECT 1
-                  FROM dbo.Divisiones d WITH (NOLOCK)
-                  WHERE d.Id = c.DivisionId
+                SELECT 1
+                FROM dbo.Divisiones d WITH (NOLOCK)
+                WHERE d.Id = c.DivisionId
                     AND LOWER(ISNULL(d.Nombre,'')) LIKE LOWER(:nombre_opcional_like)
                 )
             """)
@@ -136,6 +146,7 @@ class CompraService:
         size = max(1, min(200, page_size))
         offset = (page - 1) * size
 
+        # Total
         total = int(
             db.execute(
                 text(f"""
@@ -148,11 +159,26 @@ class CompraService:
             ).scalar() or 0
         )
 
+        # Página (ahora con ServicioId y ServicioNombre)
         rs = db.execute(
             text(f"""
                 SELECT
                     c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
-                    c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active
+                    c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active,
+
+                    -- 👇 Enriquecimiento para precargar combo de Servicios
+                    (
+                    SELECT TOP 1 d.ServicioId
+                    FROM dbo.Divisiones d WITH (NOLOCK)
+                    WHERE d.Id = c.DivisionId
+                    ) AS ServicioId,
+                    (
+                    SELECT TOP 1 s.Nombre
+                    FROM dbo.Divisiones d WITH (NOLOCK)
+                    LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = d.ServicioId
+                    WHERE d.Id = c.DivisionId
+                    ) AS ServicioNombre
+
                 FROM dbo.Compras c WITH (NOLOCK)
                 WHERE {where_sql}
                 ORDER BY c.FechaCompra DESC, c.Id DESC
@@ -175,7 +201,12 @@ class CompraService:
                 "InicioLectura": _fmt_dt(r["InicioLectura"]),
                 "FinLectura": _fmt_dt(r["FinLectura"]),
                 "Active": bool(r["Active"]),
+
+                # 👇 Campos nuevos que usará el front para precargar el <select> Servicio
+                "ServicioId": int(r["ServicioId"]) if r.get("ServicioId") is not None else None,
+                "ServicioNombre": r.get("ServicioNombre"),
             })
+
         return total, items
 
     # ─────────────────────────────────────────────────────────────────────────────
