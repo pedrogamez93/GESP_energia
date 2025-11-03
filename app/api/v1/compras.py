@@ -1,6 +1,6 @@
 # app/api/routes/compras.py
 from __future__ import annotations
-from typing import Annotated, List
+from typing import Annotated, List, Union
 
 from fastapi import APIRouter, Depends, Query, Path, status
 from sqlalchemy.orm import Session
@@ -20,7 +20,11 @@ DbDep = Annotated[Session, Depends(get_db)]
 svc = CompraService()
 
 
-@router.get("", response_model=CompraPage, summary="Listado paginado de compras/consumos")
+@router.get(
+    "",
+    response_model=Union[CompraPage, CompraFullPage],
+    summary="Listado paginado de compras/consumos (usar ?full=true para resultado enriquecido)"
+)
 def list_compras(
     db: DbDep,
     q: str | None = Query(default=None, description="Busca en Observacion"),
@@ -37,15 +41,35 @@ def list_compras(
     MedidorId: int | None = Query(default=None),
     EstadoValidacionId: str | None = Query(default=None),
     RegionId: int | None = Query(default=None),
-    EdificioId: int | None = Query(default=None),  # ignorado (no existe relación)
+    EdificioId: int | None = Query(default=None),  # ignorado (no existe relación directa)
     NombreOpcional: str | None = Query(default=None),
+    full: bool = Query(False, description="Si true, devuelve listado ENRIQUECIDO (igual al detalle)"),
 ):
+    if full:
+        total, items = svc.list_full(
+            db, q, page, page_size,
+            DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
+            MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
+        )
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": [CompraListFullDTO.model_validate(x) for x in items],
+        }
+
+    # modo ligero (el que ya usas hoy)
     total, items = svc.list(
         db, q, page, page_size,
         DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
         MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
     )
-    return {"total": total, "page": page, "page_size": page_size, "items": items}
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [CompraListDTO.model_validate(x) for x in items],
+    }
 
 
 @router.get("/{compra_id}", response_model=CompraDTO, summary="Detalle (incluye items por medidor)")
@@ -66,12 +90,7 @@ def get_compra_detalle(
     compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep
 ):
-    """
-    Devuelve **detalle enriquecido** (Compra + Items + Servicio/Institución + Región/Comuna + Dirección + Medidores).
-    Usa el service centralizado (get_full -> get_context incluye `Direccion`).
-    """
     data = svc.get_full(db, compra_id)
-    # MUY IMPORTANTE: validar contra el schema que SÍ incluye Direccion
     return CompraFullDetalleDTO(**data)
 
 
@@ -132,50 +151,3 @@ def replace_items_compra(
 ):
     rows = svc.replace_items(db, compra_id, [x.model_dump() for x in (payload.Items or [])])
     return [CompraMedidorItemDTO.model_validate(x) for x in rows]
-
-
-@router.get(
-    "/resumen/mensual",
-    response_model=List[dict],
-    summary="Resumen mensual por División/Energético (suma de Consumo y Costo)"
-)
-def resumen_mensual(
-    db: DbDep,
-    DivisionId: int = Query(..., ge=1),
-    EnergeticoId: int = Query(..., ge=1),
-    Desde: str = Query(..., description="YYYY-MM-01"),
-    Hasta: str = Query(..., description="YYYY-MM-01 (exclusivo)")
-):
-    return svc.resumen_mensual(db, DivisionId, EnergeticoId, Desde, Hasta)
-
-
-@router.get("/busqueda", response_model=CompraFullPage, summary="Listado enriquecido para buscador (con institución, servicio, región, medidores, etc.)")
-def list_compras_full(
-    db: DbDep,
-    q: str | None = Query(default=None, description="Busca en Observacion"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    DivisionId: int | None = Query(default=None),
-    ServicioId: int | None = Query(default=None),
-    EnergeticoId: int | None = Query(default=None),
-    NumeroClienteId: int | None = Query(default=None),
-    FechaDesde: str | None = Query(default=None),
-    FechaHasta: str | None = Query(default=None),
-    active: bool | None = Query(default=True),
-    MedidorId: int | None = Query(default=None),
-    EstadoValidacionId: str | None = Query(default=None),
-    RegionId: int | None = Query(default=None),
-    EdificioId: int | None = Query(default=None),  # ignorado
-    NombreOpcional: str | None = Query(default=None),
-):
-    total, items = svc.list_full(
-        db, q, page, page_size,
-        DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
-        MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
-    )
-    return {
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "items": [CompraListFullDTO.model_validate(x) for x in items],
-    }
