@@ -29,7 +29,7 @@ def list_compras(
     db: DbDep,
     q: str | None = Query(default=None, description="Busca en Observacion"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(10, ge=1, le=50),
     DivisionId: int | None = Query(default=None),
     ServicioId: int | None = Query(default=None),
     EnergeticoId: int | None = Query(default=None),

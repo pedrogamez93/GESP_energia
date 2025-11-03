@@ -13,7 +13,7 @@ from app.db.models.compra_medidor import CompraMedidor
 
 Log = logging.getLogger(__name__)
 CM_TBL = CompraMedidor.__table__
-
+_COL_CACHE: dict[tuple[str, str, str], bool] = {}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -72,6 +72,16 @@ def _col_exists(db: Session, schema: str, table: str, column: str) -> bool:
         Log.warning("COL_EXISTS failed for %s.%s.%s: %s", schema, table, column, ex)
         return False
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Cache simple para metadata de columnas (evita consultar sys.columns por request)
+# ─────────────────────────────────────────────────────────────────────────────
+def _col_exists_cached(db: Session, schema: str, table: str, column: str) -> bool:
+    key = (schema, table, column)
+    if key in _COL_CACHE:
+        return _COL_CACHE[key]
+    exists = _col_exists(db, schema, table, column)
+    _COL_CACHE[key] = exists
+    return exists
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CompraService
@@ -193,7 +203,7 @@ class CompraService:
             params["nombre_opcional_like"] = f"%{nombre_opcional}%"
 
         where_sql = " AND ".join(where_parts)
-        size = max(1, min(200, page_size))
+        size = max(1, min(50, page_size)) 
         offset = (page - 1) * size
 
         total = int(
@@ -437,11 +447,11 @@ class CompraService:
         """
 
         # ====== Detección dinámica de columnas para Dirección ======
-        has_efi_calle = _col_exists(db, "dbo", "Edificios", "Calle")
-        has_efi_numero = _col_exists(db, "dbo", "Edificios", "Numero")
-        has_efi_dirlibre = _col_exists(db, "dbo", "Edificios", "DireccionLibre")
-        has_efi_direccion = _col_exists(db, "dbo", "Edificios", "Direccion")  # fallback si no hay DireccionLibre
-        has_efi_comuna = _col_exists(db, "dbo", "Edificios", "ComunaId")
+        has_efi_calle     = _col_exists_cached(db, "dbo", "Edificios", "Calle")
+        has_efi_numero    = _col_exists_cached(db, "dbo", "Edificios", "Numero")
+        has_efi_dirlibre  = _col_exists_cached(db, "dbo", "Edificios", "DireccionLibre")
+        has_efi_direccion = _col_exists_cached(db, "dbo", "Edificios", "Direccion") # fallback si no hay DireccionLibre
+        has_efi_comuna = _col_exists_cached(db, "dbo", "Edificios", "ComunaId")
 
         # SELECT fields para Edificios.* (Dirección)
         edi_fields: List[str] = ["efi.Id AS EDI_Id"]
@@ -587,10 +597,10 @@ class CompraService:
         energetico = {"Id": int(cab["E_Id"]), "EnergeticoNombre": cab["E_Nombre"]} if cab["E_Id"] is not None else None
 
         # ====== Items + Medidor (detección de columnas) ======
-        has_numero = _col_exists(db, "dbo", "Medidores", "Numero")
-        has_device = _col_exists(db, "dbo", "Medidores", "DeviceId")
-        has_tipo = _col_exists(db, "dbo", "Medidores", "TipoMedidorId")
-        has_active = _col_exists(db, "dbo", "Medidores", "Active")
+        has_numero = _col_exists_cached(db, "dbo", "Medidores", "Numero")
+        has_device = _col_exists_cached(db, "dbo", "Medidores", "DeviceId")
+        has_tipo   = _col_exists_cached(db, "dbo", "Medidores", "TipoMedidorId")
+        has_active = _col_exists_cached(db, "dbo", "Medidores", "Active")
 
         medidor_fields = []
         medidor_fields.append("m.Numero AS MedidorNumero" if has_numero else "NULL AS MedidorNumero")
@@ -746,7 +756,7 @@ class CompraService:
                 params["nombre_opcional_like"] = f"%{nombre_opcional}%"
 
             where_sql = " AND ".join(where_parts)
-            size = max(1, min(200, page_size))
+            size = max(1, min(50, page_size)) 
             offset = (page - 1) * size
 
             total = int(
@@ -762,10 +772,10 @@ class CompraService:
             )
 
             # Detección de columnas de dirección
-            has_efi_calle     = _col_exists(db, "dbo", "Edificios", "Calle")
-            has_efi_numero    = _col_exists(db, "dbo", "Edificios", "Numero")
-            has_efi_dirlibre  = _col_exists(db, "dbo", "Edificios", "DireccionLibre")
-            has_efi_direccion = _col_exists(db, "dbo", "Edificios", "Direccion")
+            has_efi_calle     = _col_exists_cached(db, "dbo", "Edificios", "Calle")
+            has_efi_numero    = _col_exists_cached(db, "dbo", "Edificios", "Numero")
+            has_efi_dirlibre  = _col_exists_cached(db, "dbo", "Edificios", "DireccionLibre")
+            has_efi_direccion = _col_exists_cached(db, "dbo", "Edificios", "Direccion")
             edi_calle   = "efi.Calle" if has_efi_calle else "NULL"
             edi_numero  = "efi.Numero" if has_efi_numero else "NULL"
             edi_dirlib  = "efi.DireccionLibre" if has_efi_dirlibre else ("efi.Direccion" if has_efi_direccion else "NULL")
