@@ -2,11 +2,11 @@
 from __future__ import annotations
 import logging
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any, Dict
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, delete, extract, text
+from sqlalchemy import text
 
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
@@ -35,6 +35,28 @@ def _fmt_dt(dt: datetime | None) -> str | None:
     return dt.replace(microsecond=0).isoformat()
 
 
+def _safe_fetch_one(db: Session, sql: str, params: Dict[str, Any]) -> Optional[dict]:
+    """
+    Ejecuta una consulta y devuelve un mapping() o None,
+    nunca levanta excepción: loggea y sigue.
+    """
+    try:
+        row = db.execute(text(sql), params).mappings().first()
+        return dict(row) if row else None
+    except Exception as ex:
+        Log.warning("SAFE_FETCH_ONE failed: %s | SQL: %s | params=%s", ex, sql, params)
+        return None
+
+
+def _safe_fetch_all(db: Session, sql: str, params: Dict[str, Any]) -> List[dict]:
+    try:
+        rows = db.execute(text(sql), params).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception as ex:
+        Log.warning("SAFE_FETCH_ALL failed: %s | SQL: %s | params=%s", ex, sql, params)
+        return []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CompraService
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +83,7 @@ class CompraService:
         edificio_id: Optional[int] = None,  # ignorado
         nombre_opcional: Optional[str] = None,
     ) -> Tuple[int, List[dict]]:
+        # Aislamos como .NET (NOLOCK) y evitamos locks relevantes
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
         where_parts: list[str] = ["1=1"]
@@ -210,7 +233,7 @@ class CompraService:
 
     def create(self, db: Session, data, created_by: Optional[str] = None) -> Tuple[Compra, List[CompraMedidor]]:
         now = datetime.utcnow()
-        created_by_div = data.CreatedByDivisionId or data.DivisionId
+        created_by_div = getattr(data, "CreatedByDivisionId", None) or data.DivisionId
 
         obj = Compra(
             CreatedAt=now,
@@ -239,7 +262,7 @@ class CompraService:
         db.flush()
 
         payload = []
-        for it in (data.Items or []):
+        for it in (getattr(data, "Items", None) or []):
             payload.append({
                 "Consumo": float(it.Consumo),
                 "MedidorId": int(it.MedidorId),
@@ -259,6 +282,7 @@ class CompraService:
         obj = self.get(db, compra_id)
         payload = data.model_dump(exclude_unset=True)
 
+        # Normaliza fechas que puedan venir como string
         for k in ("InicioLectura", "FinLectura", "FechaCompra", "ReviewedAt"):
             if k in payload and payload[k] is not None:
                 payload[k] = _to_dt(payload[k])
@@ -294,3 +318,161 @@ class CompraService:
         db.commit()
         db.refresh(obj)
         return obj
+
+    # ==========================================================================
+    # DETALLE ENRIQUECIDO
+    # ==========================================================================
+    def get_full(self, db: Session, compra_id: int) -> dict:
+        """
+        Compatibilidad con el router: delega al método real de armado.
+        """
+        return self.get_context(db, compra_id)
+
+    def get_context(self, db: Session, compra_id: int) -> dict:
+        """
+        Devuelve detalle enriquecido:
+          - compra base
+          - items (CompraMedidor) + datos de medidor (si existen)
+          - referencias de división/servicio/institución
+          - región/comuna
+          - número de cliente
+          - energético
+          - dirección (si existiese una tabla Direcciones o similar)
+        El método es tolerante a faltas de tablas/campos: loggea y sigue.
+        """
+        # 1) Compra base
+        compra = _safe_fetch_one(db, """
+            SELECT TOP 1
+                c.Id, c.DivisionId, c.NumeroClienteId, c.EnergeticoId,
+                c.FechaCompra, c.InicioLectura, c.FinLectura,
+                c.Consumo, c.Costo, c.Observacion,
+                c.EstadoValidacionId, c.Active
+            FROM dbo.Compras c WITH (NOLOCK)
+            WHERE c.Id = :id
+        """, {"id": compra_id})
+        if not compra:
+            raise HTTPException(status_code=404, detail="Compra no encontrada")
+
+        # Normaliza fechas
+        for k in ("FechaCompra", "InicioLectura", "FinLectura"):
+            compra[k] = _fmt_dt(compra[k])
+
+        # 2) Items + Medidores
+        items = _safe_fetch_all(db, """
+            SELECT
+                cm.Id,
+                cm.CompraId,
+                cm.MedidorId,
+                cm.Consumo,
+                cm.ParametroMedicionId,
+                cm.UnidadMedidaId,
+                -- campos de Medidores si existen
+                m.Codigo       AS MedidorCodigo,
+                m.Serie        AS MedidorSerie,
+                m.TipoMedidorId AS MedidorTipoId,
+                m.Active       AS MedidorActivo
+            FROM dbo.CompraMedidor cm WITH (NOLOCK)
+            LEFT JOIN dbo.Medidores m WITH (NOLOCK)
+              ON m.Id = cm.MedidorId
+            WHERE cm.CompraId = :id
+            ORDER BY cm.Id
+        """, {"id": compra_id})
+
+        # 3) División + Servicio + Institución (si existen esos campos)
+        division = _safe_fetch_one(db, """
+            SELECT TOP 1
+                d.Id, d.ServicioId, d.InstitucionId, d.ComunaId,
+                d.Nombre AS DivisionNombre
+            FROM dbo.Divisiones d WITH (NOLOCK)
+            WHERE d.Id = :div_id
+        """, {"div_id": compra["DivisionId"]}) if compra.get("DivisionId") else None
+
+        servicio = _safe_fetch_one(db, """
+            SELECT TOP 1 s.Id, s.Nombre AS ServicioNombre
+            FROM dbo.Servicios s WITH (NOLOCK)
+            WHERE s.Id = :sid
+        """, {"sid": division["ServicioId"]}) if division and division.get("ServicioId") else None
+
+        institucion = _safe_fetch_one(db, """
+            SELECT TOP 1 i.Id, i.Nombre AS InstitucionNombre
+            FROM dbo.Instituciones i WITH (NOLOCK)
+            WHERE i.Id = :iid
+        """, {"iid": division["InstitucionId"]}) if division and division.get("InstitucionId") else None
+
+        # 4) Región/Comuna
+        comuna = _safe_fetch_one(db, """
+            SELECT TOP 1 c.Id, c.Nombre AS ComunaNombre, c.RegionId
+            FROM dbo.Comunas c WITH (NOLOCK)
+            WHERE c.Id = :cid
+        """, {"cid": division["ComunaId"]}) if division and division.get("ComunaId") else None
+
+        region = _safe_fetch_one(db, """
+            SELECT TOP 1 r.Id, r.Nombre AS RegionNombre
+            FROM dbo.Regiones r WITH (NOLOCK)
+            WHERE r.Id = :rid
+        """, {"rid": comuna["RegionId"]}) if comuna and comuna.get("RegionId") else None
+
+        # 5) Número de cliente
+        numero_cliente = _safe_fetch_one(db, """
+            SELECT TOP 1 nc.Id, nc.Codigo AS NumeroClienteCodigo
+            FROM dbo.NumeroClientes nc WITH (NOLOCK)
+            WHERE nc.Id = :nid
+        """, {"nid": compra["NumeroClienteId"]}) if compra.get("NumeroClienteId") else None
+
+        # 6) Energético
+        energetico = _safe_fetch_one(db, """
+            SELECT TOP 1 e.Id, e.Nombre AS EnergeticoNombre
+            FROM dbo.Energeticos e WITH (NOLOCK)
+            WHERE e.Id = :eid
+        """, {"eid": compra["EnergeticoId"]}) if compra.get("EnergeticoId") else None
+
+        # 7) Dirección (si existe tabla de direcciones ligada a la división)
+        direccion = _safe_fetch_one(db, """
+            SELECT TOP 1
+                dir.Id,
+                dir.Calle,
+                dir.Numero,
+                dir.Referencia,
+                dir.Latitud,
+                dir.Longitud
+            FROM dbo.Direcciones dir WITH (NOLOCK)
+            WHERE dir.DivisionId = :div_id
+            ORDER BY dir.Id DESC
+        """, {"div_id": compra["DivisionId"]}) if division else None
+
+        # 8) Construcción del contexto
+        contexto: dict = {
+            "Compra": {
+                **compra,
+                "Consumo": float(compra.get("Consumo") or 0),
+                "Costo": float(compra.get("Costo") or 0),
+                "Active": bool(compra.get("Active")),
+            },
+            "Division": division,
+            "Servicio": servicio,
+            "Institucion": institucion,
+            "Comuna": comuna,
+            "Region": region,
+            "NumeroCliente": numero_cliente,
+            "Energetico": energetico,
+            "Direccion": direccion,
+            "Items": [
+                {
+                    "Id": int(it["Id"]),
+                    "CompraId": int(it["CompraId"]),
+                    "MedidorId": int(it["MedidorId"]) if it["MedidorId"] is not None else None,
+                    "Consumo": float(it["Consumo"] or 0),
+                    "ParametroMedicionId": int(it["ParametroMedicionId"]) if it["ParametroMedicionId"] is not None else None,
+                    "UnidadMedidaId": int(it["UnidadMedidaId"]) if it["UnidadMedidaId"] is not None else None,
+                    "Medidor": {
+                        "Codigo": it.get("MedidorCodigo"),
+                        "Serie": it.get("MedidorSerie"),
+                        "TipoMedidorId": it.get("MedidorTipoId"),
+                        "Active": bool(it["MedidorActivo"]) if it.get("MedidorActivo") is not None else None,
+                    } if it.get("MedidorId") else None,
+                }
+                for it in items
+            ],
+        }
+
+        return contexto
