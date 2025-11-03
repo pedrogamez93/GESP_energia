@@ -22,8 +22,8 @@ svc = CompraService()
 
 @router.get(
     "",
-    response_model=Union[CompraPage, CompraFullPage],
-    summary="Listado paginado de compras/consumos (usar ?full=true para resultado enriquecido)"
+    response_model=CompraFullPage,
+    summary="Listado paginado enriquecido (igual al detalle por cada ítem)"
 )
 def list_compras(
     db: DbDep,
@@ -37,29 +37,13 @@ def list_compras(
     FechaDesde: str | None = Query(default=None),
     FechaHasta: str | None = Query(default=None),
     active: bool | None = Query(default=True),
-    # extras
     MedidorId: int | None = Query(default=None),
     EstadoValidacionId: str | None = Query(default=None),
     RegionId: int | None = Query(default=None),
-    EdificioId: int | None = Query(default=None),  # ignorado (no existe relación directa)
+    EdificioId: int | None = Query(default=None),  # ignorado directo
     NombreOpcional: str | None = Query(default=None),
-    full: bool = Query(False, description="Si true, devuelve listado ENRIQUECIDO (igual al detalle)"),
 ):
-    if full:
-        total, items = svc.list_full(
-            db, q, page, page_size,
-            DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
-            MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
-        )
-        return {
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "items": [CompraListFullDTO.model_validate(x) for x in items],
-        }
-
-    # modo ligero (el que ya usas hoy)
-    total, items = svc.list(
+    total, items = svc.list_full(
         db, q, page, page_size,
         DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
         MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
@@ -68,7 +52,8 @@ def list_compras(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [CompraListDTO.model_validate(x) for x in items],
+        # OJO: validamos contra el DTO completo por ítem
+        "items": [CompraListFullDTO.model_validate(x) for x in items],
     }
 
 
