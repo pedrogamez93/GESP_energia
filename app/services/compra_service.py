@@ -6,7 +6,7 @@ from typing import Optional, List, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, delete, extract, text
+from sqlalchemy import func, and_, delete, extract, text, bindparam
 
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
