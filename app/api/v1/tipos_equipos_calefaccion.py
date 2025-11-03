@@ -1,4 +1,3 @@
-# app/api/v1/tipos_equipos_calefaccion.py
 from __future__ import annotations
 from typing import Annotated
 
@@ -9,8 +8,16 @@ from app.dependencies.db import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 
-from app.schemas.catalogo_simple import CatalogoDTO, CatalogoCreate, CatalogoUpdate, CatalogoPage
-from app.schemas.tipo_equipo_calefaccion import TECEnergeticoDTO, TECEnergeticoCreate, TECEnergeticoListDTO
+# Para la respuesta paginada simple (Id, Nombre)
+from app.schemas.catalogo_simple import CatalogoDTO, CatalogoPage
+# Schemas específicos de calefacción (payloads y compatibilidades)
+from app.schemas.tipo_equipo_calefaccion import (
+    TipoEquipoCalefaccionCreate,
+    TipoEquipoCalefaccionUpdate,
+    TECEnergeticoDTO,
+    TECEnergeticoCreate,
+    TECEnergeticoListDTO,
+)
 from app.services.tipo_equipo_calefaccion_service import TipoEquipoCalefaccionService
 
 router = APIRouter(prefix="/api/v1/tipos-equipos-calefaccion", tags=["Tipos Equipos Calefacción"])
@@ -25,26 +32,28 @@ def list_(db: DbDep, q: str | None = Query(None), page: int = 1, page_size: int 
         "total": data["total"],
         "page": data["page"],
         "page_size": data["page_size"],
-        "items": [CatalogoDTO.model_validate(x) for x in data["items"]],
+        "items": [CatalogoDTO(Id=i.Id, Nombre=i.Nombre) for i in data["items"]],
     }
 
 @router.get("/{id}", response_model=CatalogoDTO, summary="Obtener por Id")
 def get_(db: DbDep, id: Annotated[int, Path(..., ge=1)]):
-    return CatalogoDTO.model_validate(svc.get(db, id))
+    obj = svc.get(db, id)
+    return CatalogoDTO(Id=obj.Id, Nombre=obj.Nombre)
 
 @router.post("", response_model=CatalogoDTO, status_code=status.HTTP_201_CREATED, summary="(ADMIN) Crear")
-def create_(payload: CatalogoCreate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+def create_(payload: TipoEquipoCalefaccionCreate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     obj = svc.create(db, payload, user=getattr(u, "Username", None))
-    return CatalogoDTO.model_validate(obj)
+    return CatalogoDTO(Id=obj.Id, Nombre=obj.Nombre)
 
 @router.put("/{id}", response_model=CatalogoDTO, summary="(ADMIN) Actualizar")
-def update_(id: Annotated[int, Path(..., ge=1)], payload: CatalogoUpdate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
+def update_(id: Annotated[int, Path(..., ge=1)], payload: TipoEquipoCalefaccionUpdate, db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
     obj = svc.update(db, id, payload, user=getattr(u, "Username", None))
-    return CatalogoDTO.model_validate(obj)
+    return CatalogoDTO(Id=obj.Id, Nombre=obj.Nombre)
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMIN) Eliminar")
 def delete_(id: Annotated[int, Path(..., ge=1)], db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
-    svc.delete(db, id); return Response(status_code=status.HTTP_204_NO_CONTENT)
+    svc.delete(db, id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # -------- Compatibilidades equipo ↔ energético --------
 @router.get("/{id}/compat", response_model=TECEnergeticoListDTO, summary="Listar compatibilidades del equipo")
@@ -59,4 +68,5 @@ def add_rel_(id: Annotated[int, Path(..., ge=1)], payload: TECEnergeticoCreate, 
 
 @router.delete("/{id}/compat/{rel_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Eliminar compatibilidad")
 def del_rel_(id: Annotated[int, Path(..., ge=1)], rel_id: Annotated[int, Path(..., ge=1)], db: DbDep, u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]):
-    svc.delete_rel(db, rel_id); return Response(status_code=status.HTTP_204_NO_CONTENT)
+    svc.delete_rel(db, rel_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
