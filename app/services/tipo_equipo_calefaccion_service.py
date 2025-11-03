@@ -1,22 +1,15 @@
 # app/services/tipo_equipo_calefaccion_service.py
 from __future__ import annotations
-from typing import Any, Dict, Optional
+from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from fastapi import HTTPException
 
 from app.db.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
 from app.db.models.tipo_equipo_calefaccion_energetico import TipoEquipoCalefaccionEnergetico
-from app.schemas.tipo_equipo_calefaccion import (
-    TipoEquipoCalefaccionCreate,
-    TipoEquipoCalefaccionUpdate,
-)
 
-def _clean_nombre(v: Optional[str]) -> Optional[str]:
-    if v is None:
-        return None
-    s = v.strip()
-    return s or None
+def _now():
+    return datetime.utcnow()
 
 class TipoEquipoCalefaccionService:
     # ----- Catálogo -----
@@ -30,9 +23,9 @@ class TipoEquipoCalefaccionService:
         total = query.count()
         items = (
             query.order_by(TipoEquipoCalefaccion.Nombre, TipoEquipoCalefaccion.Id)
-            .offset((page - 1) * size)
-            .limit(size)
-            .all()
+                 .offset((page - 1) * size)
+                 .limit(size)
+                 .all()
         )
         return {"total": total, "page": page, "page_size": size, "items": items}
 
@@ -42,15 +35,12 @@ class TipoEquipoCalefaccionService:
             raise HTTPException(status_code=404, detail="Tipo de equipo de calefacción no encontrado")
         return obj
 
-    def create(self, db: Session, data: TipoEquipoCalefaccionCreate, user: str | None = None) -> TipoEquipoCalefaccion:
-        """
-        Crea usando SOLO columnas reales de la tabla (sin CreatedAt/UpdatedAt/etc).
-        Asegura 0/False para campos NOT NULL si no vienen en el payload.
-        """
-        p: Dict[str, Any] = data.model_dump()
+    def create(self, db: Session, data, user: str | None = None):
+        # Acepta payloads de Pydantic v2 (model_dump) o dict-like
+        p = data.model_dump() if hasattr(data, "model_dump") else dict(data)
 
-        values: Dict[str, Any] = {
-            "Nombre": _clean_nombre(p.get("Nombre")),
+        values = {
+            "Nombre": (p.get("Nombre") or "").strip() or None,
             "Rendimiento": p.get("Rendimiento", 0) or 0,
             "A": p.get("A", 0) or 0,
             "B": p.get("B", 0) or 0,
@@ -71,7 +61,7 @@ class TipoEquipoCalefaccionService:
             "FR": bool(p.get("FR", False)),
         }
 
-        # Blindaje: eliminar keys que no son columnas de la tabla
+        # Blindaje: solo columnas reales
         allowed = {c.key for c in TipoEquipoCalefaccion.__table__.columns}
         values = {k: v for k, v in values.items() if k in allowed}
 
@@ -81,22 +71,38 @@ class TipoEquipoCalefaccionService:
         db.refresh(obj)
         return obj
 
-    def update(self, db: Session, id_: int, data: TipoEquipoCalefaccionUpdate, user: str | None = None) -> TipoEquipoCalefaccion:
+    # PUT clásico (mantengo compatibilidad si ya lo usas para cambiar solo nombre/activo)
+    def update(self, db: Session, id_: int, data, user: str | None = None):
+        obj = self.get(db, id_)
+        if hasattr(data, "Nombre"):
+            obj.Nombre = (data.Nombre or "").strip()
+        if hasattr(data, "Active") and data.Active is not None:
+            obj.Active = bool(data.Active)
+        db.commit()
+        db.refresh(obj)
+        return obj
+
+    # PATCH parcial: actualiza cualquier campo recibido
+    def update_fields(self, db: Session, id_: int, data, user: str | None = None):
         obj = self.get(db, id_)
 
-        upd = data.model_dump(exclude_unset=True)
+        if hasattr(data, "model_dump"):
+            p = data.model_dump(exclude_unset=True)  # Pydantic v2
+        else:
+            # diccionario: ignora claves con None/ausentes
+            p = {k: v for k, v in dict(data).items() if v is not None}
 
-        if "Nombre" in upd:
-            obj.Nombre = _clean_nombre(upd["Nombre"])
+        allowed = {c.key for c in TipoEquipoCalefaccion.__table__.columns}
+        bools = {"AC", "CA", "FR"}
 
-        for k in (
-            "Rendimiento", "A", "B", "C", "Temp", "Costo", "Costo_Social",
-            "Costo_Mant", "Costo_Social_Mant", "Ejec_HD_Maestro", "Ejec_HD_Ayte",
-            "Ejec_HD_Jornal", "Mant_HD_Maestro", "Mant_HD_Ayte", "Mant_HD_Jornal",
-            "AC", "CA", "FR",
-        ):
-            if k in upd and upd[k] is not None:
-                setattr(obj, k, upd[k])
+        for k, v in p.items():
+            if k not in allowed:
+                continue
+            if k == "Nombre":
+                v = (v or "").strip() or None
+            if k in bools:
+                v = bool(v)
+            setattr(obj, k, v)
 
         db.commit()
         db.refresh(obj)
@@ -112,20 +118,20 @@ class TipoEquipoCalefaccionService:
         self.get(db, tipo_id)  # valida existencia
         return (
             db.query(TipoEquipoCalefaccionEnergetico)
-            .filter(TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId == tipo_id)
-            .order_by(TipoEquipoCalefaccionEnergetico.Id)
-            .all()
+              .filter(TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId == tipo_id)
+              .order_by(TipoEquipoCalefaccionEnergetico.Id)
+              .all()
         )
 
     def add_rel(self, db: Session, tipo_id: int, energetico_id: int):
         self.get(db, tipo_id)
         exists = (
             db.query(TipoEquipoCalefaccionEnergetico)
-            .filter(
-                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId == tipo_id,
-                TipoEquipoCalefaccionEnergetico.EnergeticoId == energetico_id,
-            )
-            .first()
+              .filter(
+                  TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId == tipo_id,
+                  TipoEquipoCalefaccionEnergetico.EnergeticoId == energetico_id,
+              )
+              .first()
         )
         if exists:
             return exists
@@ -140,8 +146,8 @@ class TipoEquipoCalefaccionService:
     def delete_rel(self, db: Session, rel_id: int):
         obj = (
             db.query(TipoEquipoCalefaccionEnergetico)
-            .filter(TipoEquipoCalefaccionEnergetico.Id == rel_id)
-            .first()
+              .filter(TipoEquipoCalefaccionEnergetico.Id == rel_id)
+              .first()
         )
         if not obj:
             raise HTTPException(status_code=404, detail="Relación no encontrada")
