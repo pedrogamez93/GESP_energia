@@ -324,41 +324,174 @@ class CompraService:
     # ==========================================================================
     def get_full(self, db: Session, compra_id: int) -> dict:
         """
-        Compatibilidad con el router: delega al método real de armado.
+        Devuelve el formato que espera el response_model:
+        - Campos de la compra en el nivel raíz (aplanados)
+        - Secciones extra (Items, Division, Servicio, etc.) como campos adyacentes
         """
-        return self.get_context(db, compra_id)
+        ctx = self.get_context(db, compra_id)
+
+        # Campos que típicamente exige tu schema en el nivel raíz.
+        # Agrega/quita aquí si tu schema difiere.
+        required_root = [
+            "Id", "DivisionId", "EnergeticoId", "NumeroClienteId",
+            "FechaCompra", "Consumo", "Costo",
+            "InicioLectura", "FinLectura",
+            "FacturaId", "CreatedByDivisionId",
+            "EstadoValidacionId", "Observacion", "Active",
+            "UnidadMedidaId",  # si tu schema lo pide
+        ]
+
+        base = ctx.get("Compra", {}) if isinstance(ctx, dict) else {}
+        out = {}
+
+        # Rellena valores requeridos (si faltan, con None)
+        for k in required_root:
+            out[k] = base.get(k, None)
+
+        # Copia cualquier otro atributo de la compra (por si tu schema acepta más)
+        for k, v in base.items():
+            if k not in out:
+                out[k] = v
+
+        # Agrega el resto del contexto como secciones auxiliares
+        for k, v in ctx.items():
+            if k == "Compra":
+                continue
+            out[k] = v
+
+        return out
 
     def get_context(self, db: Session, compra_id: int) -> dict:
         """
         Devuelve detalle enriquecido:
-          - compra base
-          - items (CompraMedidor) + datos de medidor (si existen)
-          - referencias de división/servicio/institución
-          - región/comuna
-          - número de cliente
-          - energético
-          - dirección (si existiese una tabla Direcciones o similar)
-        El método es tolerante a faltas de tablas/campos: loggea y sigue.
+          - compra base y referencias (división/servicio/institución/comuna/región/num-cliente/energético)
+          - items + medidor
+        Usa LEFT JOIN + NOLOCK para asemejar .NET y reduce idas a la BD.
         """
-        # 1) Compra base
-        compra = _safe_fetch_one(db, """
+        # Cabecera + referencias en UNA sola consulta
+        cab = db.execute(text("""
             SELECT TOP 1
-                c.Id, c.DivisionId, c.NumeroClienteId, c.EnergeticoId,
-                c.FechaCompra, c.InicioLectura, c.FinLectura,
-                c.Consumo, c.Costo, c.Observacion,
-                c.EstadoValidacionId, c.Active
+                -- Compra
+                c.Id                    AS C_Id,
+                c.DivisionId            AS C_DivisionId,
+                c.NumeroClienteId       AS C_NumeroClienteId,
+                c.EnergeticoId          AS C_EnergeticoId,
+                c.FechaCompra           AS C_FechaCompra,
+                c.InicioLectura         AS C_InicioLectura,
+                c.FinLectura            AS C_FinLectura,
+                c.Consumo               AS C_Consumo,
+                c.Costo                 AS C_Costo,
+                c.Observacion           AS C_Observacion,
+                c.EstadoValidacionId    AS C_EstadoValidacionId,
+                c.FacturaId             AS C_FacturaId,
+                c.CreatedByDivisionId   AS C_CreatedByDivisionId,
+                c.UnidadMedidaId        AS C_UnidadMedidaId,
+                c.Active                AS C_Active,
+
+                -- Division
+                d.Id                    AS D_Id,
+                d.ServicioId            AS D_ServicioId,
+                d.InstitucionId         AS D_InstitucionId,
+                d.ComunaId              AS D_ComunaId,
+                d.Nombre                AS D_Nombre,
+
+                -- Servicio
+                s.Id                    AS S_Id,
+                s.Nombre                AS S_Nombre,
+
+                -- Institución
+                i.Id                    AS I_Id,
+                i.Nombre                AS I_Nombre,
+
+                -- Comuna / Región
+                com.Id                  AS COM_Id,
+                com.Nombre              AS COM_Nombre,
+                com.RegionId            AS COM_RegionId,
+                r.Id                    AS R_Id,
+                r.Nombre                AS R_Nombre,
+
+                -- Número de cliente
+                nc.Id                   AS NC_Id,
+                nc.Codigo               AS NC_Codigo,
+
+                -- Energético
+                e.Id                    AS E_Id,
+                e.Nombre                AS E_Nombre
             FROM dbo.Compras c WITH (NOLOCK)
+            LEFT JOIN dbo.Divisiones     d   WITH (NOLOCK) ON d.Id  = c.DivisionId
+            LEFT JOIN dbo.Servicios      s   WITH (NOLOCK) ON s.Id  = d.ServicioId
+            LEFT JOIN dbo.Instituciones  i   WITH (NOLOCK) ON i.Id  = d.InstitucionId
+            LEFT JOIN dbo.Comunas        com WITH (NOLOCK) ON com.Id= d.ComunaId
+            LEFT JOIN dbo.Regiones       r   WITH (NOLOCK) ON r.Id  = com.RegionId
+            LEFT JOIN dbo.NumeroClientes nc  WITH (NOLOCK) ON nc.Id = c.NumeroClienteId
+            LEFT JOIN dbo.Energeticos    e   WITH (NOLOCK) ON e.Id  = c.EnergeticoId
             WHERE c.Id = :id
-        """, {"id": compra_id})
-        if not compra:
+            OPTION (RECOMPILE)
+        """), {"id": compra_id}).mappings().first()
+
+        if not cab:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
 
-        # Normaliza fechas
-        for k in ("FechaCompra", "InicioLectura", "FinLectura"):
-            compra[k] = _fmt_dt(compra[k])
+        # Normaliza compra base
+        compra = {
+            "Id":                   int(cab["C_Id"]),
+            "DivisionId":           int(cab["C_DivisionId"])        if cab["C_DivisionId"]       is not None else None,
+            "NumeroClienteId":      int(cab["C_NumeroClienteId"])   if cab["C_NumeroClienteId"]  is not None else None,
+            "EnergeticoId":         int(cab["C_EnergeticoId"])      if cab["C_EnergeticoId"]     is not None else None,
+            "FechaCompra":          _fmt_dt(cab["C_FechaCompra"]),
+            "InicioLectura":        _fmt_dt(cab["C_InicioLectura"]),
+            "FinLectura":           _fmt_dt(cab["C_FinLectura"]),
+            "Consumo":              float(cab["C_Consumo"] or 0),
+            "Costo":                float(cab["C_Costo"] or 0),
+            "Observacion":          cab["C_Observacion"],
+            "EstadoValidacionId":   cab["C_EstadoValidacionId"],
+            "FacturaId":            cab["C_FacturaId"],
+            "CreatedByDivisionId":  cab["C_CreatedByDivisionId"],
+            "UnidadMedidaId":       cab["C_UnidadMedidaId"],
+            "Active":               bool(cab["C_Active"]),
+        }
 
-        # 2) Items + Medidores
-        items = _safe_fetch_all(db, """
+        # Secciones relacionadas (si existen)
+        division = None
+        if cab["D_Id"] is not None:
+            division = {
+                "Id":            int(cab["D_Id"]),
+                "ServicioId":    int(cab["D_ServicioId"])   if cab["D_ServicioId"]    is not None else None,
+                "InstitucionId": int(cab["D_InstitucionId"])if cab["D_InstitucionId"] is not None else None,
+                "ComunaId":      int(cab["D_ComunaId"])     if cab["D_ComunaId"]      is not None else None,
+                "DivisionNombre": cab["D_Nombre"],
+            }
+
+        servicio = None
+        if cab["S_Id"] is not None:
+            servicio = {"Id": int(cab["S_Id"]), "ServicioNombre": cab["S_Nombre"]}
+
+        institucion = None
+        if cab["I_Id"] is not None:
+            institucion = {"Id": int(cab["I_Id"]), "InstitucionNombre": cab["I_Nombre"]}
+
+        comuna = None
+        if cab["COM_Id"] is not None:
+            comuna = {
+                "Id": int(cab["COM_Id"]),
+                "ComunaNombre": cab["COM_Nombre"],
+                "RegionId": int(cab["COM_RegionId"]) if cab["COM_RegionId"] is not None else None,
+            }
+
+        region = None
+        if cab["R_Id"] is not None:
+            region = {"Id": int(cab["R_Id"]), "RegionNombre": cab["R_Nombre"]}
+
+        numero_cliente = None
+        if cab["NC_Id"] is not None:
+            numero_cliente = {"Id": int(cab["NC_Id"]), "NumeroClienteCodigo": cab["NC_Codigo"]}
+
+        energetico = None
+        if cab["E_Id"] is not None:
+            energetico = {"Id": int(cab["E_Id"]), "EnergeticoNombre": cab["E_Nombre"]}
+
+        # Items + Medidor
+        items_rows = db.execute(text("""
             SELECT
                 cm.Id,
                 cm.CompraId,
@@ -366,88 +499,58 @@ class CompraService:
                 cm.Consumo,
                 cm.ParametroMedicionId,
                 cm.UnidadMedidaId,
-                -- campos de Medidores si existen
-                m.Codigo       AS MedidorCodigo,
-                m.Serie        AS MedidorSerie,
+                m.Codigo        AS MedidorCodigo,
+                m.Serie         AS MedidorSerie,
                 m.TipoMedidorId AS MedidorTipoId,
-                m.Active       AS MedidorActivo
+                m.Active        AS MedidorActive
             FROM dbo.CompraMedidor cm WITH (NOLOCK)
-            LEFT JOIN dbo.Medidores m WITH (NOLOCK)
-              ON m.Id = cm.MedidorId
+            LEFT JOIN dbo.Medidores m WITH (NOLOCK) ON m.Id = cm.MedidorId
             WHERE cm.CompraId = :id
             ORDER BY cm.Id
-        """, {"id": compra_id})
+            OPTION (RECOMPILE)
+        """), {"id": compra_id}).mappings().all()
 
-        # 3) División + Servicio + Institución (si existen esos campos)
-        division = _safe_fetch_one(db, """
-            SELECT TOP 1
-                d.Id, d.ServicioId, d.InstitucionId, d.ComunaId,
-                d.Nombre AS DivisionNombre
-            FROM dbo.Divisiones d WITH (NOLOCK)
-            WHERE d.Id = :div_id
-        """, {"div_id": compra["DivisionId"]}) if compra.get("DivisionId") else None
+        items = []
+        for it in items_rows:
+            item = {
+                "Id": int(it["Id"]),
+                "CompraId": int(it["CompraId"]),
+                "MedidorId": int(it["MedidorId"]) if it["MedidorId"] is not None else None,
+                "Consumo": float(it["Consumo"] or 0),
+                "ParametroMedicionId": int(it["ParametroMedicionId"]) if it["ParametroMedicionId"] is not None else None,
+                "UnidadMedidaId": int(it["UnidadMedidaId"]) if it["UnidadMedidaId"] is not None else None,
+            }
+            if it["MedidorId"] is not None:
+                item["Medidor"] = {
+                    "Codigo": it.get("MedidorCodigo"),
+                    "Serie": it.get("MedidorSerie"),
+                    "TipoMedidorId": it.get("MedidorTipoId"),
+                    "Active": bool(it["MedidorActive"]) if it.get("MedidorActive") is not None else None,
+                }
+            else:
+                item["Medidor"] = None
+            items.append(item)
 
-        servicio = _safe_fetch_one(db, """
-            SELECT TOP 1 s.Id, s.Nombre AS ServicioNombre
-            FROM dbo.Servicios s WITH (NOLOCK)
-            WHERE s.Id = :sid
-        """, {"sid": division["ServicioId"]}) if division and division.get("ServicioId") else None
+        # Dirección (si existe la tabla)
+        direccion = None
+        try:
+            dir_row = db.execute(text("""
+                SELECT TOP 1
+                    dir.Id, dir.Calle, dir.Numero, dir.Referencia, dir.Latitud, dir.Longitud
+                FROM dbo.Direcciones dir WITH (NOLOCK)
+                WHERE dir.DivisionId = :div_id
+                ORDER BY dir.Id DESC
+            """), {"div_id": compra["DivisionId"]}).mappings().first() if compra["DivisionId"] else None
 
-        institucion = _safe_fetch_one(db, """
-            SELECT TOP 1 i.Id, i.Nombre AS InstitucionNombre
-            FROM dbo.Instituciones i WITH (NOLOCK)
-            WHERE i.Id = :iid
-        """, {"iid": division["InstitucionId"]}) if division and division.get("InstitucionId") else None
+            if dir_row:
+                direccion = dict(dir_row)
+        except Exception as ex:
+            Log.warning("Direcciones no disponible: %s", ex)
+            direccion = None
 
-        # 4) Región/Comuna
-        comuna = _safe_fetch_one(db, """
-            SELECT TOP 1 c.Id, c.Nombre AS ComunaNombre, c.RegionId
-            FROM dbo.Comunas c WITH (NOLOCK)
-            WHERE c.Id = :cid
-        """, {"cid": division["ComunaId"]}) if division and division.get("ComunaId") else None
-
-        region = _safe_fetch_one(db, """
-            SELECT TOP 1 r.Id, r.Nombre AS RegionNombre
-            FROM dbo.Regiones r WITH (NOLOCK)
-            WHERE r.Id = :rid
-        """, {"rid": comuna["RegionId"]}) if comuna and comuna.get("RegionId") else None
-
-        # 5) Número de cliente
-        numero_cliente = _safe_fetch_one(db, """
-            SELECT TOP 1 nc.Id, nc.Codigo AS NumeroClienteCodigo
-            FROM dbo.NumeroClientes nc WITH (NOLOCK)
-            WHERE nc.Id = :nid
-        """, {"nid": compra["NumeroClienteId"]}) if compra.get("NumeroClienteId") else None
-
-        # 6) Energético
-        energetico = _safe_fetch_one(db, """
-            SELECT TOP 1 e.Id, e.Nombre AS EnergeticoNombre
-            FROM dbo.Energeticos e WITH (NOLOCK)
-            WHERE e.Id = :eid
-        """, {"eid": compra["EnergeticoId"]}) if compra.get("EnergeticoId") else None
-
-        # 7) Dirección (si existe tabla de direcciones ligada a la división)
-        direccion = _safe_fetch_one(db, """
-            SELECT TOP 1
-                dir.Id,
-                dir.Calle,
-                dir.Numero,
-                dir.Referencia,
-                dir.Latitud,
-                dir.Longitud
-            FROM dbo.Direcciones dir WITH (NOLOCK)
-            WHERE dir.DivisionId = :div_id
-            ORDER BY dir.Id DESC
-        """, {"div_id": compra["DivisionId"]}) if division else None
-
-        # 8) Construcción del contexto
-        contexto: dict = {
-            "Compra": {
-                **compra,
-                "Consumo": float(compra.get("Consumo") or 0),
-                "Costo": float(compra.get("Costo") or 0),
-                "Active": bool(compra.get("Active")),
-            },
+        # Arma el contexto completo (con “Compra” anidada)
+        contexto = {
+            "Compra": compra,
             "Division": division,
             "Servicio": servicio,
             "Institucion": institucion,
@@ -456,23 +559,7 @@ class CompraService:
             "NumeroCliente": numero_cliente,
             "Energetico": energetico,
             "Direccion": direccion,
-            "Items": [
-                {
-                    "Id": int(it["Id"]),
-                    "CompraId": int(it["CompraId"]),
-                    "MedidorId": int(it["MedidorId"]) if it["MedidorId"] is not None else None,
-                    "Consumo": float(it["Consumo"] or 0),
-                    "ParametroMedicionId": int(it["ParametroMedicionId"]) if it["ParametroMedicionId"] is not None else None,
-                    "UnidadMedidaId": int(it["UnidadMedidaId"]) if it["UnidadMedidaId"] is not None else None,
-                    "Medidor": {
-                        "Codigo": it.get("MedidorCodigo"),
-                        "Serie": it.get("MedidorSerie"),
-                        "TipoMedidorId": it.get("MedidorTipoId"),
-                        "Active": bool(it["MedidorActivo"]) if it.get("MedidorActivo") is not None else None,
-                    } if it.get("MedidorId") else None,
-                }
-                for it in items
-            ],
+            "Items": items,
         }
-
         return contexto
+
