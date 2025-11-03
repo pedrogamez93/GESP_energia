@@ -54,22 +54,18 @@ def _safe_fetch_all(db: Session, sql: str, params: Dict[str, Any]) -> List[dict]
 
 
 def _col_exists(db: Session, schema: str, table: str, column: str) -> bool:
-    """
-    Verifica existencia de columna en SQL Server de forma robusta.
-    """
+    """Chequea si existe una columna en SQL Server usando sys.columns (seguro y rápido)."""
     try:
         row = db.execute(
             text(
                 """
                 SELECT 1
                 FROM sys.columns c
-                JOIN sys.objects o ON o.object_id = c.object_id
-                WHERE o.name = :table
-                  AND SCHEMA_NAME(o.schema_id) = :schema
+                WHERE c.object_id = OBJECT_ID(:schema_table)
                   AND c.name = :col
                 """
             ),
-            {"schema": schema, "table": table, "col": column},
+            {"schema_table": f"{schema}.{table}", "col": column},
         ).first()
         return bool(row)
     except Exception as ex:
@@ -103,6 +99,7 @@ class CompraService:
         edificio_id: Optional[int] = None,  # ignorado en el listado
         nombre_opcional: Optional[str] = None,
     ) -> Tuple[int, List[dict]]:
+        # Aislamos como .NET (NOLOCK) y evitamos locks relevantes
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
         where_parts: list[str] = ["1=1"]
@@ -167,14 +164,14 @@ class CompraService:
             params["medidor_id"] = int(medidor_id)
 
         if region_id is not None:
+            # Región desde Edificio -> (Comunas) -> Regiones (si existen)
             where_parts.append(
                 """
                 EXISTS (
                     SELECT 1
                     FROM dbo.Divisiones d WITH (NOLOCK)
                     LEFT JOIN dbo.Edificios efi      WITH (NOLOCK) ON efi.Id = d.EdificioId
-                    LEFT JOIN dbo.Direcciones dir    WITH (NOLOCK) ON dir.Id = efi.DireccionId
-                    LEFT JOIN dbo.Comunas com        WITH (NOLOCK) ON com.Id = dir.ComunaId
+                    LEFT JOIN dbo.Comunas com        WITH (NOLOCK) ON com.Id = efi.ComunaId
                     WHERE d.Id = c.DivisionId
                       AND com.RegionId = :region_id
                 )
@@ -323,6 +320,7 @@ class CompraService:
         obj = self.get(db, compra_id)
         payload = data.model_dump(exclude_unset=True)
 
+        # Normaliza fechas que puedan venir como string
         for k in ("InicioLectura", "FinLectura", "FechaCompra", "ReviewedAt"):
             if k in payload and payload[k] is not None:
                 payload[k] = _to_dt(payload[k])
@@ -363,6 +361,11 @@ class CompraService:
     # DETALLE ENRIQUECIDO
     # ======================================================================
     def get_full(self, db: Session, compra_id: int) -> dict:
+        """
+        Devuelve el formato que espera el response_model:
+        - Campos de la compra en el nivel raíz (aplanados)
+        - Secciones extra (Items, Division, Servicio, etc.) como campos adyacentes
+        """
         ctx = self.get_context(db, compra_id)
 
         required_root = [
@@ -394,11 +397,14 @@ class CompraService:
 
         base = ctx.get("Compra", {}) if isinstance(ctx, dict) else {}
         out: Dict[str, Any] = {}
+
         for k in required_root:
             out[k] = base.get(k, None)
+
         for k, v in base.items():
             if k not in out:
                 out[k] = v
+
         for k, v in ctx.items():
             if k == "Compra":
                 continue
@@ -423,28 +429,53 @@ class CompraService:
         return out
 
     def get_context(self, db: Session, compra_id: int) -> dict:
-        # === Detección dinámica de columnas para la dirección ===
-        has_efi_dir = _col_exists(db, "dbo", "Edificios", "DireccionId")
+        """
+        Detalle enriquecido:
+          - compra base y referencias (división/servicio/institución/edificio/comuna/región/num-cliente/energético)
+          - items + medidor
+        Usa LEFT JOIN + NOLOCK para asemejar .NET y reduce idas a la BD.
+        """
 
-        dir_select = (
-            "dir.Calle AS DIR_Calle, dir.Numero AS DIR_Numero, "
-            "com.Id AS COM_Id, com.Nombre AS COM_Nombre, "
-            "com.RegionId AS COM_RegionId, r.Id AS R_Id, r.Nombre AS R_Nombre"
-            if has_efi_dir
-            else "NULL AS DIR_Calle, NULL AS DIR_Numero, "
-                 "NULL AS COM_Id, NULL AS COM_Nombre, "
-                 "NULL AS COM_RegionId, NULL AS R_Id, NULL AS R_Nombre"
-        )
+        # ====== Detección dinámica de columnas para Dirección ======
+        has_efi_calle = _col_exists(db, "dbo", "Edificios", "Calle")
+        has_efi_numero = _col_exists(db, "dbo", "Edificios", "Numero")
+        has_efi_dirlibre = _col_exists(db, "dbo", "Edificios", "DireccionLibre")
+        has_efi_direccion = _col_exists(db, "dbo", "Edificios", "Direccion")  # fallback si no hay DireccionLibre
+        has_efi_comuna = _col_exists(db, "dbo", "Edificios", "ComunaId")
 
-        dir_joins = (
-            "LEFT JOIN dbo.Direcciones   dir  WITH (NOLOCK) ON dir.Id = efi.DireccionId "
-            "LEFT JOIN dbo.Comunas       com  WITH (NOLOCK) ON com.Id = dir.ComunaId "
-            "LEFT JOIN dbo.Regiones      r    WITH (NOLOCK) ON r.Id   = com.RegionId "
-            if has_efi_dir
-            else ""
-        )
+        # SELECT fields para Edificios.* (Dirección)
+        edi_fields: List[str] = ["efi.Id AS EDI_Id"]
+        edi_fields.append("efi.Calle AS EDI_Calle" if has_efi_calle else "NULL AS EDI_Calle")
+        edi_fields.append("efi.Numero AS EDI_Numero" if has_efi_numero else "NULL AS EDI_Numero")
+        if has_efi_dirlibre:
+            edi_fields.append("efi.DireccionLibre AS EDI_DireccionLibre")
+        elif has_efi_direccion:
+            edi_fields.append("efi.Direccion AS EDI_DireccionLibre")
+        else:
+            edi_fields.append("NULL AS EDI_DireccionLibre")
+        edi_fields.append("efi.ComunaId AS EDI_ComunaId" if has_efi_comuna else "NULL AS EDI_ComunaId")
 
-        cab_sql = f"""
+        # Campos de Comuna/Región (solo si podemos enlazar por ComunaId)
+        if has_efi_comuna:
+            com_fields = [
+                "com.Id       AS COM_Id",
+                "com.Nombre   AS COM_Nombre",
+                "com.RegionId AS COM_RegionId",
+            ]
+            reg_fields = [
+                "r.Id     AS R_Id",
+                "r.Nombre AS R_Nombre",
+            ]
+            com_join_sql = "LEFT JOIN dbo.Comunas com        WITH (NOLOCK) ON com.Id = efi.ComunaId"
+            reg_join_sql = "LEFT JOIN dbo.Regiones r         WITH (NOLOCK) ON r.Id   = com.RegionId"
+        else:
+            com_fields = ["NULL AS COM_Id", "NULL AS COM_Nombre", "NULL AS COM_RegionId"]
+            reg_fields = ["NULL AS R_Id", "NULL AS R_Nombre"]
+            com_join_sql = ""
+            reg_join_sql = ""
+
+        # ====== Cabecera + referencias (en UNA consulta) ======
+        select_sql = f"""
             SELECT TOP 1
                 -- Compra
                 c.Id                  AS C_Id,
@@ -477,9 +508,12 @@ class CompraService:
                 i.Id            AS I_Id,
                 i.Nombre        AS I_Nombre,
 
-                -- Edificio -> Direcciones -> Comuna -> Región (dinámico)
-                efi.Id          AS EDI_Id,
-                {dir_select},
+                -- Edificio (+ Dirección directa)
+                {", ".join(edi_fields)},
+
+                -- Comuna / Región (si procede)
+                {", ".join(com_fields)},
+                {", ".join(reg_fields)},
 
                 -- Número de cliente
                 nc.Id           AS NC_Id,
@@ -493,15 +527,15 @@ class CompraService:
             LEFT JOIN dbo.Servicios     s    WITH (NOLOCK) ON s.Id   = d.ServicioId
             LEFT JOIN dbo.Instituciones i    WITH (NOLOCK) ON i.Id   = s.InstitucionId
             LEFT JOIN dbo.Edificios     efi  WITH (NOLOCK) ON efi.Id = d.EdificioId
-            {dir_joins}
+            {com_join_sql}
+            {reg_join_sql}
             LEFT JOIN dbo.NumeroClientes nc  WITH (NOLOCK) ON nc.Id  = c.NumeroClienteId
             LEFT JOIN dbo.Energeticos   e    WITH (NOLOCK) ON e.Id   = c.EnergeticoId
             WHERE c.Id = :id
             OPTION (RECOMPILE)
         """
 
-        cab = db.execute(text(cab_sql), {"id": compra_id}).mappings().first()
-
+        cab = db.execute(text(select_sql), {"id": compra_id}).mappings().first()
         if not cab:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
 
@@ -524,14 +558,14 @@ class CompraService:
             "Active": bool(cab["C_Active"]),
         }
 
-        # Secciones relacionadas (si existen)
+        # Secciones relacionadas
         division = None
         if cab["D_Id"] is not None:
             division = {
                 "Id": int(cab["D_Id"]),
                 "ServicioId": int(cab["D_ServicioId"]) if cab["D_ServicioId"] is not None else None,
                 "InstitucionId": int(cab["S_InstitucionId"]) if cab["S_InstitucionId"] is not None else None,
-                "EdificioId": int(cab["EDI_Id"]) if cab["EDI_Id"] is not None else None,
+                "EdificioId": int(cab["D_EdificioId"]) if cab["D_EdificioId"] is not None else None,
                 "DivisionNombre": cab["D_Nombre"],
                 "UnidadReportaPMG": bool(cab["D_UnidadReportaPMG"]) if cab["D_UnidadReportaPMG"] is not None else None,
             }
@@ -540,22 +574,22 @@ class CompraService:
         institucion = {"Id": int(cab["I_Id"]), "InstitucionNombre": cab["I_Nombre"]} if cab["I_Id"] is not None else None
 
         comuna = None
-        if cab["COM_Id"] is not None:
+        if cab.get("COM_Id") is not None:
             comuna = {
                 "Id": int(cab["COM_Id"]),
                 "ComunaNombre": cab["COM_Nombre"],
                 "RegionId": int(cab["COM_RegionId"]) if cab["COM_RegionId"] is not None else None,
             }
 
-        region = {"Id": int(cab["R_Id"]), "RegionNombre": cab["R_Nombre"]} if cab["R_Id"] is not None else None
+        region = {"Id": int(cab["R_Id"]), "RegionNombre": cab["R_Nombre"]} if cab.get("R_Id") is not None else None
 
         numero_cliente = {"Id": int(cab["NC_Id"]), "NumeroClienteNumero": cab["NC_Numero"]} if cab["NC_Id"] is not None else None
         energetico = {"Id": int(cab["E_Id"]), "EnergeticoNombre": cab["E_Nombre"]} if cab["E_Id"] is not None else None
 
-        # ====== Items + Medidor (con detección de columnas) ======
+        # ====== Items + Medidor (detección de columnas) ======
         has_numero = _col_exists(db, "dbo", "Medidores", "Numero")
         has_device = _col_exists(db, "dbo", "Medidores", "DeviceId")
-        has_tipo   = _col_exists(db, "dbo", "Medidores", "TipoMedidorId")
+        has_tipo = _col_exists(db, "dbo", "Medidores", "TipoMedidorId")
         has_active = _col_exists(db, "dbo", "Medidores", "Active")
 
         medidor_fields = []
@@ -579,7 +613,6 @@ class CompraService:
             ORDER BY cm.Id
             OPTION (RECOMPILE)
         """
-        Log.debug("ITEMS SQL:\n%s", items_sql)
 
         items_rows = db.execute(text(items_sql), {"id": compra_id}).mappings().all()
 
@@ -604,22 +637,18 @@ class CompraService:
                 item["Medidor"] = None
             items.append(item)
 
-        # Dirección (si la parte dinámica aportó IDs/valores)
-        direccion = None
-        try:
-            if cab["EDI_Id"] is not None:
-                direccion = {
-                    "Calle": cab.get("DIR_Calle"),
-                    "Numero": cab.get("DIR_Numero"),
-                    "ComunaId": int(cab["COM_Id"]) if cab.get("COM_Id") is not None else None,
-                    "ComunaNombre": cab.get("COM_Nombre"),
-                    "RegionId": int(cab["R_Id"]) if cab.get("R_Id") is not None else None,
-                    "RegionNombre": cab.get("R_Nombre"),
-                }
-        except Exception as ex:
-            Log.warning("Direcciones no disponible: %s", ex)
-            direccion = None
+        # ====== Dirección armada desde Edificios (+ Comuna/Región si hay FK) ======
+        direccion = {
+            "Calle": cab.get("EDI_Calle"),
+            "Numero": cab.get("EDI_Numero"),
+            "DireccionLibre": cab.get("EDI_DireccionLibre"),
+            "ComunaId": int(cab["COM_Id"]) if cab.get("COM_Id") is not None else None,
+            "ComunaNombre": cab.get("COM_Nombre"),
+            "RegionId": int(cab["R_Id"]) if cab.get("R_Id") is not None else None,
+            "RegionNombre": cab.get("R_Nombre"),
+        } if cab.get("EDI_Id") is not None else None
 
+        # Contexto final
         contexto = {
             "Compra": compra,
             "Division": division,
