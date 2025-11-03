@@ -6,7 +6,7 @@ from typing import Optional, List, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, delete, extract, text,  bindparam 
+from sqlalchemy import func, and_, delete, extract, text
 
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
@@ -52,26 +52,28 @@ class CompraService:
         # extras
         medidor_id: Optional[int] = None,
         estado_validacion_id: Optional[str] = None,
-        region_id: Optional[int] = None,
-        edificio_id: Optional[int] = None,   # ignorado
+        region_id: Optional[int] = None,            # usando Divisiones.ComunaId -> Comunas.RegionId
+        edificio_id: Optional[int] = None,          # ignorado
         nombre_opcional: Optional[str] = None,
     ) -> Tuple[int, List[dict]]:
         """
         Listado básico paginado de Compras.
-        Optimizado en 2 pasos y con IN expanding (fix pyodbc: TVP rows must be Sequence).
+        Ahora incluye ServicioId y ServicioNombre (derivados de la División de la compra).
         """
+        # Lecturas sin bloquear
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
-        # 1) WHERE base
         where_parts: list[str] = ["1=1"]
         params: dict = {}
 
         if active is not None:
             where_parts.append("c.Active = :active")
             params["active"] = 1 if active else 0
+
         if division_id is not None:
             where_parts.append("c.DivisionId = :division_id")
             params["division_id"] = int(division_id)
+
         if servicio_id is not None:
             where_parts.append("""
                 EXISTS (
@@ -81,24 +83,31 @@ class CompraService:
                 )
             """)
             params["servicio_id"] = int(servicio_id)
+
         if energetico_id is not None:
             where_parts.append("c.EnergeticoId = :energetico_id")
             params["energetico_id"] = int(energetico_id)
+
         if numero_cliente_id is not None:
             where_parts.append("c.NumeroClienteId = :numero_cliente_id")
             params["numero_cliente_id"] = int(numero_cliente_id)
+
         if fecha_desde:
             where_parts.append("c.FechaCompra >= :desde")
             params["desde"] = _to_dt(fecha_desde)
+
         if fecha_hasta:
             where_parts.append("c.FechaCompra < :hasta")
             params["hasta"] = _to_dt(fecha_hasta)
+
         if q:
-            where_parts.append("(c.Observacion LIKE :q_like)")
+            where_parts.append("LOWER(ISNULL(c.Observacion,'')) LIKE LOWER(:q_like)")
             params["q_like"] = f"%{q}%"
+
         if estado_validacion_id:
             where_parts.append("c.EstadoValidacionId = :estado_validacion_id")
             params["estado_validacion_id"] = estado_validacion_id
+
         if medidor_id is not None:
             where_parts.append("""
                 EXISTS (
@@ -108,6 +117,8 @@ class CompraService:
                 )
             """)
             params["medidor_id"] = int(medidor_id)
+
+        # Región usando la comuna de la División (sin Direcciones aquí)
         if region_id is not None:
             where_parts.append("""
                 EXISTS (
@@ -118,12 +129,15 @@ class CompraService:
                 )
             """)
             params["region_id"] = int(region_id)
+
+        # "NombreOpcional" mapea a Divisiones.Nombre
         if nombre_opcional:
             where_parts.append("""
                 EXISTS (
                 SELECT 1
                 FROM dbo.Divisiones d WITH (NOLOCK)
-                WHERE d.Id = c.DivisionId AND d.Nombre LIKE :nombre_opcional_like
+                WHERE d.Id = c.DivisionId
+                    AND LOWER(ISNULL(d.Nombre,'')) LIKE LOWER(:nombre_opcional_like)
                 )
             """)
             params["nombre_opcional_like"] = f"%{nombre_opcional}%"
@@ -132,51 +146,47 @@ class CompraService:
         size = max(1, min(200, page_size))
         offset = (page - 1) * size
 
-        # 2) Total
+        # Total
         total = int(
             db.execute(
                 text(f"""
                     SELECT COUNT_BIG(1)
                     FROM dbo.Compras c WITH (NOLOCK)
                     WHERE {where_sql}
+                    OPTION (RECOMPILE)
                 """),
                 params,
             ).scalar() or 0
         )
-        if total == 0:
-            return 0, []
 
-        # 3) Page IDs
-        page_ids = [
-            int(r[0]) for r in db.execute(
-                text(f"""
-                    SELECT c.Id
-                    FROM dbo.Compras c WITH (NOLOCK)
-                    WHERE {where_sql}
-                    ORDER BY c.FechaCompra DESC, c.Id DESC
-                    OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
-                """),
-                {**params, "offset": offset, "size": size},
-            ).all()
-        ]
-        if not page_ids:
-            return total, []
+        # Página (ahora con ServicioId y ServicioNombre)
+        rs = db.execute(
+            text(f"""
+                SELECT
+                    c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
+                    c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active,
 
-        # 4) Enriquecido con JOIN (FIX: IN expanding)
-        sql = text("""
-            SELECT
-                c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
-                c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active,
-                d.ServicioId,
-                s.Nombre AS ServicioNombre
-            FROM dbo.Compras   c WITH (NOLOCK)
-            LEFT JOIN dbo.Divisiones d WITH (NOLOCK) ON d.Id = c.DivisionId
-            LEFT JOIN dbo.Servicios  s WITH (NOLOCK) ON s.Id = d.ServicioId
-            WHERE c.Id IN :ids
-            ORDER BY c.FechaCompra DESC, c.Id DESC
-        """).bindparams(bindparam("ids", expanding=True))  # 👈 clave del fix
+                    -- 👇 Enriquecimiento para precargar combo de Servicios
+                    (
+                    SELECT TOP 1 d.ServicioId
+                    FROM dbo.Divisiones d WITH (NOLOCK)
+                    WHERE d.Id = c.DivisionId
+                    ) AS ServicioId,
+                    (
+                    SELECT TOP 1 s.Nombre
+                    FROM dbo.Divisiones d WITH (NOLOCK)
+                    LEFT JOIN dbo.Servicios s WITH (NOLOCK) ON s.Id = d.ServicioId
+                    WHERE d.Id = c.DivisionId
+                    ) AS ServicioNombre
 
-        rs = db.execute(sql, {"ids": page_ids}).mappings().all()
+                FROM dbo.Compras c WITH (NOLOCK)
+                WHERE {where_sql}
+                ORDER BY c.FechaCompra DESC, c.Id DESC
+                OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
+                OPTION (RECOMPILE)
+            """),
+            {**params, "offset": offset, "size": size},
+        ).mappings().all()
 
         items: List[dict] = []
         for r in rs:
@@ -191,9 +201,12 @@ class CompraService:
                 "InicioLectura": _fmt_dt(r["InicioLectura"]),
                 "FinLectura": _fmt_dt(r["FinLectura"]),
                 "Active": bool(r["Active"]),
+
+                # 👇 Campos nuevos que usará el front para precargar el <select> Servicio
                 "ServicioId": int(r["ServicioId"]) if r.get("ServicioId") is not None else None,
                 "ServicioNombre": r.get("ServicioNombre"),
             })
+
         return total, items
 
     # ─────────────────────────────────────────────────────────────────────────────
