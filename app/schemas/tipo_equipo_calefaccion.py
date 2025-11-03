@@ -1,13 +1,15 @@
-# app/schemas/tipo_equipo_calefaccion.py
 from __future__ import annotations
 from pydantic import BaseModel
 from typing import Optional, List
 
+# Para listados simples (Id, Nombre)
 class TipoEquipoCalefaccionSelectDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
-    class Config: from_attributes = True
+    class Config:
+        from_attributes = True
 
+# DTO completo (por si lo necesitas en algún otro endpoint)
 class TipoEquipoCalefaccionDTO(TipoEquipoCalefaccionSelectDTO):
     Rendimiento: float
     A: float
@@ -30,21 +32,21 @@ class TipoEquipoCalefaccionDTO(TipoEquipoCalefaccionSelectDTO):
 
 class TipoEquipoCalefaccionCreate(BaseModel):
     Nombre: Optional[str] = None
-    Rendimiento: float
-    A: float
-    B: float
-    C: float
-    Temp: float
-    Costo: float
-    Costo_Social: float
-    Costo_Mant: float
-    Costo_Social_Mant: float
-    Ejec_HD_Maestro: float
-    Ejec_HD_Ayte: float
-    Ejec_HD_Jornal: float
-    Mant_HD_Maestro: float
-    Mant_HD_Ayte: float
-    Mant_HD_Jornal: float
+    Rendimiento: float = 0
+    A: float = 0
+    B: float = 0
+    C: float = 0
+    Temp: float = 0
+    Costo: float = 0
+    Costo_Social: float = 0
+    Costo_Mant: float = 0
+    Costo_Social_Mant: float = 0
+    Ejec_HD_Maestro: float = 0
+    Ejec_HD_Ayte: float = 0
+    Ejec_HD_Jornal: float = 0
+    Mant_HD_Maestro: float = 0
+    Mant_HD_Ayte: float = 0
+    Mant_HD_Jornal: float = 0
     AC: bool = False
     CA: bool = False
     FR: bool = False
@@ -70,12 +72,13 @@ class TipoEquipoCalefaccionUpdate(BaseModel):
     CA: Optional[bool] = None
     FR: Optional[bool] = None
 
-# N:M con energéticos
+# N:M con energéticos (si ya lo usas)
 class TECEnergeticoDTO(BaseModel):
     Id: int
     TipoEquipoCalefaccionId: int
     EnergeticoId: int
-    class Config: from_attributes = True
+    class Config:
+        from_attributes = True
 
 class TECEnergeticoCreate(BaseModel):
     EnergeticoId: int
