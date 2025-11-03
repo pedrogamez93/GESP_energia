@@ -36,10 +36,6 @@ def _fmt_dt(dt: datetime | None) -> str | None:
 
 
 def _safe_fetch_one(db: Session, sql: str, params: Dict[str, Any]) -> Optional[dict]:
-    """
-    Ejecuta una consulta y devuelve un mapping() o None,
-    nunca levanta excepción: loggea y sigue.
-    """
     try:
         row = db.execute(text(sql), params).mappings().first()
         return dict(row) if row else None
@@ -59,7 +55,7 @@ def _safe_fetch_all(db: Session, sql: str, params: Dict[str, Any]) -> List[dict]
 
 def _col_exists(db: Session, schema: str, table: str, column: str) -> bool:
     """
-    Chequea si existe una columna en SQL Server usando sys.columns (seguro y rápido).
+    Verifica existencia de columna en SQL Server de forma robusta.
     """
     try:
         row = db.execute(
@@ -67,11 +63,13 @@ def _col_exists(db: Session, schema: str, table: str, column: str) -> bool:
                 """
                 SELECT 1
                 FROM sys.columns c
-                WHERE c.object_id = OBJECT_ID(:schema_table)
+                JOIN sys.objects o ON o.object_id = c.object_id
+                WHERE o.name = :table
+                  AND SCHEMA_NAME(o.schema_id) = :schema
                   AND c.name = :col
                 """
             ),
-            {"schema_table": f"{schema}.{table}", "col": column},
+            {"schema": schema, "table": table, "col": column},
         ).first()
         return bool(row)
     except Exception as ex:
@@ -105,7 +103,6 @@ class CompraService:
         edificio_id: Optional[int] = None,  # ignorado en el listado
         nombre_opcional: Optional[str] = None,
     ) -> Tuple[int, List[dict]]:
-        # Aislamos como .NET (NOLOCK) y evitamos locks relevantes
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
         where_parts: list[str] = ["1=1"]
@@ -170,7 +167,6 @@ class CompraService:
             params["medidor_id"] = int(medidor_id)
 
         if region_id is not None:
-            # Región desde Edificio -> Direcciones -> Comunas -> Regiones
             where_parts.append(
                 """
                 EXISTS (
@@ -327,7 +323,6 @@ class CompraService:
         obj = self.get(db, compra_id)
         payload = data.model_dump(exclude_unset=True)
 
-        # Normaliza fechas que puedan venir como string
         for k in ("InicioLectura", "FinLectura", "FechaCompra", "ReviewedAt"):
             if k in payload and payload[k] is not None:
                 payload[k] = _to_dt(payload[k])
@@ -368,14 +363,8 @@ class CompraService:
     # DETALLE ENRIQUECIDO
     # ======================================================================
     def get_full(self, db: Session, compra_id: int) -> dict:
-        """
-        Devuelve el formato que espera el response_model:
-        - Campos de la compra en el nivel raíz (aplanados)
-        - Secciones extra (Items, Division, Servicio, etc.) como campos adyacentes
-        """
         ctx = self.get_context(db, compra_id)
 
-        # Campos exigidos en raíz + añadidos para UI
         required_root = [
             "Id",
             "DivisionId",
@@ -392,7 +381,6 @@ class CompraService:
             "Observacion",
             "Active",
             "UnidadMedidaId",
-            # derivados (se rellenan más abajo)
             "ServicioId",
             "ServicioNombre",
             "InstitucionId",
@@ -406,23 +394,16 @@ class CompraService:
 
         base = ctx.get("Compra", {}) if isinstance(ctx, dict) else {}
         out: Dict[str, Any] = {}
-
-        # Rellena valores requeridos (si faltan, con None)
         for k in required_root:
             out[k] = base.get(k, None)
-
-        # Copia cualquier otro atributo de la compra
         for k, v in base.items():
             if k not in out:
                 out[k] = v
-
-        # Adjunta secciones auxiliares
         for k, v in ctx.items():
             if k == "Compra":
                 continue
             out[k] = v
 
-        # === Derivados al nivel raíz ===
         div = ctx.get("Division") or {}
         serv = ctx.get("Servicio") or {}
         comu = ctx.get("Comuna") or {}
@@ -435,7 +416,6 @@ class CompraService:
         out["EdificioId"] = div.get("EdificioId")
         out["UnidadReportaPMG"] = div.get("UnidadReportaPMG")
 
-        # Opcionales/UI
         out.setdefault("NombreOpcional", None)
         out["MedidorIds"] = [it.get("MedidorId") for it in out.get("Items", []) if it and it.get("MedidorId") is not None]
         out["PrimerMedidorId"] = out["MedidorIds"][0] if out["MedidorIds"] else None
@@ -443,13 +423,6 @@ class CompraService:
         return out
 
     def get_context(self, db: Session, compra_id: int) -> dict:
-        """
-        Devuelve detalle enriquecido:
-          - compra base y referencias (división/servicio/institución/dirección/comuna/región/num-cliente/energético)
-          - items + medidor
-        Usa LEFT JOIN + NOLOCK para asemejar .NET y reduce idas a la BD.
-        """
-        # Cabecera + referencias en UNA sola consulta
         cab = (
             db.execute(
                 text(
@@ -526,7 +499,6 @@ class CompraService:
         if not cab:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
 
-        # Normaliza compra base
         compra = {
             "Id": int(cab["C_Id"]),
             "DivisionId": int(cab["C_DivisionId"]) if cab["C_DivisionId"] is not None else None,
@@ -545,7 +517,6 @@ class CompraService:
             "Active": bool(cab["C_Active"]),
         }
 
-        # Secciones relacionadas (si existen)
         division = None
         if cab["D_Id"] is not None:
             division = {
@@ -588,10 +559,9 @@ class CompraService:
         # ====== Items + Medidor (con detección de columnas) ======
         has_numero = _col_exists(db, "dbo", "Medidores", "Numero")
         has_device = _col_exists(db, "dbo", "Medidores", "DeviceId")
-        has_tipo = _col_exists(db, "dbo", "Medidores", "TipoMedidorId")
+        has_tipo   = _col_exists(db, "dbo", "Medidores", "TipoMedidorId")
         has_active = _col_exists(db, "dbo", "Medidores", "Active")
 
-        # Construimos el SELECT de forma segura: si no existe la columna, devolvemos NULL con alias
         medidor_fields = []
         medidor_fields.append("m.Numero AS MedidorNumero" if has_numero else "NULL AS MedidorNumero")
         medidor_fields.append("m.DeviceId AS MedidorDeviceId" if has_device else "NULL AS MedidorDeviceId")
@@ -613,6 +583,7 @@ class CompraService:
             ORDER BY cm.Id
             OPTION (RECOMPILE)
         """
+        Log.debug("ITEMS SQL:\n%s", items_sql)
 
         items_rows = db.execute(text(items_sql), {"id": compra_id}).mappings().all()
 
@@ -637,7 +608,6 @@ class CompraService:
                 item["Medidor"] = None
             items.append(item)
 
-        # Dirección (ya resuelta en el SELECT principal vía joins)
         direccion = None
         try:
             if cab["EDI_Id"] is not None:
@@ -653,7 +623,6 @@ class CompraService:
             Log.warning("Direcciones no disponible: %s", ex)
             direccion = None
 
-        # Arma el contexto completo (con “Compra” anidada)
         contexto = {
             "Compra": compra,
             "Division": division,
