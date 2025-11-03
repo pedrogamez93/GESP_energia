@@ -228,4 +228,5 @@ class CompraFullPage(BaseModel):
     total: int
     page: int
     page_size: int
-    items: List[CompraListFullDTO]
+   # items: List[CompraListFullDTO]
+    items: List[CompraFullDetalleDTO] 

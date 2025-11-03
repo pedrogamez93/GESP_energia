@@ -22,8 +22,8 @@ svc = CompraService()
 
 @router.get(
     "",
-    response_model=CompraFullPage,
-    summary="Listado paginado enriquecido (igual al detalle por cada ítem)"
+    summary="Listado paginado de compras/consumos (básico o enriquecido)",
+    response_model=CompraFullPage  # <- usa el modelo completo
 )
 def list_compras(
     db: DbDep,
@@ -40,21 +40,24 @@ def list_compras(
     MedidorId: int | None = Query(default=None),
     EstadoValidacionId: str | None = Query(default=None),
     RegionId: int | None = Query(default=None),
-    EdificioId: int | None = Query(default=None),  # ignorado directo
+    EdificioId: int | None = Query(default=None),
     NombreOpcional: str | None = Query(default=None),
+    full: bool = Query(default=True)  # por defecto enriquecido
 ):
-    total, items = svc.list_full(
-        db, q, page, page_size,
-        DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
-        MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
-    )
-    return {
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        # OJO: validamos contra el DTO completo por ítem
-        "items": [CompraListFullDTO.model_validate(x) for x in items],
-    }
+    if full:
+        total, items = svc.list_full(
+            db, q, page, page_size,
+            DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
+            MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
+        )
+        return {"total": total, "page": page, "page_size": page_size, "items": items}
+    else:
+        total, items = svc.list(
+            db, q, page, page_size,
+            DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
+            MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
+        )
+        return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
 @router.get("/{compra_id}", response_model=CompraDTO, summary="Detalle (incluye items por medidor)")
