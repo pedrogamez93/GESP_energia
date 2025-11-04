@@ -42,7 +42,7 @@ def list_compras(
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
     NombreOpcional: str | None = Query(default=None),
-    full: bool = Query(default=True)  # por defecto enriquecido
+    full: bool = Query(default=False)  # por defecto enriquecido
 ):
     if full:
         total, items = svc.list_full(
