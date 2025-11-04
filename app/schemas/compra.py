@@ -51,6 +51,7 @@ class CompraListDTO(BaseModel):
     Id: int
     DivisionId: int
     EnergeticoId: int
+    EnergeticoNombre: Optional[str] = None
     NumeroClienteId: Optional[int] = None
     FechaCompra: str
     Consumo: float
@@ -131,7 +132,7 @@ class CompraFullDTO(CompraDTO, CompraContextoDTO):
     Sobrescribimos Items para usar la versión “Full”.
     """
     Items: List[CompraMedidorItemFullDTO] = Field(default_factory=list)
-
+    EnergeticoNombre: Optional[str] = None  
 
 class CompraFullDetalleDTO(CompraFullDTO):
     """
@@ -202,6 +203,7 @@ class CompraListFullDTO(BaseModel):
     Id: int
     DivisionId: int
     EnergeticoId: int
+    EnergeticoNombre: Optional[str] = None  
     NumeroClienteId: Optional[int] = None
     FechaCompra: str
     Consumo: float
