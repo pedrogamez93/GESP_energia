@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated, List, Union, Optional
 
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
+from fastapi.responses import JSONResponse  # <- ADD
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -19,42 +20,15 @@ router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
 DbDep = Annotated[Session, Depends(get_db)]
 svc = CompraService()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers locales (no tocan esquema ni modelos)
-# ─────────────────────────────────────────────────────────────────────────────
 _MAX_PAGE_SIZE = 100
-
-def _clamp_page(n: int) -> int:
-    return 1 if n < 1 else n
-
+def _clamp_page(n: int) -> int: return 1 if n < 1 else n
 def _clamp_page_size(n: int) -> int:
-    if n < 1:
-        return 10
-    if n > _MAX_PAGE_SIZE:
-        return _MAX_PAGE_SIZE
+    if n < 1: return 10
+    if n > _MAX_PAGE_SIZE: return _MAX_PAGE_SIZE
     return n
-
 def _nz_str(s: Optional[str]) -> Optional[str]:
-    """Devuelve None si la cadena viene vacía/espacios."""
-    if s is None:
-        return None
-    s2 = s.strip()
-    return s2 if s2 else None
-
-def _validate_dates(desde: Optional[str], hasta: Optional[str]) -> None:
-    """Valida solamente orden lógico si ambas vienen (sin parse complejo)."""
-    if not desde or not hasta:
-        return
-    # Comparamos string YYYY-MM-DD/ISO por orden lexicográfico suficiente
-    if len(desde) >= 10 and len(hasta) >= 10 and desde[:10] > hasta[:10]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="FechaDesde no puede ser mayor que FechaHasta."
-        )
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Rutas
-# ─────────────────────────────────────────────────────────────────────────────
+    if s is None: return None
+    s2 = s.strip(); return s2 if s2 else None
 
 @router.get(
     "",
@@ -78,42 +52,42 @@ def list_compras(
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
     NombreOpcional: str | None = Query(default=None),
-    full: bool = Query(default=True)  # por defecto enriquecido
+    full: bool = Query(default=True)
 ):
-    """
-    Si full=True: usa el get_full por cada fila (sin cambiar el servicio ni el esquema).
-    Si full=False: devuelve el listado básico tal como lo tienes hoy.
-    """
-    if not full:
-        # === Básico (sin Items/Direccion) ===
-        total, items = svc.list(
+    if full:
+        # ===== Enriquecido: usa el batch del service y evita que Pydantic pode =====
+        total, items = svc.list_full(
             db, q, page, page_size,
-            DivisionId=DivisionId, ServicioId=ServicioId, EnergeticoId=EnergeticoId, NumeroClienteId=NumeroClienteId,
-            FechaDesde=FechaDesde, FechaHasta=FechaHasta, active=active,
-            MedidorId=MedidorId, EstadoValidacionId=EstadoValidacionId, RegionId=RegionId, EdificioId=EdificioId,
-            NombreOpcional=NombreOpcional, full=False
+            division_id=DivisionId,
+            servicio_id=ServicioId,
+            energetico_id=EnergeticoId,
+            numero_cliente_id=NumeroClienteId,
+            fecha_desde=FechaDesde,
+            fecha_hasta=FechaHasta,
+            active=active,
+            medidor_id=MedidorId,
+            estado_validacion_id=EstadoValidacionId,
+            region_id=RegionId,
+            edificio_id=EdificioId,
+            nombre_opcional=NombreOpcional,
         )
-        return {"total": total, "page": page, "page_size": page_size, "items": items}
+        # JSONResponse bypass => entrega TODO tal cual (Servicio/Institución/MedidorIds/Items/Dirección/etc.)
+        return JSONResponse(content={
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": items
+        })
 
-    # === Enriquecido (Items, MedidorIds, Direccion, etc.) usando get_full() por fila ===
-    # 1) Primero pedimos la página básica sólo para obtener los IDs de esa página.
-    total, items_basic = svc.list(
+    # ===== Básico (mantiene response_model normal) =====
+    total, items = svc.list(
         db, q, page, page_size,
         DivisionId=DivisionId, ServicioId=ServicioId, EnergeticoId=EnergeticoId, NumeroClienteId=NumeroClienteId,
         FechaDesde=FechaDesde, FechaHasta=FechaHasta, active=active,
         MedidorId=MedidorId, EstadoValidacionId=EstadoValidacionId, RegionId=RegionId, EdificioId=EdificioId,
         NombreOpcional=NombreOpcional, full=False
     )
-
-    # 2) Por cada Id, traemos el detalle enriquecido con el método que YA funciona.
-    full_items = []
-    for it in items_basic:
-        cid = it.get("Id")
-        if cid is None:
-            continue
-        full_items.append(svc.get_full(db, cid))
-
-    return {"total": total, "page": page, "page_size": page_size, "items": full_items}
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
 @router.get(
