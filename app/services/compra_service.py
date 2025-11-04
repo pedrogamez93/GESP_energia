@@ -820,274 +820,274 @@ class CompraService:
     # ======================================================================
     # LISTA ENRIQUECIDA (paginada) - MISMO set de filtros
     # ======================================================================    
-def list_full(
-    self,
-    db: Session,
-    q: Optional[str],
-    page: int,
-    page_size: int,
-    division_id: Optional[int] = None,
-    servicio_id: Optional[int] = None,
-    energetico_id: Optional[int] = None,
-    numero_cliente_id: Optional[int] = None,
-    fecha_desde: Optional[str] = None,
-    fecha_hasta: Optional[str] = None,
-    active: Optional[bool] = True,
-    medidor_id: Optional[int] = None,
-    estado_validacion_id: Optional[str] = None,
-    region_id: Optional[int] = None,
-    edificio_id: Optional[int] = None,       # reservado
-    nombre_opcional: Optional[str] = None,
-) -> Tuple[int, List[dict]]:
-    # Aislamiento como .NET
-    db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
+    def list_full(
+        self,
+        db: Session,
+        q: Optional[str],
+        page: int,
+        page_size: int,
+        division_id: Optional[int] = None,
+        servicio_id: Optional[int] = None,
+        energetico_id: Optional[int] = None,
+        numero_cliente_id: Optional[int] = None,
+        fecha_desde: Optional[str] = None,
+        fecha_hasta: Optional[str] = None,
+        active: Optional[bool] = True,
+        medidor_id: Optional[int] = None,
+        estado_validacion_id: Optional[str] = None,
+        region_id: Optional[int] = None,
+        edificio_id: Optional[int] = None,       # reservado
+        nombre_opcional: Optional[str] = None,
+    ) -> Tuple[int, List[dict]]:
+        # Aislamiento como .NET
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
-    # ---- Filtros comunes
-    where_parts: list[str] = ["1=1"]
-    params: Dict[str, Any] = {}
+        # ---- Filtros comunes
+        where_parts: list[str] = ["1=1"]
+        params: Dict[str, Any] = {}
 
-    if active is not None:
-        where_parts.append("c.Active = :active")
-        params["active"] = 1 if active else 0
-    if division_id is not None:
-        where_parts.append("c.DivisionId = :division_id")
-        params["division_id"] = int(division_id)
-    if servicio_id is not None:
-        where_parts.append("""
-            EXISTS (SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
-                    WHERE d.Id = c.DivisionId AND d.ServicioId = :servicio_id)
-        """)
-        params["servicio_id"] = int(servicio_id)
-    if energetico_id is not None:
-        where_parts.append("c.EnergeticoId = :energetico_id")
-        params["energetico_id"] = int(energetico_id)
-    if numero_cliente_id is not None:
-        where_parts.append("c.NumeroClienteId = :numero_cliente_id")
-        params["numero_cliente_id"] = int(numero_cliente_id)
-    if fecha_desde:
-        where_parts.append("c.FechaCompra >= :desde")
-        params["desde"] = _to_dt(fecha_desde)
-    if fecha_hasta:
-        where_parts.append("c.FechaCompra < :hasta")
-        params["hasta"] = _to_dt(fecha_hasta)
-    if q:
-        where_parts.append("LOWER(ISNULL(c.Observacion,'')) LIKE LOWER(:q_like)")
-        params["q_like"] = f"%{q}%"
-    if estado_validacion_id:
-        where_parts.append("c.EstadoValidacionId = :estado_validacion_id")
-        params["estado_validacion_id"] = estado_validacion_id
-    if medidor_id is not None:
-        where_parts.append("""
-            EXISTS (SELECT 1 FROM dbo.CompraMedidor cm WITH (NOLOCK)
-                    WHERE cm.CompraId = c.Id AND cm.MedidorId = :medidor_id)
-        """)
-        params["medidor_id"] = int(medidor_id)
-    if region_id is not None:
-        where_parts.append("""
-            EXISTS (
-                SELECT 1
-                FROM dbo.Divisiones d WITH (NOLOCK)
-                LEFT JOIN dbo.Edificios efi WITH (NOLOCK) ON efi.Id = d.EdificioId
-                LEFT JOIN dbo.Comunas  com WITH (NOLOCK) ON com.Id = efi.ComunaId
-                WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
-            )
-        """)
-        params["region_id"] = int(region_id)
-    if nombre_opcional:
-        where_parts.append("""
-            EXISTS (SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
-                    WHERE d.Id = c.DivisionId
-                    AND LOWER(ISNULL(d.Nombre,'')) LIKE LOWER(:nombre_opcional_like))
-        """)
-        params["nombre_opcional_like"] = f"%{nombre_opcional}%"
+        if active is not None:
+            where_parts.append("c.Active = :active")
+            params["active"] = 1 if active else 0
+        if division_id is not None:
+            where_parts.append("c.DivisionId = :division_id")
+            params["division_id"] = int(division_id)
+        if servicio_id is not None:
+            where_parts.append("""
+                EXISTS (SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
+                        WHERE d.Id = c.DivisionId AND d.ServicioId = :servicio_id)
+            """)
+            params["servicio_id"] = int(servicio_id)
+        if energetico_id is not None:
+            where_parts.append("c.EnergeticoId = :energetico_id")
+            params["energetico_id"] = int(energetico_id)
+        if numero_cliente_id is not None:
+            where_parts.append("c.NumeroClienteId = :numero_cliente_id")
+            params["numero_cliente_id"] = int(numero_cliente_id)
+        if fecha_desde:
+            where_parts.append("c.FechaCompra >= :desde")
+            params["desde"] = _to_dt(fecha_desde)
+        if fecha_hasta:
+            where_parts.append("c.FechaCompra < :hasta")
+            params["hasta"] = _to_dt(fecha_hasta)
+        if q:
+            where_parts.append("LOWER(ISNULL(c.Observacion,'')) LIKE LOWER(:q_like)")
+            params["q_like"] = f"%{q}%"
+        if estado_validacion_id:
+            where_parts.append("c.EstadoValidacionId = :estado_validacion_id")
+            params["estado_validacion_id"] = estado_validacion_id
+        if medidor_id is not None:
+            where_parts.append("""
+                EXISTS (SELECT 1 FROM dbo.CompraMedidor cm WITH (NOLOCK)
+                        WHERE cm.CompraId = c.Id AND cm.MedidorId = :medidor_id)
+            """)
+            params["medidor_id"] = int(medidor_id)
+        if region_id is not None:
+            where_parts.append("""
+                EXISTS (
+                    SELECT 1
+                    FROM dbo.Divisiones d WITH (NOLOCK)
+                    LEFT JOIN dbo.Edificios efi WITH (NOLOCK) ON efi.Id = d.EdificioId
+                    LEFT JOIN dbo.Comunas  com WITH (NOLOCK) ON com.Id = efi.ComunaId
+                    WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
+                )
+            """)
+            params["region_id"] = int(region_id)
+        if nombre_opcional:
+            where_parts.append("""
+                EXISTS (SELECT 1 FROM dbo.Divisiones d WITH (NOLOCK)
+                        WHERE d.Id = c.DivisionId
+                        AND LOWER(ISNULL(d.Nombre,'')) LIKE LOWER(:nombre_opcional_like))
+            """)
+            params["nombre_opcional_like"] = f"%{nombre_opcional}%"
 
-    where_sql = " AND ".join(where_parts)
-    size = max(1, min(50, page_size))
-    offset = (page - 1) * size
+        where_sql = " AND ".join(where_parts)
+        size = max(1, min(50, page_size))
+        offset = (page - 1) * size
 
-    # ---- Total
-    total = int(
-        db.execute(
+        # ---- Total
+        total = int(
+            db.execute(
+                text(f"""
+                    SELECT COUNT_BIG(1)
+                    FROM dbo.Compras c WITH (NOLOCK)
+                    WHERE {where_sql}
+                    OPTION (RECOMPILE)
+                """),
+                params,
+            ).scalar() or 0
+        )
+
+        # ==== Detección de columnas de dirección (una vez)
+        has_efi_calle     = _col_exists_cached(db, "dbo", "Edificios", "Calle")
+        has_efi_numero    = _col_exists_cached(db, "dbo", "Edificios", "Numero")
+        has_efi_dirlibre  = _col_exists_cached(db, "dbo", "Edificios", "DireccionLibre")
+        has_efi_direccion = _col_exists_cached(db, "dbo", "Edificios", "Direccion")
+        edi_calle   = "efi.Calle" if has_efi_calle else "NULL"
+        edi_numero  = "efi.Numero" if has_efi_numero else "NULL"
+        edi_dirlib  = "efi.DireccionLibre" if has_efi_dirlibre else ("efi.Direccion" if has_efi_direccion else "NULL")
+
+        # ---- Fase A: IDs de la página
+        page_ids_rows = db.execute(
             text(f"""
-                SELECT COUNT_BIG(1)
-                FROM dbo.Compras c WITH (NOLOCK)
-                WHERE {where_sql}
+                WITH ids AS (
+                    SELECT c.Id, c.FechaCompra
+                    FROM dbo.Compras c WITH (NOLOCK)
+                    WHERE {where_sql}
+                    ORDER BY c.FechaCompra DESC, c.Id DESC
+                    OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
+                )
+                SELECT Id FROM ids ORDER BY FechaCompra DESC, Id DESC
                 OPTION (RECOMPILE)
             """),
-            params,
-        ).scalar() or 0
-    )
+            {**params, "offset": offset, "size": size}
+        ).mappings().all()
 
-    # ==== Detección de columnas de dirección (una vez)
-    has_efi_calle     = _col_exists_cached(db, "dbo", "Edificios", "Calle")
-    has_efi_numero    = _col_exists_cached(db, "dbo", "Edificios", "Numero")
-    has_efi_dirlibre  = _col_exists_cached(db, "dbo", "Edificios", "DireccionLibre")
-    has_efi_direccion = _col_exists_cached(db, "dbo", "Edificios", "Direccion")
-    edi_calle   = "efi.Calle" if has_efi_calle else "NULL"
-    edi_numero  = "efi.Numero" if has_efi_numero else "NULL"
-    edi_dirlib  = "efi.DireccionLibre" if has_efi_dirlibre else ("efi.Direccion" if has_efi_direccion else "NULL")
+        if not page_ids_rows:
+            return total, []
 
-    # ---- Fase A: IDs de la página
-    page_ids_rows = db.execute(
-        text(f"""
-            WITH ids AS (
-                SELECT c.Id, c.FechaCompra
-                FROM dbo.Compras c WITH (NOLOCK)
-                WHERE {where_sql}
+        compra_ids = [int(r["Id"]) for r in page_ids_rows]
+        ids_csv = ",".join(str(i) for i in compra_ids)
+
+        # ---- Fase B: enriquecer (ahora con InstitucionNombre + EnergeticoNombre)
+        rows = db.execute(
+            text(f"""
+                SELECT
+                    c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
+                    c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active,
+                    c.UnidadMedidaId, c.Observacion, c.FacturaId, c.EstadoValidacionId,
+                    c.RevisadoPor, c.ReviewedAt, c.CreatedByDivisionId, c.ObservacionRevision, c.SinMedidor,
+                    d.ServicioId                    AS ServicioId,
+                    s.Nombre                        AS ServicioNombre,
+                    s.InstitucionId                 AS InstitucionId,
+                    i.Nombre                        AS InstitucionNombre,
+                    e.Nombre                        AS EnergeticoNombre,      -- NUEVO
+                    d.EdificioId                    AS EdificioId,
+                    d.ReportaPMG                    AS UnidadReportaPMG,
+                    d.Nombre                        AS DivisionNombre,
+                    {edi_calle}                     AS EDI_Calle,
+                    {edi_numero}                    AS EDI_Numero,
+                    {edi_dirlib}                    AS EDI_DireccionLibre,
+                    com.Id                          AS COM_Id,
+                    com.Nombre                      AS COM_Nombre,
+                    com.RegionId                    AS COM_RegionId,
+                    r.Id                            AS R_Id,
+                    r.Nombre                        AS R_Nombre
+                FROM dbo.Compras c       WITH (NOLOCK)
+                LEFT JOIN dbo.Divisiones d   WITH (NOLOCK) ON d.Id   = c.DivisionId
+                LEFT JOIN dbo.Servicios  s   WITH (NOLOCK) ON s.Id   = d.ServicioId
+                LEFT JOIN dbo.Instituciones i WITH (NOLOCK) ON i.Id  = s.InstitucionId
+                LEFT JOIN dbo.Energeticos e  WITH (NOLOCK) ON e.Id   = c.EnergeticoId   -- NUEVO
+                LEFT JOIN dbo.Edificios  efi WITH (NOLOCK) ON efi.Id = d.EdificioId
+                LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
+                LEFT JOIN dbo.Regiones   r   WITH (NOLOCK) ON r.Id   = com.RegionId
+                WHERE c.Id IN ({ids_csv})
                 ORDER BY c.FechaCompra DESC, c.Id DESC
-                OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
-            )
-            SELECT Id FROM ids ORDER BY FechaCompra DESC, Id DESC
-            OPTION (RECOMPILE)
-        """),
-        {**params, "offset": offset, "size": size}
-    ).mappings().all()
+                OPTION (RECOMPILE)
+            """)
+        ).mappings().all()
 
-    if not page_ids_rows:
-        return total, []
+        # ---- Items/Medidores para esos IDs (lote)
+        has_numero = _col_exists_cached(db, "dbo", "Medidores", "Numero")
+        has_device = _col_exists_cached(db, "dbo", "Medidores", "DeviceId")
+        has_tipo   = _col_exists_cached(db, "dbo", "Medidores", "TipoMedidorId")
+        has_active = _col_exists_cached(db, "dbo", "Medidores", "Active")
 
-    compra_ids = [int(r["Id"]) for r in page_ids_rows]
-    ids_csv = ",".join(str(i) for i in compra_ids)
+        medidor_fields = []
+        medidor_fields.append("m.Numero AS MedidorNumero" if has_numero else "NULL AS MedidorNumero")
+        medidor_fields.append("m.DeviceId AS MedidorDeviceId" if has_device else "NULL AS MedidorDeviceId")
+        medidor_fields.append("m.TipoMedidorId AS MedidorTipoId" if has_tipo else "NULL AS MedidorTipoId")
+        medidor_fields.append("m.Active AS MedidorActive" if has_active else "NULL AS MedidorActive")
 
-    # ---- Fase B: enriquecer (ahora con InstitucionNombre + EnergeticoNombre)
-    rows = db.execute(
-        text(f"""
-            SELECT
-                c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
-                c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active,
-                c.UnidadMedidaId, c.Observacion, c.FacturaId, c.EstadoValidacionId,
-                c.RevisadoPor, c.ReviewedAt, c.CreatedByDivisionId, c.ObservacionRevision, c.SinMedidor,
-                d.ServicioId                    AS ServicioId,
-                s.Nombre                        AS ServicioNombre,
-                s.InstitucionId                 AS InstitucionId,
-                i.Nombre                        AS InstitucionNombre,
-                e.Nombre                        AS EnergeticoNombre,      -- NUEVO
-                d.EdificioId                    AS EdificioId,
-                d.ReportaPMG                    AS UnidadReportaPMG,
-                d.Nombre                        AS DivisionNombre,
-                {edi_calle}                     AS EDI_Calle,
-                {edi_numero}                    AS EDI_Numero,
-                {edi_dirlib}                    AS EDI_DireccionLibre,
-                com.Id                          AS COM_Id,
-                com.Nombre                      AS COM_Nombre,
-                com.RegionId                    AS COM_RegionId,
-                r.Id                            AS R_Id,
-                r.Nombre                        AS R_Nombre
-            FROM dbo.Compras c       WITH (NOLOCK)
-            LEFT JOIN dbo.Divisiones d   WITH (NOLOCK) ON d.Id   = c.DivisionId
-            LEFT JOIN dbo.Servicios  s   WITH (NOLOCK) ON s.Id   = d.ServicioId
-            LEFT JOIN dbo.Instituciones i WITH (NOLOCK) ON i.Id  = s.InstitucionId
-            LEFT JOIN dbo.Energeticos e  WITH (NOLOCK) ON e.Id   = c.EnergeticoId   -- NUEVO
-            LEFT JOIN dbo.Edificios  efi WITH (NOLOCK) ON efi.Id = d.EdificioId
-            LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
-            LEFT JOIN dbo.Regiones   r   WITH (NOLOCK) ON r.Id   = com.RegionId
-            WHERE c.Id IN ({ids_csv})
-            ORDER BY c.FechaCompra DESC, c.Id DESC
-            OPTION (RECOMPILE)
-        """)
-    ).mappings().all()
+        items_rows = db.execute(
+            text(f"""
+                SELECT
+                    cm.Id, cm.CompraId, cm.MedidorId, cm.Consumo,
+                    cm.ParametroMedicionId, cm.UnidadMedidaId,
+                    {", ".join(medidor_fields)}
+                FROM dbo.CompraMedidor cm WITH (NOLOCK)
+                LEFT JOIN dbo.Medidores m WITH (NOLOCK) ON m.Id = cm.MedidorId
+                WHERE cm.CompraId IN ({ids_csv})
+                ORDER BY cm.Id
+                OPTION (RECOMPILE)
+            """)
+        ).mappings().all()
 
-    # ---- Items/Medidores para esos IDs (lote)
-    has_numero = _col_exists_cached(db, "dbo", "Medidores", "Numero")
-    has_device = _col_exists_cached(db, "dbo", "Medidores", "DeviceId")
-    has_tipo   = _col_exists_cached(db, "dbo", "Medidores", "TipoMedidorId")
-    has_active = _col_exists_cached(db, "dbo", "Medidores", "Active")
-
-    medidor_fields = []
-    medidor_fields.append("m.Numero AS MedidorNumero" if has_numero else "NULL AS MedidorNumero")
-    medidor_fields.append("m.DeviceId AS MedidorDeviceId" if has_device else "NULL AS MedidorDeviceId")
-    medidor_fields.append("m.TipoMedidorId AS MedidorTipoId" if has_tipo else "NULL AS MedidorTipoId")
-    medidor_fields.append("m.Active AS MedidorActive" if has_active else "NULL AS MedidorActive")
-
-    items_rows = db.execute(
-        text(f"""
-            SELECT
-                cm.Id, cm.CompraId, cm.MedidorId, cm.Consumo,
-                cm.ParametroMedicionId, cm.UnidadMedidaId,
-                {", ".join(medidor_fields)}
-            FROM dbo.CompraMedidor cm WITH (NOLOCK)
-            LEFT JOIN dbo.Medidores m WITH (NOLOCK) ON m.Id = cm.MedidorId
-            WHERE cm.CompraId IN ({ids_csv})
-            ORDER BY cm.Id
-            OPTION (RECOMPILE)
-        """)
-    ).mappings().all()
-
-    items_by_compra: Dict[int, List[dict]] = {}
-    medidor_ids_by_compra: Dict[int, List[int]] = {}
-    for it in items_rows:
-        cid = int(it["CompraId"])
-        item = {
-            "Id": int(it["Id"]),
-            "Consumo": float(it["Consumo"] or 0),
-            "MedidorId": int(it["MedidorId"]) if it["MedidorId"] is not None else None,
-            "ParametroMedicionId": int(it["ParametroMedicionId"]) if it["ParametroMedicionId"] is not None else None,
-            "UnidadMedidaId": int(it["UnidadMedidaId"]) if it["UnidadMedidaId"] is not None else None,
-            "Medidor": None
-        }
-        if it["MedidorId"] is not None:
-            item["Medidor"] = {
-                "Numero": it.get("MedidorNumero"),
-                "DeviceId": it.get("MedidorDeviceId"),
-                "TipoMedidorId": it.get("MedidorTipoId"),
-                "Active": bool(it["MedidorActive"]) if it.get("MedidorActive") is not None else None,
+        items_by_compra: Dict[int, List[dict]] = {}
+        medidor_ids_by_compra: Dict[int, List[int]] = {}
+        for it in items_rows:
+            cid = int(it["CompraId"])
+            item = {
+                "Id": int(it["Id"]),
+                "Consumo": float(it["Consumo"] or 0),
+                "MedidorId": int(it["MedidorId"]) if it["MedidorId"] is not None else None,
+                "ParametroMedicionId": int(it["ParametroMedicionId"]) if it["ParametroMedicionId"] is not None else None,
+                "UnidadMedidaId": int(it["UnidadMedidaId"]) if it["UnidadMedidaId"] is not None else None,
+                "Medidor": None
             }
-            medidor_ids_by_compra.setdefault(cid, []).append(int(it["MedidorId"]))
-        items_by_compra.setdefault(cid, []).append(item)
+            if it["MedidorId"] is not None:
+                item["Medidor"] = {
+                    "Numero": it.get("MedidorNumero"),
+                    "DeviceId": it.get("MedidorDeviceId"),
+                    "TipoMedidorId": it.get("MedidorTipoId"),
+                    "Active": bool(it["MedidorActive"]) if it.get("MedidorActive") is not None else None,
+                }
+                medidor_ids_by_compra.setdefault(cid, []).append(int(it["MedidorId"]))
+            items_by_compra.setdefault(cid, []).append(item)
 
-    out: List[dict] = []
-    for r in rows:
-        cid = int(r["Id"])
-        medidor_ids = medidor_ids_by_compra.get(cid, [])
-        direccion = {
-            "Calle": r.get("EDI_Calle"),
-            "Numero": r.get("EDI_Numero"),
-            "DireccionLibre": r.get("EDI_DireccionLibre"),
-            "ComunaId": int(r["COM_Id"]) if r.get("COM_Id") is not None else None,
-            "ComunaNombre": r.get("COM_Nombre"),
-            "RegionId": int(r["R_Id"]) if r.get("R_Id") is not None else None,
-            "RegionNombre": r.get("R_Nombre"),
-        }
+        out: List[dict] = []
+        for r in rows:
+            cid = int(r["Id"])
+            medidor_ids = medidor_ids_by_compra.get(cid, [])
+            direccion = {
+                "Calle": r.get("EDI_Calle"),
+                "Numero": r.get("EDI_Numero"),
+                "DireccionLibre": r.get("EDI_DireccionLibre"),
+                "ComunaId": int(r["COM_Id"]) if r.get("COM_Id") is not None else None,
+                "ComunaNombre": r.get("COM_Nombre"),
+                "RegionId": int(r["R_Id"]) if r.get("R_Id") is not None else None,
+                "RegionNombre": r.get("R_Nombre"),
+            }
 
-        compra_dict = {
-            "ServicioId": int(r["ServicioId"]) if r["ServicioId"] is not None else None,
-            "ServicioNombre": r.get("ServicioNombre"),
-            "InstitucionId": int(r["InstitucionId"]) if r["InstitucionId"] is not None else None,
-            "InstitucionNombre": r.get("InstitucionNombre"),
-            "EnergeticoNombre": r.get("EnergeticoNombre"),          # NUEVO
-            "RegionId": int(r["COM_RegionId"]) if r.get("COM_RegionId") is not None else (int(r["R_Id"]) if r.get("R_Id") is not None else None),
-            "EdificioId": int(r["EdificioId"]) if r["EdificioId"] is not None else None,
-            "NombreOpcional": r.get("DivisionNombre"),
-            "UnidadReportaPMG": bool(r["UnidadReportaPMG"]) if r.get("UnidadReportaPMG") is not None else None,
-            "MedidorIds": medidor_ids,
-            "PrimerMedidorId": (min(medidor_ids) if medidor_ids else None),
+            compra_dict = {
+                "ServicioId": int(r["ServicioId"]) if r["ServicioId"] is not None else None,
+                "ServicioNombre": r.get("ServicioNombre"),
+                "InstitucionId": int(r["InstitucionId"]) if r["InstitucionId"] is not None else None,
+                "InstitucionNombre": r.get("InstitucionNombre"),
+                "EnergeticoNombre": r.get("EnergeticoNombre"),          # NUEVO
+                "RegionId": int(r["COM_RegionId"]) if r.get("COM_RegionId") is not None else (int(r["R_Id"]) if r.get("R_Id") is not None else None),
+                "EdificioId": int(r["EdificioId"]) if r["EdificioId"] is not None else None,
+                "NombreOpcional": r.get("DivisionNombre"),
+                "UnidadReportaPMG": bool(r["UnidadReportaPMG"]) if r.get("UnidadReportaPMG") is not None else None,
+                "MedidorIds": medidor_ids,
+                "PrimerMedidorId": (min(medidor_ids) if medidor_ids else None),
 
-            "Id": cid,
-            "DivisionId": int(r["DivisionId"]) if r["DivisionId"] is not None else None,
-            "EnergeticoId": int(r["EnergeticoId"]) if r["EnergeticoId"] is not None else None,
-            "NumeroClienteId": int(r["NumeroClienteId"]) if r["NumeroClienteId"] is not None else None,
-            "FechaCompra": _fmt_dt(r["FechaCompra"]),
-            "Consumo": float(r["Consumo"] or 0),
-            "Costo": float(r["Costo"] or 0),
-            "InicioLectura": _fmt_dt(r["InicioLectura"]),
-            "FinLectura": _fmt_dt(r["FinLectura"]),
-            "Active": bool(r["Active"]),
-            "UnidadMedidaId": int(r["UnidadMedidaId"]) if r.get("UnidadMedidaId") is not None else None,
-            "Observacion": r.get("Observacion"),
-            "FacturaId": int(r["FacturaId"]) if r.get("FacturaId") is not None else None,
-            "EstadoValidacionId": r.get("EstadoValidacionId"),
-            "RevisadoPor": r.get("RevisadoPor"),
-            "ReviewedAt": _fmt_dt(r.get("ReviewedAt")),
-            "CreatedByDivisionId": int(r["CreatedByDivisionId"]) if r.get("CreatedByDivisionId") is not None else None,
-            "ObservacionRevision": r.get("ObservacionRevision"),
-            "SinMedidor": bool(r["SinMedidor"]) if r.get("SinMedidor") is not None else None,
+                "Id": cid,
+                "DivisionId": int(r["DivisionId"]) if r["DivisionId"] is not None else None,
+                "EnergeticoId": int(r["EnergeticoId"]) if r["EnergeticoId"] is not None else None,
+                "NumeroClienteId": int(r["NumeroClienteId"]) if r["NumeroClienteId"] is not None else None,
+                "FechaCompra": _fmt_dt(r["FechaCompra"]),
+                "Consumo": float(r["Consumo"] or 0),
+                "Costo": float(r["Costo"] or 0),
+                "InicioLectura": _fmt_dt(r["InicioLectura"]),
+                "FinLectura": _fmt_dt(r["FinLectura"]),
+                "Active": bool(r["Active"]),
+                "UnidadMedidaId": int(r["UnidadMedidaId"]) if r.get("UnidadMedidaId") is not None else None,
+                "Observacion": r.get("Observacion"),
+                "FacturaId": int(r["FacturaId"]) if r.get("FacturaId") is not None else None,
+                "EstadoValidacionId": r.get("EstadoValidacionId"),
+                "RevisadoPor": r.get("RevisadoPor"),
+                "ReviewedAt": _fmt_dt(r.get("ReviewedAt")),
+                "CreatedByDivisionId": int(r["CreatedByDivisionId"]) if r.get("CreatedByDivisionId") is not None else None,
+                "ObservacionRevision": r.get("ObservacionRevision"),
+                "SinMedidor": bool(r["SinMedidor"]) if r.get("SinMedidor") is not None else None,
 
-            "Items": items_by_compra.get(cid, []),
-            "Direccion": direccion,
-        }
-        out.append(compra_dict)
+                "Items": items_by_compra.get(cid, []),
+                "Direccion": direccion,
+            }
+            out.append(compra_dict)
 
-    return total, out
+        return total, out
 
 
 
