@@ -699,6 +699,7 @@ class CompraService:
         # Aislamiento como .NET
         db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
 
+        # ---- Filtros comunes
         where_parts: list[str] = ["1=1"]
         params: Dict[str, Any] = {}
 
@@ -733,7 +734,6 @@ class CompraService:
             where_parts.append("c.EstadoValidacionId = :estado_validacion_id")
             params["estado_validacion_id"] = estado_validacion_id
         if medidor_id is not None:
-            # lo seguimos filtrando por EXISTS (rápido si hay IX en CompraMedidor.CompraId/MedidorId)
             where_parts.append("""
                 EXISTS (SELECT 1 FROM dbo.CompraMedidor cm WITH (NOLOCK)
                         WHERE cm.CompraId = c.Id AND cm.MedidorId = :medidor_id)
@@ -742,11 +742,11 @@ class CompraService:
         if region_id is not None:
             where_parts.append("""
                 EXISTS (
-                SELECT 1
-                FROM dbo.Divisiones d WITH (NOLOCK)
-                LEFT JOIN dbo.Edificios efi WITH (NOLOCK) ON efi.Id = d.EdificioId
-                LEFT JOIN dbo.Comunas  com WITH (NOLOCK) ON com.Id = efi.ComunaId
-                WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
+                    SELECT 1
+                    FROM dbo.Divisiones d WITH (NOLOCK)
+                    LEFT JOIN dbo.Edificios efi WITH (NOLOCK) ON efi.Id = d.EdificioId
+                    LEFT JOIN dbo.Comunas  com WITH (NOLOCK) ON com.Id = efi.ComunaId
+                    WHERE d.Id = c.DivisionId AND com.RegionId = :region_id
                 )
             """)
             params["region_id"] = int(region_id)
@@ -762,45 +762,20 @@ class CompraService:
         size = max(1, min(50, page_size))
         offset = (page - 1) * size
 
-        # 0) total (igual que antes)
+        # ---- Total
         total = int(
             db.execute(
                 text(f"""
                     SELECT COUNT_BIG(1)
                     FROM dbo.Compras c WITH (NOLOCK)
                     WHERE {where_sql}
-                    OPTION (RECOMPILE, OPTIMIZE FOR UNKNOWN)
+                    OPTION (RECOMPILE)
                 """),
                 params,
             ).scalar() or 0
         )
 
-        if total == 0:
-            return 0, []
-
-        # 1) Página de IDs (MUY barata)
-        id_rows = db.execute(
-            text(f"""
-                SELECT c.Id
-                FROM dbo.Compras c WITH (NOLOCK)
-                WHERE {where_sql}
-                ORDER BY c.FechaCompra DESC, c.Id DESC
-                OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
-                OPTION (RECOMPILE, OPTIMIZE FOR UNKNOWN, FAST {size})
-            """),
-            {**params, "offset": offset, "size": size},
-        ).all()
-
-        page_ids = [int(r[0]) for r in id_rows]
-        if not page_ids:
-            return total, []
-
-        # Para preservar el orden de la página al reconstruir
-        order_pos = {cid: idx for idx, cid in enumerate(page_ids)}
-
-        ids_csv = ",".join(str(i) for i in page_ids)
-
-        # 2) Detalles enriquecidos (sin JOIN a CompraMedidor, sin GROUP BY)
+        # ==== Detección de columnas de dirección (una vez)
         has_efi_calle     = _col_exists_cached(db, "dbo", "Edificios", "Calle")
         has_efi_numero    = _col_exists_cached(db, "dbo", "Edificios", "Numero")
         has_efi_dirlibre  = _col_exists_cached(db, "dbo", "Edificios", "DireccionLibre")
@@ -809,7 +784,31 @@ class CompraService:
         edi_numero  = "efi.Numero" if has_efi_numero else "NULL"
         edi_dirlib  = "efi.DireccionLibre" if has_efi_dirlibre else ("efi.Direccion" if has_efi_direccion else "NULL")
 
-        base_rows = db.execute(
+        # ---- Fase A: solo IDs de la página (muy barato)
+        # Nota: no tocamos CompraMedidor aquí.
+        page_ids_rows = db.execute(
+            text(f"""
+                WITH ids AS (
+                    SELECT c.Id, c.FechaCompra
+                    FROM dbo.Compras c WITH (NOLOCK)
+                    WHERE {where_sql}
+                    ORDER BY c.FechaCompra DESC, c.Id DESC
+                    OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
+                )
+                SELECT Id FROM ids ORDER BY FechaCompra DESC, Id DESC
+                OPTION (RECOMPILE)
+            """),
+            {**params, "offset": offset, "size": size}
+        ).mappings().all()
+
+        if not page_ids_rows:
+            return total, []
+
+        compra_ids = [int(r["Id"]) for r in page_ids_rows]
+        ids_csv = ",".join(str(i) for i in compra_ids)  # seguro: IDs vienen de BD
+
+        # ---- Fase B: enriquecer SIN GROUP BY ni STRING_AGG
+        rows = db.execute(
             text(f"""
                 SELECT
                     c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
@@ -837,11 +836,12 @@ class CompraService:
                 LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
                 LEFT JOIN dbo.Regiones   r   WITH (NOLOCK) ON r.Id   = com.RegionId
                 WHERE c.Id IN ({ids_csv})
-                OPTION (RECOMPILE, OPTIMIZE FOR UNKNOWN, FAST {size})
+                ORDER BY c.FechaCompra DESC, c.Id DESC
+                OPTION (RECOMPILE)
             """)
         ).mappings().all()
 
-        # 3) Items (en lote) y armamos MedidorIds/PrimerMedidorId en Python
+        # ---- Items/Medidores para esos IDs (ya en lote)
         has_numero = _col_exists_cached(db, "dbo", "Medidores", "Numero")
         has_device = _col_exists_cached(db, "dbo", "Medidores", "DeviceId")
         has_tipo   = _col_exists_cached(db, "dbo", "Medidores", "TipoMedidorId")
@@ -862,11 +862,14 @@ class CompraService:
                 FROM dbo.CompraMedidor cm WITH (NOLOCK)
                 LEFT JOIN dbo.Medidores m WITH (NOLOCK) ON m.Id = cm.MedidorId
                 WHERE cm.CompraId IN ({ids_csv})
-                OPTION (RECOMPILE, OPTIMIZE FOR UNKNOWN, FAST {size})
+                ORDER BY cm.Id
+                OPTION (RECOMPILE)
             """)
         ).mappings().all()
 
+        # ---- Agrupar items por compra y derivar MedidorIds/PrimerMedidorId
         items_by_compra: Dict[int, List[dict]] = {}
+        medidor_ids_by_compra: Dict[int, List[int]] = {}
         for it in items_rows:
             cid = int(it["CompraId"])
             item = {
@@ -884,22 +887,14 @@ class CompraService:
                     "TipoMedidorId": it.get("MedidorTipoId"),
                     "Active": bool(it["MedidorActive"]) if it.get("MedidorActive") is not None else None,
                 }
+                medidor_ids_by_compra.setdefault(cid, []).append(int(it["MedidorId"]))
             items_by_compra.setdefault(cid, []).append(item)
 
-        # 4) Ensamble final manteniendo el orden de la página
-        def _medidores(items: List[dict]) -> Tuple[List[int], Optional[int]]:
-            mids = [it["MedidorId"] for it in items if it.get("MedidorId") is not None]
-            return mids, (mids[0] if mids else None)
-
+        # ---- Salida
         out: List[dict] = []
-        # ordenamos por la posición de cada ID
-        base_rows.sort(key=lambda r: order_pos.get(int(r["Id"]), 0))
-
-        for r in base_rows:
+        for r in rows:
             cid = int(r["Id"])
-            its = items_by_compra.get(cid, [])
-            mids, first_mid = _medidores(its)
-
+            medidor_ids = medidor_ids_by_compra.get(cid, [])
             direccion = {
                 "Calle": r.get("EDI_Calle"),
                 "Numero": r.get("EDI_Numero"),
@@ -918,8 +913,8 @@ class CompraService:
                 "EdificioId": int(r["EdificioId"]) if r["EdificioId"] is not None else None,
                 "NombreOpcional": r.get("DivisionNombre"),
                 "UnidadReportaPMG": bool(r["UnidadReportaPMG"]) if r.get("UnidadReportaPMG") is not None else None,
-                "MedidorIds": mids,
-                "PrimerMedidorId": first_mid,
+                "MedidorIds": medidor_ids,
+                "PrimerMedidorId": (min(medidor_ids) if medidor_ids else None),
 
                 "Id": cid,
                 "DivisionId": int(r["DivisionId"]) if r["DivisionId"] is not None else None,
@@ -941,10 +936,11 @@ class CompraService:
                 "ObservacionRevision": r.get("ObservacionRevision"),
                 "SinMedidor": bool(r["SinMedidor"]) if r.get("SinMedidor") is not None else None,
 
-                "Items": its,
+                "Items": items_by_compra.get(cid, []),
                 "Direccion": direccion,
             }
             out.append(compra_dict)
 
         return total, out
+
 
