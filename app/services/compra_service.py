@@ -145,9 +145,6 @@ class CompraService:
         if fhasta:
             conds.append(Compra.FechaCompra <= fhasta)
 
-        # Nota: los filtros por ServicioId/RegionId/EdificioId/NombreOpcional/MedidorId
-        # están implementados abajo (en modo full) vía sub-consultas. Aquí mantenemos lo básico.
-
         if conds:
             stmt = stmt.where(and_(*conds))
 
@@ -181,7 +178,6 @@ class CompraService:
                         "InicioLectura": _fmt_dt(c.InicioLectura) or "",
                         "FinLectura": _fmt_dt(c.FinLectura) or "",
                         "Active": c.Active,
-                        # si ya tienes estos campos aplanados en la vista, se respetan:
                         "ServicioId": getattr(c, "ServicioId", None),
                         "ServicioNombre": getattr(c, "ServicioNombre", None),
                     }
@@ -194,22 +190,15 @@ class CompraService:
             }
 
         # =======================================================
-        # 3) Respuesta FULL (CompraFullPage con objetos completos)
-        #     - Items con Medidor
-        #     - MedidorIds y PrimerMedidorId
-        #     - Dirección (Edificio + Comuna + Región)
-        #     - Servicio / Institución / PMG / NombreOpcional / EdificioId
+        # 3) Respuesta FULL (enriquecida)
         # =======================================================
-
         if not compras:
             return {"total": int(total or 0), "page": page, "page_size": page_size, "items": []}
 
         compra_ids = [int(c.Id) for c in compras]
         ids_csv = ",".join(str(x) for x in compra_ids)
 
-        # --- Filtros extra (Servicio/Región/Medidor/NombreOpcional) por subconsultas
-        # Se aplican sobre el set ya paginado (barato). Si necesitas que apliquen antes
-        # de paginar, muévelos a la sección 1 con joins reales.
+        # --- Filtros extra (Servicio/Región/Medidor/NombreOpcional/Edificio) post-paginación
         extra_keep: Optional[set[int]] = None
         if any([ServicioId, RegionId, MedidorId, NombreOpcional, EdificioId]):
             extra_keep = set(compra_ids)
@@ -264,7 +253,6 @@ class CompraService:
                 """), {"q": f"%{NombreOpcional}%"}).scalars().all()
                 extra_keep &= set(int(x) for x in rows)
 
-            # filtra compras a mantener
             compra_ids = [cid for cid in compra_ids if cid in extra_keep]
             if not compra_ids:
                 return {"total": int(total or 0), "page": page, "page_size": page_size, "items": []}
@@ -279,7 +267,7 @@ class CompraService:
         edi_numero  = "efi.Numero" if has_efi_numero else "NULL"
         edi_dirlib  = "efi.DireccionLibre" if has_efi_dirlibre else ("efi.Direccion" if has_efi_direccion else "NULL")
 
-        # ---- Cabeceras enriquecidas (una sola pasada)
+        # ---- Cabeceras enriquecidas: +Instituciones
         head_rows = db.execute(text(f"""
             SELECT
                 c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
@@ -293,6 +281,7 @@ class CompraService:
                 d.Nombre                          AS DivisionNombre,
                 s.Nombre                          AS ServicioNombre,
                 s.InstitucionId                   AS InstitucionId,
+                i.Nombre                          AS InstitucionNombre,     -- 👈 NUEVO
                 {edi_calle}                       AS EDI_Calle,
                 {edi_numero}                      AS EDI_Numero,
                 {edi_dirlib}                      AS EDI_DireccionLibre,
@@ -304,6 +293,7 @@ class CompraService:
             FROM dbo.Compras c       WITH (NOLOCK)
             LEFT JOIN dbo.Divisiones d   WITH (NOLOCK) ON d.Id   = c.DivisionId
             LEFT JOIN dbo.Servicios  s   WITH (NOLOCK) ON s.Id   = d.ServicioId
+            LEFT JOIN dbo.Instituciones i WITH (NOLOCK) ON i.Id  = s.InstitucionId      -- 👈 NUEVO
             LEFT JOIN dbo.Edificios  efi WITH (NOLOCK) ON efi.Id = d.EdificioId
             LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
             LEFT JOIN dbo.Regiones   r   WITH (NOLOCK) ON r.Id   = com.RegionId
@@ -378,6 +368,7 @@ class CompraService:
                 "ServicioId": int(r["ServicioId"]) if r["ServicioId"] is not None else None,
                 "ServicioNombre": r.get("ServicioNombre"),
                 "InstitucionId": int(r["InstitucionId"]) if r["InstitucionId"] is not None else None,
+                "InstitucionNombre": r.get("InstitucionNombre"),      # 👈 NUEVO
                 "RegionId": int(r["COM_RegionId"]) if r.get("COM_RegionId") is not None else (int(r["R_Id"]) if r.get("R_Id") is not None else None),
                 "EdificioId": int(r["EdificioId"]) if r["EdificioId"] is not None else None,
                 "NombreOpcional": nombre_opc,
@@ -417,6 +408,7 @@ class CompraService:
             "page_size": page_size,
             "items": items_full,
         }
+
 
     # ======================================================================
     # CRUD BÁSICO
@@ -538,30 +530,10 @@ class CompraService:
         ctx = self.get_context(db, compra_id)
         
         required_root = [
-            "Id",
-            "DivisionId",
-            "EnergeticoId",
-            "NumeroClienteId",
-            "FechaCompra",
-            "Consumo",
-            "Costo",
-            "InicioLectura",
-            "FinLectura",
-            "FacturaId",
-            "CreatedByDivisionId",
-            "EstadoValidacionId",
-            "Observacion",
-            "Active",
-            "UnidadMedidaId",
-            "ServicioId",
-            "ServicioNombre",
-            "InstitucionId",
-            "RegionId",
-            "EdificioId",
-            "NombreOpcional",
-            "UnidadReportaPMG",
-            "MedidorIds",
-            "PrimerMedidorId",
+            "Id","DivisionId","EnergeticoId","NumeroClienteId","FechaCompra","Consumo","Costo",
+            "InicioLectura","FinLectura","FacturaId","CreatedByDivisionId","EstadoValidacionId",
+            "Observacion","Active","UnidadMedidaId","ServicioId","ServicioNombre","InstitucionId",
+            "RegionId","EdificioId","NombreOpcional","UnidadReportaPMG","MedidorIds","PrimerMedidorId",
         ]
 
         base = ctx.get("Compra", {}) if isinstance(ctx, dict) else {}
@@ -581,12 +553,14 @@ class CompraService:
 
         div = ctx.get("Division") or {}
         serv = ctx.get("Servicio") or {}
+        inst = ctx.get("Institucion") or {}
         comu = ctx.get("Comuna") or {}
         reg = ctx.get("Region") or {}
 
         out["ServicioId"] = div.get("ServicioId")
         out["ServicioNombre"] = serv.get("ServicioNombre")
         out["InstitucionId"] = div.get("InstitucionId")
+        out["InstitucionNombre"] = inst.get("InstitucionNombre")   # 👈 NUEVO
         out["RegionId"] = comu.get("RegionId") or (reg.get("Id") if reg else None)
         out["EdificioId"] = div.get("EdificioId")
         out["UnidadReportaPMG"] = div.get("UnidadReportaPMG")
@@ -942,8 +916,7 @@ class CompraService:
         edi_numero  = "efi.Numero" if has_efi_numero else "NULL"
         edi_dirlib  = "efi.DireccionLibre" if has_efi_dirlibre else ("efi.Direccion" if has_efi_direccion else "NULL")
 
-        # ---- Fase A: solo IDs de la página (muy barato)
-        # Nota: no tocamos CompraMedidor aquí.
+        # ---- Fase A: IDs de la página
         page_ids_rows = db.execute(
             text(f"""
                 WITH ids AS (
@@ -963,9 +936,9 @@ class CompraService:
             return total, []
 
         compra_ids = [int(r["Id"]) for r in page_ids_rows]
-        ids_csv = ",".join(str(i) for i in compra_ids)  # seguro: IDs vienen de BD
+        ids_csv = ",".join(str(i) for i in compra_ids)
 
-        # ---- Fase B: enriquecer SIN GROUP BY ni STRING_AGG
+        # ---- Fase B: enriquecer (ahora con InstitucionNombre)
         rows = db.execute(
             text(f"""
                 SELECT
@@ -976,6 +949,7 @@ class CompraService:
                     d.ServicioId                    AS ServicioId,
                     s.Nombre                        AS ServicioNombre,
                     s.InstitucionId                 AS InstitucionId,
+                    i.Nombre                        AS InstitucionNombre,   -- 👈 NUEVO
                     d.EdificioId                    AS EdificioId,
                     d.ReportaPMG                    AS UnidadReportaPMG,
                     d.Nombre                        AS DivisionNombre,
@@ -990,6 +964,7 @@ class CompraService:
                 FROM dbo.Compras c       WITH (NOLOCK)
                 LEFT JOIN dbo.Divisiones d   WITH (NOLOCK) ON d.Id   = c.DivisionId
                 LEFT JOIN dbo.Servicios  s   WITH (NOLOCK) ON s.Id   = d.ServicioId
+                LEFT JOIN dbo.Instituciones i WITH (NOLOCK) ON i.Id  = s.InstitucionId   -- 👈 NUEVO
                 LEFT JOIN dbo.Edificios  efi WITH (NOLOCK) ON efi.Id = d.EdificioId
                 LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
                 LEFT JOIN dbo.Regiones   r   WITH (NOLOCK) ON r.Id   = com.RegionId
@@ -999,7 +974,7 @@ class CompraService:
             """)
         ).mappings().all()
 
-        # ---- Items/Medidores para esos IDs (ya en lote)
+        # ---- Items/Medidores para esos IDs (lote)
         has_numero = _col_exists_cached(db, "dbo", "Medidores", "Numero")
         has_device = _col_exists_cached(db, "dbo", "Medidores", "DeviceId")
         has_tipo   = _col_exists_cached(db, "dbo", "Medidores", "TipoMedidorId")
@@ -1025,7 +1000,6 @@ class CompraService:
             """)
         ).mappings().all()
 
-        # ---- Agrupar items por compra y derivar MedidorIds/PrimerMedidorId
         items_by_compra: Dict[int, List[dict]] = {}
         medidor_ids_by_compra: Dict[int, List[int]] = {}
         for it in items_rows:
@@ -1048,7 +1022,6 @@ class CompraService:
                 medidor_ids_by_compra.setdefault(cid, []).append(int(it["MedidorId"]))
             items_by_compra.setdefault(cid, []).append(item)
 
-        # ---- Salida
         out: List[dict] = []
         for r in rows:
             cid = int(r["Id"])
@@ -1067,6 +1040,7 @@ class CompraService:
                 "ServicioId": int(r["ServicioId"]) if r["ServicioId"] is not None else None,
                 "ServicioNombre": r.get("ServicioNombre"),
                 "InstitucionId": int(r["InstitucionId"]) if r["InstitucionId"] is not None else None,
+                "InstitucionNombre": r.get("InstitucionNombre"),      # 👈 NUEVO
                 "RegionId": int(r["COM_RegionId"]) if r.get("COM_RegionId") is not None else (int(r["R_Id"]) if r.get("R_Id") is not None else None),
                 "EdificioId": int(r["EdificioId"]) if r["EdificioId"] is not None else None,
                 "NombreOpcional": r.get("DivisionNombre"),

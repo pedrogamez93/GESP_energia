@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict
 class MedidorDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     Numero: Optional[str] = None
-    DeviceId: Optional[str] = None
+    DeviceId: Optional[int | str] = None
     TipoMedidorId: Optional[int] = None
     Active: Optional[bool] = None
 
@@ -81,7 +81,7 @@ class CompraDTO(CompraListDTO):
     model_config = ConfigDict(from_attributes=True)
     UnidadMedidaId: Optional[int] = None
     Observacion: Optional[str] = None
-    FacturaId: int
+    FacturaId: Optional[int] = None
     EstadoValidacionId: Optional[str] = None
     RevisadoPor: Optional[str] = None
     ReviewedAt: Optional[str] = None  # si quisieras datetime, cambia también en el service
@@ -102,7 +102,7 @@ class CompraContextoDTO(BaseModel):
     ServicioId: Optional[int] = None
     ServicioNombre: Optional[str] = None
     InstitucionId: Optional[int] = None
-
+    InstitucionNombre: str | None = None
     # División enriquecida
     RegionId: Optional[int] = None
     EdificioId: Optional[int] = None
@@ -214,6 +214,7 @@ class CompraListFullDTO(BaseModel):
     ServicioId: Optional[int] = None
     ServicioNombre: Optional[str] = None
     InstitucionId: Optional[int] = None
+    InstitucionNombre: str | None = None
     RegionId: Optional[int] = None
     EdificioId: Optional[int] = None
     NombreOpcional: Optional[str] = None
