@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, TYPE_CHECKING
+from typing import List
 
 from sqlalchemy import (
     BigInteger,
@@ -15,10 +15,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-
-if TYPE_CHECKING:
-    # Solo para tipos (no ejecuta import en runtime ⇒ evita ciclos)
-    from .compra_medidor import CompraMedidor
 
 
 class Compra(Base):
@@ -70,12 +66,10 @@ class Compra(Base):
 
     SinMedidor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    # ─────────────────────────────────────────────────────────────
-    # SOLO LECTURA: Items de CompraMedidor (eval diferida con lambda)
-    # ─────────────────────────────────────────────────────────────
+    # Items solo-lectura (esto es lo que usa tu listado enriquecido)
     Items: Mapped[List["CompraMedidor"]] = relationship(
         "CompraMedidor",
-        primaryjoin=lambda: Compra.Id == CompraMedidor.CompraId,
+        primaryjoin="Compra.Id == CompraMedidor.CompraId",
         viewonly=True,
         lazy="selectin",
         order_by="CompraMedidor.Id",

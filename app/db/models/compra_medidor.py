@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -16,10 +16,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-
-if TYPE_CHECKING:
-    from .compra import Compra
-    from .medidor import Medidor
 
 
 class CompraMedidor(Base):
@@ -61,21 +57,10 @@ class CompraMedidor(Base):
     ParametroMedicionId: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     UnidadMedidaId: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
-    # ─────────────────────────────────────────────────────────────
-    # Relaciones SOLO LECTURA (eval diferida con lambda)
-    # ─────────────────────────────────────────────────────────────
-    compra: Mapped["Compra"] = relationship(
-        "Compra",
-        primaryjoin=lambda: CompraMedidor.CompraId == Compra.Id,
-        foreign_keys=lambda: [CompraMedidor.CompraId],
-        viewonly=True,
-        lazy="joined",
-    )
-
+    # Solo-lectura hacia Medidor (esto sí lo usas en el detalle)
     medidor: Mapped[Optional["Medidor"]] = relationship(
         "Medidor",
-        primaryjoin=lambda: CompraMedidor.MedidorId == Medidor.Id,
-        foreign_keys=lambda: [CompraMedidor.MedidorId],
+        primaryjoin="CompraMedidor.MedidorId == Medidor.Id",
         viewonly=True,
         lazy="joined",
     )
