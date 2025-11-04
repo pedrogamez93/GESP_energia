@@ -1,17 +1,17 @@
 # app/api/routes/compras.py
 from __future__ import annotations
-from typing import Annotated, List, Union
+from typing import Annotated, List, Union, Optional
 
-from fastapi import APIRouter, Depends, Query, Path, status
+from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 from app.schemas.compra import (
-    CompraDTO, CompraListDTO, CompraCreate, CompraUpdate,
-    CompraMedidorItemDTO, CompraItemsPayload, CompraPage,
-    CompraFullPage, CompraListFullDTO, CompraFullDetalleDTO
+    CompraDTO, CompraCreate, CompraUpdate,
+    CompraMedidorItemDTO, CompraItemsPayload,
+    CompraPage, CompraFullPage, CompraFullDetalleDTO
 )
 from app.services.compra_service import CompraService
 
@@ -19,49 +19,104 @@ router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
 DbDep = Annotated[Session, Depends(get_db)]
 svc = CompraService()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers locales (no tocan esquema ni modelos)
+# ─────────────────────────────────────────────────────────────────────────────
+_MAX_PAGE_SIZE = 100
+
+def _clamp_page(n: int) -> int:
+    return 1 if n < 1 else n
+
+def _clamp_page_size(n: int) -> int:
+    if n < 1:
+        return 10
+    if n > _MAX_PAGE_SIZE:
+        return _MAX_PAGE_SIZE
+    return n
+
+def _nz_str(s: Optional[str]) -> Optional[str]:
+    """Devuelve None si la cadena viene vacía/espacios."""
+    if s is None:
+        return None
+    s2 = s.strip()
+    return s2 if s2 else None
+
+def _validate_dates(desde: Optional[str], hasta: Optional[str]) -> None:
+    """Valida solamente orden lógico si ambas vienen (sin parse complejo)."""
+    if not desde or not hasta:
+        return
+    # Comparamos string YYYY-MM-DD/ISO por orden lexicográfico suficiente
+    if len(desde) >= 10 and len(hasta) >= 10 and desde[:10] > hasta[:10]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="FechaDesde no puede ser mayor que FechaHasta."
+        )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rutas
+# ─────────────────────────────────────────────────────────────────────────────
 
 @router.get(
     "",
     summary="Listado paginado de compras/consumos (básico o enriquecido)",
-    response_model=Union[CompraFullPage, CompraPage]   # <- usa el modelo completo
+    response_model=Union[CompraFullPage, CompraPage],
+    response_model_exclude_none=True,
 )
 def list_compras(
     db: DbDep,
     q: str | None = Query(default=None, description="Busca en Observacion"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=50),
+    page_size: int = Query(10, ge=1, le=_MAX_PAGE_SIZE),
     DivisionId: int | None = Query(default=None),
     ServicioId: int | None = Query(default=None),
     EnergeticoId: int | None = Query(default=None),
     NumeroClienteId: int | None = Query(default=None),
-    FechaDesde: str | None = Query(default=None),
-    FechaHasta: str | None = Query(default=None),
+    FechaDesde: str | None = Query(default=None, description="YYYY-MM-DD o ISO"),
+    FechaHasta: str | None = Query(default=None, description="YYYY-MM-DD o ISO"),
     active: bool | None = Query(default=True),
     MedidorId: int | None = Query(default=None),
     EstadoValidacionId: str | None = Query(default=None),
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
     NombreOpcional: str | None = Query(default=None),
-    full: bool = Query(default=True)  # por defecto enriquecido
+    full: bool = Query(default=True, description="True = resultado enriquecido"),
 ):
+    # Normalizaciones ligeras (sin cambiar contratos)
+    page = _clamp_page(page)
+    page_size = _clamp_page_size(page_size)
+    q = _nz_str(q)
+    EstadoValidacionId = _nz_str(EstadoValidacionId)
+    NombreOpcional = _nz_str(NombreOpcional)
+    _validate_dates(FechaDesde, FechaHasta)
+
     if full:
         total, items = svc.list_full(
             db, q, page, page_size,
-            DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
+            DivisionId, ServicioId, EnergeticoId, NumeroClienteId,
+            FechaDesde, FechaHasta, active,
             MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
         )
         return {"total": total, "page": page, "page_size": page_size, "items": items}
     else:
         total, items = svc.list(
             db, q, page, page_size,
-            DivisionId, ServicioId, EnergeticoId, NumeroClienteId, FechaDesde, FechaHasta, active,
+            DivisionId, ServicioId, EnergeticoId, NumeroClienteId,
+            FechaDesde, FechaHasta, active,
             MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
         )
         return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
-@router.get("/{compra_id}", response_model=CompraDTO, summary="Detalle (incluye items por medidor)")
-def get_compra(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
+@router.get(
+    "/{compra_id}",
+    response_model=CompraDTO,
+    summary="Detalle (incluye items por medidor)",
+    response_model_exclude_none=True,
+)
+def get_compra(
+    compra_id: Annotated[int, Path(..., ge=1)],
+    db: DbDep
+):
     c = svc.get(db, compra_id)
     items = svc._items_by_compra(db, compra_id)
     dto = CompraDTO.model_validate(c)
@@ -72,7 +127,8 @@ def get_compra(compra_id: Annotated[int, Path(..., ge=1)], db: DbDep):
 @router.get(
     "/{compra_id}/detalle",
     response_model=CompraFullDetalleDTO,
-    summary="Detalle enriquecido (compra + items + servicio/institución + región/comuna + dirección + medidores)"
+    summary="Detalle enriquecido (compra + items + servicio/institución + región/comuna + dirección + medidores)",
+    response_model_exclude_none=True,
 )
 def get_compra_detalle(
     compra_id: Annotated[int, Path(..., ge=1)],
@@ -82,7 +138,13 @@ def get_compra_detalle(
     return CompraFullDetalleDTO(**data)
 
 
-@router.post("", response_model=CompraDTO, status_code=status.HTTP_201_CREATED, summary="(ADMINISTRADOR) Crear compra/consumo")
+@router.post(
+    "",
+    response_model=CompraDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="(ADMINISTRADOR) Crear compra/consumo",
+    response_model_exclude_none=True,
+)
 def create_compra(
     payload: CompraCreate,
     db: DbDep,
@@ -94,9 +156,14 @@ def create_compra(
     return dto
 
 
-@router.put("/{compra_id}", response_model=CompraDTO, summary="(ADMINISTRADOR) Actualizar compra/consumo")
+@router.put(
+    "/{compra_id}",
+    response_model=CompraDTO,
+    summary="(ADMINISTRADOR) Actualizar compra/consumo",
+    response_model_exclude_none=True,
+)
 def update_compra(
-    compra_id: int,
+    compra_id: Annotated[int, Path(..., ge=1)],
     payload: CompraUpdate,
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
@@ -107,9 +174,13 @@ def update_compra(
     return dto
 
 
-@router.delete("/{compra_id}", status_code=status.HTTP_204_NO_CONTENT, summary="(ADMINISTRADOR) Eliminar compra/consumo (soft-delete)")
+@router.delete(
+    "/{compra_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="(ADMINISTRADOR) Eliminar compra/consumo (soft-delete)",
+)
 def delete_compra(
-    compra_id: int,
+    compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
 ):
@@ -117,9 +188,14 @@ def delete_compra(
     return None
 
 
-@router.patch("/{compra_id}/reactivar", response_model=CompraDTO, summary="(ADMINISTRADOR) Reactivar compra/consumo")
+@router.patch(
+    "/{compra_id}/reactivar",
+    response_model=CompraDTO,
+    summary="(ADMINISTRADOR) Reactivar compra/consumo",
+    response_model_exclude_none=True,
+)
 def reactivate_compra(
-    compra_id: int,
+    compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
 ):
@@ -130,9 +206,14 @@ def reactivate_compra(
     return dto
 
 
-@router.put("/{compra_id}/medidores", response_model=List[CompraMedidorItemDTO], summary="(ADMINISTRADOR) Reemplaza los items de medidor para la compra")
+@router.put(
+    "/{compra_id}/medidores",
+    response_model=List[CompraMedidorItemDTO],
+    summary="(ADMINISTRADOR) Reemplaza los items de medidor para la compra",
+    response_model_exclude_none=True,
+)
 def replace_items_compra(
-    compra_id: int,
+    compra_id: Annotated[int, Path(..., ge=1)],
     payload: CompraItemsPayload,
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
