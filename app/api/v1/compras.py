@@ -59,52 +59,61 @@ def _validate_dates(desde: Optional[str], hasta: Optional[str]) -> None:
 @router.get(
     "",
     summary="Listado paginado de compras/consumos (básico o enriquecido)",
-    response_model=Union[CompraFullPage, CompraPage],
-    response_model_exclude_none=True,
+    response_model=Union[CompraFullPage, CompraPage]
 )
 def list_compras(
     db: DbDep,
     q: str | None = Query(default=None, description="Busca en Observacion"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=_MAX_PAGE_SIZE),
+    page_size: int = Query(10, ge=1, le=50),
     DivisionId: int | None = Query(default=None),
     ServicioId: int | None = Query(default=None),
     EnergeticoId: int | None = Query(default=None),
     NumeroClienteId: int | None = Query(default=None),
-    FechaDesde: str | None = Query(default=None, description="YYYY-MM-DD o ISO"),
-    FechaHasta: str | None = Query(default=None, description="YYYY-MM-DD o ISO"),
+    FechaDesde: str | None = Query(default=None),
+    FechaHasta: str | None = Query(default=None),
     active: bool | None = Query(default=True),
     MedidorId: int | None = Query(default=None),
     EstadoValidacionId: str | None = Query(default=None),
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
     NombreOpcional: str | None = Query(default=None),
-    full: bool = Query(default=True, description="True = resultado enriquecido"),
+    full: bool = Query(default=True)  # por defecto enriquecido
 ):
-    # Normalizaciones ligeras (sin cambiar contratos)
-    page = _clamp_page(page)
-    page_size = _clamp_page_size(page_size)
-    q = _nz_str(q)
-    EstadoValidacionId = _nz_str(EstadoValidacionId)
-    NombreOpcional = _nz_str(NombreOpcional)
-    _validate_dates(FechaDesde, FechaHasta)
-
-    if full:
-        total, items = svc.list_full(
-            db, q, page, page_size,
-            DivisionId, ServicioId, EnergeticoId, NumeroClienteId,
-            FechaDesde, FechaHasta, active,
-            MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
-        )
-        return {"total": total, "page": page, "page_size": page_size, "items": items}
-    else:
+    """
+    Si full=True: usa el get_full por cada fila (sin cambiar el servicio ni el esquema).
+    Si full=False: devuelve el listado básico tal como lo tienes hoy.
+    """
+    if not full:
+        # === Básico (sin Items/Direccion) ===
         total, items = svc.list(
             db, q, page, page_size,
-            DivisionId, ServicioId, EnergeticoId, NumeroClienteId,
-            FechaDesde, FechaHasta, active,
-            MedidorId, EstadoValidacionId, RegionId, EdificioId, NombreOpcional
+            DivisionId=DivisionId, ServicioId=ServicioId, EnergeticoId=EnergeticoId, NumeroClienteId=NumeroClienteId,
+            FechaDesde=FechaDesde, FechaHasta=FechaHasta, active=active,
+            MedidorId=MedidorId, EstadoValidacionId=EstadoValidacionId, RegionId=RegionId, EdificioId=EdificioId,
+            NombreOpcional=NombreOpcional, full=False
         )
         return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+    # === Enriquecido (Items, MedidorIds, Direccion, etc.) usando get_full() por fila ===
+    # 1) Primero pedimos la página básica sólo para obtener los IDs de esa página.
+    total, items_basic = svc.list(
+        db, q, page, page_size,
+        DivisionId=DivisionId, ServicioId=ServicioId, EnergeticoId=EnergeticoId, NumeroClienteId=NumeroClienteId,
+        FechaDesde=FechaDesde, FechaHasta=FechaHasta, active=active,
+        MedidorId=MedidorId, EstadoValidacionId=EstadoValidacionId, RegionId=RegionId, EdificioId=EdificioId,
+        NombreOpcional=NombreOpcional, full=False
+    )
+
+    # 2) Por cada Id, traemos el detalle enriquecido con el método que YA funciona.
+    full_items = []
+    for it in items_basic:
+        cid = it.get("Id")
+        if cid is None:
+            continue
+        full_items.append(svc.get_full(db, cid))
+
+    return {"total": total, "page": page, "page_size": page_size, "items": full_items}
 
 
 @router.get(
