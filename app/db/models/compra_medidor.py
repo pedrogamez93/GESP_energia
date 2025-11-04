@@ -1,8 +1,7 @@
-# app/db/models/compra_medidor.py
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -18,6 +17,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
+if TYPE_CHECKING:
+    from .compra import Compra
+    from .medidor import Medidor
+
 
 class CompraMedidor(Base):
     __tablename__ = "CompraMedidor"
@@ -27,10 +30,8 @@ class CompraMedidor(Base):
         {"schema": "dbo"},
     )
 
-    # PK
     Id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
-    # Timestamps / control
     CreatedAt: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), nullable=False, server_default=text("GETDATE()")
     )
@@ -61,20 +62,20 @@ class CompraMedidor(Base):
     UnidadMedidaId: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     # ─────────────────────────────────────────────────────────────
-    # Relaciones (solo lectura) — no dependen de que existan FKs reales
+    # Relaciones SOLO LECTURA (eval diferida con lambda)
     # ─────────────────────────────────────────────────────────────
     compra: Mapped["Compra"] = relationship(
         "Compra",
-        primaryjoin="CompraMedidor.CompraId == Compra.Id",
+        primaryjoin=lambda: CompraMedidor.CompraId == Compra.Id,
+        foreign_keys=lambda: [CompraMedidor.CompraId],
         viewonly=True,
         lazy="joined",
     )
 
-    # Esta relación asume que tienes un modelo Medidor mapeado a dbo.Medidores.
-    # Si aún no lo tienes, déjalo comentado o créalo minimalmente.
     medidor: Mapped[Optional["Medidor"]] = relationship(
         "Medidor",
-        primaryjoin="CompraMedidor.MedidorId == Medidor.Id",
+        primaryjoin=lambda: CompraMedidor.MedidorId == Medidor.Id,
+        foreign_keys=lambda: [CompraMedidor.MedidorId],
         viewonly=True,
         lazy="joined",
     )

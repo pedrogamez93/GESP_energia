@@ -1,8 +1,7 @@
-# app/db/models/compra.py
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List
+from typing import List, TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -16,6 +15,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    # Solo para tipos (no ejecuta import en runtime ⇒ evita ciclos)
+    from .compra_medidor import CompraMedidor
 
 
 class Compra(Base):
@@ -68,13 +71,13 @@ class Compra(Base):
     SinMedidor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # ─────────────────────────────────────────────────────────────
-    # Relación SOLO LECTURA con CompraMedidor (join por columna)
+    # SOLO LECTURA: Items de CompraMedidor (eval diferida con lambda)
     # ─────────────────────────────────────────────────────────────
     Items: Mapped[List["CompraMedidor"]] = relationship(
         "CompraMedidor",
-        primaryjoin="Compra.Id == CompraMedidor.CompraId",
-        viewonly=True,           # no intentará insertar/actualizar via relación
-        lazy="selectin",         # eficiente para múltiples compras
+        primaryjoin=lambda: Compra.Id == CompraMedidor.CompraId,
+        viewonly=True,
+        lazy="selectin",
         order_by="CompraMedidor.Id",
     )
 
