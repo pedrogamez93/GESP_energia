@@ -7,7 +7,8 @@ from typing import Optional, List, Tuple, Any, Dict
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-
+from sqlalchemy import select, func, and_  
+from sqlalchemy.orm import selectinload
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
 
@@ -113,16 +114,18 @@ class CompraService:
     ):
         """
         Si full=False => devuelve CompraPage (básico)
-        Si full=True  => devuelve CompraFullPage (enriquecido con Items + Medidor y contexto básico)
+        Si full=True  => devuelve CompraFullPage (enriquecido: Items + Medidor + Dirección + contexto)
         """
         # =========================
         # 1) Base query + filtros
         # =========================
-        stmt = select(Compra)
+        from sqlalchemy import select, func, and_
+        from sqlalchemy.orm import selectinload
 
+        stmt = select(Compra)
         conds = []
+
         if q:
-            # Observación contiene q
             conds.append(func.lower(Compra.Observacion).like(f"%{q.lower()}%"))
         if DivisionId:
             conds.append(Compra.DivisionId == DivisionId)
@@ -142,12 +145,8 @@ class CompraService:
         if fhasta:
             conds.append(Compra.FechaCompra <= fhasta)
 
-        # Nota: filtros por ServicioId/RegionId/EdificioId/NombreOpcional requieren joins que
-        # dependen de tus modelos reales (Division/Servicio/Edificio). Los dejamos TODO.
-        # if ServicioId: ...
-        # if RegionId: ...
-        # if EdificioId: ...
-        # if NombreOpcional: ...
+        # Nota: los filtros por ServicioId/RegionId/EdificioId/NombreOpcional/MedidorId
+        # están implementados abajo (en modo full) vía sub-consultas. Aquí mantenemos lo básico.
 
         if conds:
             stmt = stmt.where(and_(*conds))
@@ -158,7 +157,7 @@ class CompraService:
         total = db.scalar(select(func.count()).select_from(stmt.subquery()))
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
-        # Para modo full cargamos Items por selectin (evita N+1)
+        # Para modo full podríamos evitar N+1 cargando Items; haremos carga en bloque después.
         if full:
             stmt = stmt.options(selectinload(Compra.Items))
 
@@ -168,144 +167,256 @@ class CompraService:
         # 2) Respuesta BÁSICA (CompraPage con CompraListDTO)
         # =======================================================
         if not full:
-            items_basic: List[CompraListDTO] = []
+            items_basic: List[dict] = []
             for c in compras:
                 items_basic.append(
-                    CompraListDTO(
-                        Id=c.Id,
-                        DivisionId=c.DivisionId,
-                        EnergeticoId=c.EnergeticoId,
-                        NumeroClienteId=c.NumeroClienteId,
-                        FechaCompra=_fmt_dt(c.FechaCompra) or "",
-                        Consumo=c.Consumo,
-                        Costo=c.Costo,
-                        InicioLectura=_fmt_dt(c.InicioLectura) or "",
-                        FinLectura=_fmt_dt(c.FinLectura) or "",
-                        Active=c.Active,
-                        # Enriquecidos mínimos si ya los tienes en el aplanado:
-                        ServicioId=getattr(c, "ServicioId", None),
-                        ServicioNombre=getattr(c, "ServicioNombre", None),
-                    )
+                    {
+                        "Id": c.Id,
+                        "DivisionId": c.DivisionId,
+                        "EnergeticoId": c.EnergeticoId,
+                        "NumeroClienteId": c.NumeroClienteId,
+                        "FechaCompra": _fmt_dt(c.FechaCompra) or "",
+                        "Consumo": c.Consumo,
+                        "Costo": c.Costo,
+                        "InicioLectura": _fmt_dt(c.InicioLectura) or "",
+                        "FinLectura": _fmt_dt(c.FinLectura) or "",
+                        "Active": c.Active,
+                        # si ya tienes estos campos aplanados en la vista, se respetan:
+                        "ServicioId": getattr(c, "ServicioId", None),
+                        "ServicioNombre": getattr(c, "ServicioNombre", None),
+                    }
                 )
-            return CompraPage(total=total or 0, page=page, page_size=page_size, items=items_basic)
+            return {
+                "total": int(total or 0),
+                "page": page,
+                "page_size": page_size,
+                "items": items_basic,
+            }
 
         # =======================================================
-        # 3) Respuesta FULL (CompraFullPage con CompraFullDetalleDTO)
+        # 3) Respuesta FULL (CompraFullPage con objetos completos)
         #     - Items con Medidor
-        #     - Contexto mínimo (ServicioId/ServicioNombre/MedidorIds)
-        #     - Direccion=None (placeholder)
+        #     - MedidorIds y PrimerMedidorId
+        #     - Dirección (Edificio + Comuna + Región)
+        #     - Servicio / Institución / PMG / NombreOpcional / EdificioId
         # =======================================================
 
-        # 3.1 Pre-cargamos medidores por compra (para MedidorIds y PrimerMedidorId)
-        cm_rows = db.execute(
-            select(
-                CompraMedidor.CompraId,
-                CompraMedidor.MedidorId,
-                CompraMedidor.Id,
-                CompraMedidor.Consumo,
-                CompraMedidor.ParametroMedicionId,
-                CompraMedidor.UnidadMedidaId,
-            ).where(CompraMedidor.CompraId.in_([c.Id for c in compras]))
-        ).all()
+        if not compras:
+            return {"total": int(total or 0), "page": page, "page_size": page_size, "items": []}
 
-        by_compra_items: dict[int, List[CompraMedidor]] = {}
-        by_compra_medidor_ids: dict[int, List[int]] = {}
-        for row in cm_rows:
-            compra_id = row.CompraId
-            by_compra_items.setdefault(compra_id, [])
-            by_compra_medidor_ids.setdefault(compra_id, [])
-            # reconstruimos un objeto liviano tipo CompraMedidor (o dict) para mapear DTO
-            fake = CompraMedidor(
-                Id=row.Id,
-                CompraId=compra_id,
-                MedidorId=row.MedidorId,
-                Consumo=row.Consumo,
-                ParametroMedicionId=row.ParametroMedicionId,
-                UnidadMedidaId=row.UnidadMedidaId,
-            )
-            by_compra_items[compra_id].append(fake)
-            if row.MedidorId is not None:
-                by_compra_medidor_ids[compra_id].append(row.MedidorId)
+        compra_ids = [int(c.Id) for c in compras]
+        ids_csv = ",".join(str(x) for x in compra_ids)
 
-        # 3.2 Si existe modelo Medidor, traemos sus datos para anidarlos
-        medidores_map: dict[int, MedidorDTO] = {}
-        if Medidor:
-            all_mids = {mid for mids in by_compra_medidor_ids.values() for mid in mids}
-            if all_mids:
-                qs = db.execute(select(Medidor).where(Medidor.Id.in_(list(all_mids)))).scalars().all()
-                for m in qs:
-                    medidores_map[m.Id] = MedidorDTO(
-                        Numero=getattr(m, "Numero", None),
-                        DeviceId=getattr(m, "DeviceId", None),
-                        TipoMedidorId=getattr(m, "TipoMedidorId", None),
-                        Active=getattr(m, "Active", None),
+        # --- Filtros extra (Servicio/Región/Medidor/NombreOpcional) por subconsultas
+        # Se aplican sobre el set ya paginado (barato). Si necesitas que apliquen antes
+        # de paginar, muévelos a la sección 1 con joins reales.
+        extra_keep: Optional[set[int]] = None
+        if any([ServicioId, RegionId, MedidorId, NombreOpcional, EdificioId]):
+            extra_keep = set(compra_ids)
+
+            if ServicioId is not None:
+                rows = db.execute(text(f"""
+                    SELECT c.Id
+                    FROM dbo.Compras c WITH (NOLOCK)
+                    JOIN dbo.Divisiones d WITH (NOLOCK) ON d.Id = c.DivisionId
+                    WHERE c.Id IN ({ids_csv}) AND d.ServicioId = :sid
+                """), {"sid": int(ServicioId)}).scalars().all()
+                extra_keep &= set(int(x) for x in rows)
+
+            if RegionId is not None:
+                rows = db.execute(text(f"""
+                    SELECT c.Id
+                    FROM dbo.Compras c WITH (NOLOCK)
+                    JOIN dbo.Divisiones d WITH (NOLOCK) ON d.Id = c.DivisionId
+                    LEFT JOIN dbo.Edificios efi WITH (NOLOCK) ON efi.Id = d.EdificioId
+                    LEFT JOIN dbo.Comunas com WITH (NOLOCK) ON com.Id = efi.ComunaId
+                    WHERE c.Id IN ({ids_csv}) AND com.RegionId = :rid
+                """), {"rid": int(RegionId)}).scalars().all()
+                extra_keep &= set(int(x) for x in rows)
+
+            if MedidorId is not None:
+                rows = db.execute(text(f"""
+                    SELECT DISTINCT cm.CompraId
+                    FROM dbo.CompraMedidor cm WITH (NOLOCK)
+                    WHERE cm.CompraId IN ({ids_csv}) AND cm.MedidorId = :mid
+                """), {"mid": int(MedidorId)}).scalars().all()
+                extra_keep &= set(int(x) for x in rows)
+
+            if EdificioId is not None:
+                rows = db.execute(text(f"""
+                    SELECT c.Id
+                    FROM dbo.Compras c WITH (NOLOCK)
+                    JOIN dbo.Divisiones d WITH (NOLOCK) ON d.Id = c.DivisionId
+                    WHERE c.Id IN ({ids_csv}) AND d.EdificioId = :eid
+                """), {"eid": int(EdificioId)}).scalars().all()
+                extra_keep &= set(int(x) for x in rows)
+
+            if NombreOpcional:
+                rows = db.execute(text(f"""
+                    SELECT c.Id
+                    FROM dbo.Compras c WITH (NOLOCK)
+                    LEFT JOIN dbo.Divisiones d WITH (NOLOCK) ON d.Id = c.DivisionId
+                    WHERE c.Id IN ({ids_csv})
+                    AND (
+                        LOWER(ISNULL(c.NombreOpcional,'')) LIKE LOWER(:q)
+                        OR LOWER(ISNULL(d.Nombre,'')) LIKE LOWER(:q)
                     )
+                """), {"q": f"%{NombreOpcional}%"}).scalars().all()
+                extra_keep &= set(int(x) for x in rows)
 
-        # 3.3 Construimos items FULL y el contexto mínimo
-        full_items: List[CompraFullDetalleDTO] = []
-        for c in compras:
-            items_cm = by_compra_items.get(c.Id, [])
-            items_full: List[CompraMedidorItemFullDTO] = []
-            for it in items_cm:
-                items_full.append(
-                    CompraMedidorItemFullDTO(
-                        Id=it.Id,
-                        Consumo=it.Consumo,
-                        MedidorId=it.MedidorId,
-                        ParametroMedicionId=it.ParametroMedicionId,
-                        UnidadMedidaId=it.UnidadMedidaId,
-                        Medidor=medidores_map.get(it.MedidorId) if it.MedidorId else None,
-                    )
-                )
+            # filtra compras a mantener
+            compra_ids = [cid for cid in compra_ids if cid in extra_keep]
+            if not compra_ids:
+                return {"total": int(total or 0), "page": page, "page_size": page_size, "items": []}
+            ids_csv = ",".join(str(x) for x in compra_ids)
 
-            med_ids = by_compra_medidor_ids.get(c.Id, [])
-            primer = med_ids[0] if med_ids else None
+        # ---- Detección de columnas de dirección (una vez)
+        has_efi_calle     = _col_exists_cached(db, "dbo", "Edificios", "Calle")
+        has_efi_numero    = _col_exists_cached(db, "dbo", "Edificios", "Numero")
+        has_efi_dirlibre  = _col_exists_cached(db, "dbo", "Edificios", "DireccionLibre")
+        has_efi_direccion = _col_exists_cached(db, "dbo", "Edificios", "Direccion")
+        edi_calle   = "efi.Calle" if has_efi_calle else "NULL"
+        edi_numero  = "efi.Numero" if has_efi_numero else "NULL"
+        edi_dirlib  = "efi.DireccionLibre" if has_efi_dirlibre else ("efi.Direccion" if has_efi_direccion else "NULL")
 
-            full_items.append(
-                CompraFullDetalleDTO(
-                    # Base de CompraDTO / CompraListDTO
-                    Id=c.Id,
-                    DivisionId=c.DivisionId,
-                    EnergeticoId=c.EnergeticoId,
-                    NumeroClienteId=c.NumeroClienteId,
-                    FechaCompra=_fmt_dt(c.FechaCompra) or "",
-                    Consumo=c.Consumo,
-                    Costo=c.Costo,
-                    InicioLectura=_fmt_dt(c.InicioLectura) or "",
-                    FinLectura=_fmt_dt(c.FinLectura) or "",
-                    Active=c.Active,
-                    UnidadMedidaId=c.UnidadMedidaId,
-                    Observacion=c.Observacion,
-                    FacturaId=c.FacturaId,
-                    EstadoValidacionId=c.EstadoValidacionId,
-                    RevisadoPor=c.RevisadoPor,
-                    ReviewedAt=_fmt_dt(c.ReviewedAt),
-                    CreatedByDivisionId=c.CreatedByDivisionId,
-                    ObservacionRevision=c.ObservacionRevision,
-                    SinMedidor=c.SinMedidor,
-                    # Contexto mínimo (si tienes estos campos aplanados ya en la consulta original, úsalo)
-                    ServicioId=getattr(c, "ServicioId", None),
-                    ServicioNombre=getattr(c, "ServicioNombre", None),
-                    InstitucionId=getattr(c, "InstitucionId", None),
-                    RegionId=getattr(c, "RegionId", None),
-                    EdificioId=getattr(c, "EdificioId", None),
-                    NombreOpcional=getattr(c, "NombreOpcional", None),
-                    UnidadReportaPMG=getattr(c, "UnidadReportaPMG", None),
-                    MedidorIds=med_ids,
-                    PrimerMedidorId=primer,
-                    # Items con Medidor
-                    Items=items_full,
-                    # Dirección (placeholder) → si tienes modelos, aquí puedes mapearlos
-                    Direccion=None,
-                )
-            )
+        # ---- Cabeceras enriquecidas (una sola pasada)
+        head_rows = db.execute(text(f"""
+            SELECT
+                c.Id, c.DivisionId, c.EnergeticoId, c.NumeroClienteId,
+                c.FechaCompra, c.Consumo, c.Costo, c.InicioLectura, c.FinLectura, c.Active,
+                c.UnidadMedidaId, c.Observacion, c.FacturaId, c.EstadoValidacionId,
+                c.RevisadoPor, c.ReviewedAt, c.CreatedByDivisionId, c.ObservacionRevision, c.SinMedidor,
+                c.NombreOpcional                  AS CompraNombreOpcional,
+                d.ServicioId                      AS ServicioId,
+                d.ReportaPMG                      AS UnidadReportaPMG,
+                d.EdificioId                      AS EdificioId,
+                d.Nombre                          AS DivisionNombre,
+                s.Nombre                          AS ServicioNombre,
+                s.InstitucionId                   AS InstitucionId,
+                {edi_calle}                       AS EDI_Calle,
+                {edi_numero}                      AS EDI_Numero,
+                {edi_dirlib}                      AS EDI_DireccionLibre,
+                com.Id                            AS COM_Id,
+                com.Nombre                        AS COM_Nombre,
+                com.RegionId                      AS COM_RegionId,
+                r.Id                              AS R_Id,
+                r.Nombre                          AS R_Nombre
+            FROM dbo.Compras c       WITH (NOLOCK)
+            LEFT JOIN dbo.Divisiones d   WITH (NOLOCK) ON d.Id   = c.DivisionId
+            LEFT JOIN dbo.Servicios  s   WITH (NOLOCK) ON s.Id   = d.ServicioId
+            LEFT JOIN dbo.Edificios  efi WITH (NOLOCK) ON efi.Id = d.EdificioId
+            LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
+            LEFT JOIN dbo.Regiones   r   WITH (NOLOCK) ON r.Id   = com.RegionId
+            WHERE c.Id IN ({ids_csv})
+            ORDER BY c.FechaCompra DESC, c.Id DESC
+            OPTION (RECOMPILE)
+        """)).mappings().all()
 
-        return CompraFullPage(
-            total=total or 0,
-            page=page,
-            page_size=page_size,
-            items=full_items,
-        )
+        # ---- Items + Medidores (lote)
+        has_numero = _col_exists_cached(db, "dbo", "Medidores", "Numero")
+        has_device = _col_exists_cached(db, "dbo", "Medidores", "DeviceId")
+        has_tipo   = _col_exists_cached(db, "dbo", "Medidores", "TipoMedidorId")
+        has_active = _col_exists_cached(db, "dbo", "Medidores", "Active")
+
+        med_fields = []
+        med_fields.append("m.Numero AS MedidorNumero" if has_numero else "NULL AS MedidorNumero")
+        med_fields.append("m.DeviceId AS MedidorDeviceId" if has_device else "NULL AS MedidorDeviceId")
+        med_fields.append("m.TipoMedidorId AS MedidorTipoId" if has_tipo else "NULL AS MedidorTipoId")
+        med_fields.append("m.Active AS MedidorActive" if has_active else "NULL AS MedidorActive")
+
+        item_rows = db.execute(text(f"""
+            SELECT
+                cm.Id, cm.CompraId, cm.MedidorId, cm.Consumo,
+                cm.ParametroMedicionId, cm.UnidadMedidaId,
+                {", ".join(med_fields)}
+            FROM dbo.CompraMedidor cm WITH (NOLOCK)
+            LEFT JOIN dbo.Medidores m WITH (NOLOCK) ON m.Id = cm.MedidorId
+            WHERE cm.CompraId IN ({ids_csv})
+            ORDER BY cm.Id
+            OPTION (RECOMPILE)
+        """)).mappings().all()
+
+        items_by_compra: Dict[int, List[dict]] = {}
+        medids_by_compra: Dict[int, List[int]] = {}
+        for it in item_rows:
+            cid = int(it["CompraId"])
+            item = {
+                "Id": int(it["Id"]),
+                "Consumo": float(it["Consumo"] or 0),
+                "MedidorId": int(it["MedidorId"]) if it["MedidorId"] is not None else None,
+                "ParametroMedicionId": int(it["ParametroMedicionId"]) if it["ParametroMedicionId"] is not None else None,
+                "UnidadMedidaId": int(it["UnidadMedidaId"]) if it["UnidadMedidaId"] is not None else None,
+                "Medidor": None
+            }
+            if it["MedidorId"] is not None:
+                item["Medidor"] = {
+                    "Numero": it.get("MedidorNumero"),
+                    "DeviceId": it.get("MedidorDeviceId"),
+                    "TipoMedidorId": it.get("MedidorTipoId"),
+                    "Active": (bool(it["MedidorActive"]) if it.get("MedidorActive") is not None else None),
+                }
+                medids_by_compra.setdefault(cid, []).append(int(it["MedidorId"]))
+            items_by_compra.setdefault(cid, []).append(item)
+
+        # ---- Construir salida EXACTA
+        items_full: List[dict] = []
+        for r in head_rows:
+            cid = int(r["Id"])
+            med_ids = medids_by_compra.get(cid, [])
+            direccion = {
+                "Calle": r.get("EDI_Calle"),
+                "Numero": r.get("EDI_Numero"),
+                "DireccionLibre": r.get("EDI_DireccionLibre"),
+                "ComunaId": int(r["COM_Id"]) if r.get("COM_Id") is not None else None,
+                "ComunaNombre": r.get("COM_Nombre"),
+                "RegionId": int(r["R_Id"]) if r.get("R_Id") is not None else None,
+                "RegionNombre": r.get("R_Nombre"),
+            }
+            nombre_opc = r.get("CompraNombreOpcional") if r.get("CompraNombreOpcional") not in (None, "") else r.get("DivisionNombre")
+
+            items_full.append({
+                "ServicioId": int(r["ServicioId"]) if r["ServicioId"] is not None else None,
+                "ServicioNombre": r.get("ServicioNombre"),
+                "InstitucionId": int(r["InstitucionId"]) if r["InstitucionId"] is not None else None,
+                "RegionId": int(r["COM_RegionId"]) if r.get("COM_RegionId") is not None else (int(r["R_Id"]) if r.get("R_Id") is not None else None),
+                "EdificioId": int(r["EdificioId"]) if r["EdificioId"] is not None else None,
+                "NombreOpcional": nombre_opc,
+                "UnidadReportaPMG": (bool(r["UnidadReportaPMG"]) if r.get("UnidadReportaPMG") is not None else None),
+
+                "MedidorIds": med_ids,
+                "PrimerMedidorId": (med_ids[0] if med_ids else None),
+
+                "Id": cid,
+                "DivisionId": int(r["DivisionId"]) if r["DivisionId"] is not None else None,
+                "EnergeticoId": int(r["EnergeticoId"]) if r["EnergeticoId"] is not None else None,
+                "NumeroClienteId": int(r["NumeroClienteId"]) if r["NumeroClienteId"] is not None else None,
+                "FechaCompra": _fmt_dt(r["FechaCompra"]),
+                "Consumo": float(r["Consumo"] or 0),
+                "Costo": float(r["Costo"] or 0),
+                "InicioLectura": _fmt_dt(r["InicioLectura"]),
+                "FinLectura": _fmt_dt(r["FinLectura"]),
+                "Active": bool(r["Active"]),
+
+                "UnidadMedidaId": int(r["UnidadMedidaId"]) if r.get("UnidadMedidaId") is not None else None,
+                "Observacion": r.get("Observacion"),
+                "FacturaId": int(r["FacturaId"]) if r.get("FacturaId") is not None else None,
+                "EstadoValidacionId": r.get("EstadoValidacionId"),
+                "RevisadoPor": r.get("RevisadoPor"),
+                "ReviewedAt": _fmt_dt(r.get("ReviewedAt")),
+                "CreatedByDivisionId": int(r["CreatedByDivisionId"]) if r.get("CreatedByDivisionId") is not None else None,
+                "ObservacionRevision": r.get("ObservacionRevision"),
+                "SinMedidor": (bool(r["SinMedidor"]) if r.get("SinMedidor") is not None else None),
+
+                "Items": items_by_compra.get(cid, []),
+                "Direccion": direccion,
+            })
+
+        return {
+            "total": int(total or 0),
+            "page": page,
+            "page_size": page_size,
+            "items": items_full,
+        }
 
     # ======================================================================
     # CRUD BÁSICO
