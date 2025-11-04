@@ -23,7 +23,7 @@ svc = CompraService()
 @router.get(
     "",
     summary="Listado paginado de compras/consumos (básico o enriquecido)",
-    response_model=CompraFullPage  # <- usa el modelo completo
+    response_model=Union[CompraFullPage, CompraPage]   # <- usa el modelo completo
 )
 def list_compras(
     db: DbDep,

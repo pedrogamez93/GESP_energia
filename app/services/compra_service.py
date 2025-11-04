@@ -247,8 +247,8 @@ class CompraService:
             items.append(
                 {
                     "Id": int(r["Id"]),
-                    "DivisionId": int(r["DivisionId"]),
-                    "EnergeticoId": int(r["EnergeticoId"]),
+                    "DivisionId": int(r["DivisionId"]) if r["DivisionId"] is not None else None,
+                    "EnergeticoId": int(r["EnergeticoId"]) if r["EnergeticoId"] is not None else None,
                     "NumeroClienteId": int(r["NumeroClienteId"]) if r["NumeroClienteId"] is not None else None,
                     "FechaCompra": _fmt_dt(r["FechaCompra"]),
                     "Consumo": float(r["Consumo"] or 0),
@@ -371,13 +371,14 @@ class CompraService:
     # DETALLE ENRIQUECIDO
     # ======================================================================
     def get_full(self, db: Session, compra_id: int) -> dict:
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"))
         """
         Devuelve el formato que espera el response_model:
         - Campos de la compra en el nivel raíz (aplanados)
         - Secciones extra (Items, Division, Servicio, etc.) como campos adyacentes
         """
         ctx = self.get_context(db, compra_id)
-
+        
         required_root = [
             "Id",
             "DivisionId",
@@ -835,10 +836,10 @@ class CompraService:
             compra_ids = [int(r["Id"]) for r in rows]
 
             # ===== Items en lote (sin N+1) =====
-            has_numero = _col_exists(db, "dbo", "Medidores", "Numero")
-            has_device = _col_exists(db, "dbo", "Medidores", "DeviceId")
-            has_tipo   = _col_exists(db, "dbo", "Medidores", "TipoMedidorId")
-            has_active = _col_exists(db, "dbo", "Medidores", "Active")
+            has_numero = _col_exists_cached(db, "dbo", "Medidores", "Numero")
+            has_device = _col_exists_cached(db, "dbo", "Medidores", "DeviceId")
+            has_tipo   = _col_exists_cached(db, "dbo", "Medidores", "TipoMedidorId")
+            has_active = _col_exists_cached(db, "dbo", "Medidores", "Active")
 
             medidor_fields = []
             medidor_fields.append("m.Numero AS MedidorNumero" if has_numero else "NULL AS MedidorNumero")
