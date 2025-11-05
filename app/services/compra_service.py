@@ -1089,5 +1089,51 @@ class CompraService:
 
         return total, out
 
+    # ======================================================================
+    # Reemplazo total de items de medidor de una compra
+    # ======================================================================
+    def replace_items(self, db: Session, compra_id: int, items_payload: List[dict]) -> List[dict]:
+        # Verifica que la compra exista
+        _ = self.get(db, compra_id)
 
+        # Borrado hard de los items actuales
+        db.execute(CM_TBL.delete().where(CM_TBL.c.CompraId == compra_id))
+
+        # Inserta los nuevos (si vienen)
+        rows_out: List[dict] = []
+        if items_payload:
+            batch = []
+            for it in items_payload:
+                batch.append({
+                    "CompraId": compra_id,
+                    "MedidorId": int(it["MedidorId"]) if it.get("MedidorId") is not None else None,
+                    "Consumo": float(it["Consumo"] or 0),
+                    "ParametroMedicionId": int(it["ParametroMedicionId"]) if it.get("ParametroMedicionId") is not None else None,
+                    "UnidadMedidaId": int(it["UnidadMedidaId"]) if it.get("UnidadMedidaId") is not None else None,
+                })
+            if batch:
+                db.execute(CM_TBL.insert(), batch)
+
+            # Trae de vuelta lo insertado para devolver DTOs consistentes
+            rows = db.execute(
+                text("""
+                    SELECT Id, CompraId, MedidorId, Consumo, ParametroMedicionId, UnidadMedidaId
+                    FROM dbo.CompraMedidor WITH (NOLOCK)
+                    WHERE CompraId = :cid
+                    ORDER BY Id
+                """),
+                {"cid": compra_id}
+            ).mappings().all()
+
+            for r in rows:
+                rows_out.append({
+                    "Id": int(r["Id"]),
+                    "Consumo": float(r["Consumo"] or 0),
+                    "MedidorId": int(r["MedidorId"]) if r["MedidorId"] is not None else None,
+                    "ParametroMedicionId": int(r["ParametroMedicionId"]) if r["ParametroMedicionId"] is not None else None,
+                    "UnidadMedidaId": int(r["UnidadMedidaId"]) if r["UnidadMedidaId"] is not None else None,
+                })
+
+        db.commit()
+        return rows_out
 

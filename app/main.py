@@ -304,6 +304,7 @@ from app.api.v1 import division_sistemas
 from app.api.v1 import tipo_equipo_calefaccion_energeticos
 from app.api.v1 import division_sistemas_detalle
 from app.api.v1 import areas_unidades_router
+from app.api.v1.archivos import router as archivos_router
 
 # Montaje
 app.include_router(debug.dbg)
@@ -356,3 +357,4 @@ app.include_router(tipo_equipo_calefaccion_energeticos.router)
 app.include_router(division_sistemas_detalle.router)
 app.include_router(unidades_router)
 app.include_router(areas_unidades_router.router)
+app.include_router(archivos_router)

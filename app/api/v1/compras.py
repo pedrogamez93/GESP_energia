@@ -2,18 +2,21 @@
 from __future__ import annotations
 from typing import Annotated, List, Union, Optional
 
-from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
-from fastapi.responses import JSONResponse  # <- ADD
+from fastapi import APIRouter, Depends, Query, Path, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
+
+# 👇 Import corregido (plural)
 from app.schemas.compra import (
     CompraDTO, CompraCreate, CompraUpdate,
     CompraMedidorItemDTO, CompraItemsPayload,
     CompraPage, CompraFullPage, CompraFullDetalleDTO
 )
+
 from app.services.compra_service import CompraService
 
 router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
@@ -21,14 +24,22 @@ DbDep = Annotated[Session, Depends(get_db)]
 svc = CompraService()
 
 _MAX_PAGE_SIZE = 100
-def _clamp_page(n: int) -> int: return 1 if n < 1 else n
+def _clamp_page(n: int) -> int:
+    return 1 if n < 1 else n
+
 def _clamp_page_size(n: int) -> int:
-    if n < 1: return 10
-    if n > _MAX_PAGE_SIZE: return _MAX_PAGE_SIZE
+    if n < 1:
+        return 10
+    if n > _MAX_PAGE_SIZE:
+        return _MAX_PAGE_SIZE
     return n
+
 def _nz_str(s: Optional[str]) -> Optional[str]:
-    if s is None: return None
-    s2 = s.strip(); return s2 if s2 else None
+    if s is None:
+        return None
+    s2 = s.strip()
+    return s2 if s2 else None
+
 
 @router.get(
     "",
@@ -39,7 +50,7 @@ def list_compras(
     db: DbDep,
     q: str | None = Query(default=None, description="Busca en Observacion"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=50),
+    page_size: int = Query(10, ge=1, le=_MAX_PAGE_SIZE),
     DivisionId: int | None = Query(default=None),
     ServicioId: int | None = Query(default=None),
     EnergeticoId: int | None = Query(default=None),
@@ -52,7 +63,7 @@ def list_compras(
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
     NombreOpcional: str | None = Query(default=None),
-    full: bool = Query(default=True)
+    full: bool = Query(default=True),
 ):
     if full:
         # ===== Enriquecido: usa el batch del service y evita que Pydantic pode =====
@@ -79,15 +90,15 @@ def list_compras(
             "items": items
         })
 
-    # ===== Básico (mantiene response_model normal) =====
-    total, items = svc.list(
+    # ===== Básico: el service ya retorna el dict con total/page/page_size/items =====
+    result = svc.list(
         db, q, page, page_size,
         DivisionId=DivisionId, ServicioId=ServicioId, EnergeticoId=EnergeticoId, NumeroClienteId=NumeroClienteId,
         FechaDesde=FechaDesde, FechaHasta=FechaHasta, active=active,
         MedidorId=MedidorId, EstadoValidacionId=EstadoValidacionId, RegionId=RegionId, EdificioId=EdificioId,
         NombreOpcional=NombreOpcional, full=False
     )
-    return {"total": total, "page": page, "page_size": page_size, "items": items}
+    return result
 
 
 @router.get(

@@ -234,7 +234,7 @@ class CompraCreate(BaseModel):
     EnergeticoId: int
     FechaCompra: DateLike
     Costo: float
-    FacturaId: int
+    FacturaId: Optional[int] = None
     NumeroClienteId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
     Observacion: Optional[str] = None
@@ -242,7 +242,7 @@ class CompraCreate(BaseModel):
     CreatedByDivisionId: Optional[int] = None
     SinMedidor: bool = False
     Items: List[CompraMedidorItemCreate] = Field(default_factory=list)
-
+    
     @field_validator("FechaCompra", "InicioLectura", "FinLectura", mode="before")
     @classmethod
     def _coerce_dates(cls, v):
