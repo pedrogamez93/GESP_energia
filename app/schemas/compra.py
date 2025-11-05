@@ -1,8 +1,47 @@
 # app/schemas/compras.py
 from __future__ import annotations
-from typing import Optional, List
-from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+
+from typing import Optional, List, Union
+from datetime import datetime, date, time
+
+from pydantic import BaseModel, Field, ConfigDict, field_validator, field_serializer
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Utilidades de fechas (Pydantic v2)
+# ─────────────────────────────────────────────────────────────────────────────
+DateLike = Union[str, datetime, date, None]
+
+
+def _to_datetime(v: DateLike) -> Optional[datetime]:
+    """Normaliza str/date/datetime/None a datetime (o None) sin lanzar excepciones."""
+    if v is None or v == "" or v == "null":
+        return None
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, date):
+        return datetime.combine(v, time.min)
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        # ISO completo
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            # Solo 'YYYY-MM-DD'
+            try:
+                return datetime.strptime(s[:10], "%Y-%m-%d")
+            except Exception:
+                return None
+    return None
+
+
+def _ser_date(v: Optional[datetime]) -> Optional[str]:
+    """Serializa datetime -> 'YYYY-MM-DD' o None (contrato actual del front)."""
+    if v is None:
+        return None
+    return v.strftime("%Y-%m-%d")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -45,24 +84,40 @@ class CompraMedidorItemCreate(BaseModel):
 class CompraListDTO(BaseModel):
     """
     Listado básico (lo que devuelve tu service.list()).
-    OJO: las fechas vienen como string ISO (por _fmt_dt), no datetime.
+    Mantiene fechas como string al serializar (contrato actual del front),
+    pero acepta datetime/date/string al validar.
     """
     model_config = ConfigDict(from_attributes=True)
+
     Id: int
     DivisionId: int
     EnergeticoId: int
     EnergeticoNombre: Optional[str] = None
     NumeroClienteId: Optional[int] = None
-    FechaCompra: str
+
+    # Aceptan datetime|date|str al ENTRAR, emiten str al SALIR
+    FechaCompra: DateLike = None
+    InicioLectura: DateLike = None
+    FinLectura: DateLike = None
+
     Consumo: float
     Costo: float
-    InicioLectura: str
-    FinLectura: str
     Active: bool = True
 
-    # Campos que tú a veces agregas en el aplanado del response
+    # Campos aplanados adicionales
     ServicioId: Optional[int] = None
     ServicioNombre: Optional[str] = None
+
+    # ---- Normalización de entrada ----
+    @field_validator("FechaCompra", "InicioLectura", "FinLectura", mode="before")
+    @classmethod
+    def _coerce_dates(cls, v):
+        return _to_datetime(v)
+
+    # ---- Serialización de salida (JSON) ----
+    @field_serializer("FechaCompra", "InicioLectura", "FinLectura", when_used="json")
+    def _ser_dates(self, v: Optional[datetime], _info):
+        return _ser_date(v)
 
 
 class CompraPage(BaseModel):
@@ -77,25 +132,39 @@ class CompraPage(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 class CompraDTO(CompraListDTO):
     """
-    Detalle base de una compra (sin contexto). Mantengo fechas como str (lectura).
+    Detalle base de una compra (sin contexto).
+    Hereda validadores/serializadores de fechas de CompraListDTO.
     """
     model_config = ConfigDict(from_attributes=True)
+
     UnidadMedidaId: Optional[int] = None
     Observacion: Optional[str] = None
     FacturaId: Optional[int] = None
     EstadoValidacionId: Optional[str] = None
     RevisadoPor: Optional[str] = None
-    ReviewedAt: Optional[str] = None  # si quisieras datetime, cambia también en el service
+
+    ReviewedAt: DateLike = None  # misma idea: acepta variantes, serializa str
     CreatedByDivisionId: int
     ObservacionRevision: Optional[str] = None
     SinMedidor: bool = False
-    # Para el detalle enriquecido, sobreescribimos Items más abajo
+
+    # Items básicos por defecto (en Full sobrescribimos a versión "Full")
     Items: List[CompraMedidorItemDTO] = Field(default_factory=list)
+
+    # Normalizador + serializador para ReviewedAt
+    @field_validator("ReviewedAt", mode="before")
+    @classmethod
+    def _coerce_reviewed(cls, v):
+        return _to_datetime(v)
+
+    @field_serializer("ReviewedAt", when_used="json")
+    def _ser_reviewed(self, v: Optional[datetime], _info):
+        return _ser_date(v)
 
 
 class CompraContextoDTO(BaseModel):
     """
-    Aplanado de contexto que tu service anexa (Servicio, Institución, Región, etc.).
+    Aplanado de contexto que el service anexa (Servicio, Institución, Región, etc.).
     """
     model_config = ConfigDict(from_attributes=True)
 
@@ -104,11 +173,12 @@ class CompraContextoDTO(BaseModel):
     ServicioNombre: Optional[str] = None
     InstitucionId: Optional[int] = None
     InstitucionNombre: str | None = None
+
     # División enriquecida
     RegionId: Optional[int] = None
     EdificioId: Optional[int] = None
     NombreOpcional: Optional[str] = None
-    UnidadReportaPMG: Optional[bool] = None  # tu service entrega bool
+    UnidadReportaPMG: Optional[bool] = None  # el service entrega bool
 
     # Medidores asociados (resumen)
     MedidorIds: List[int] = Field(default_factory=list)
@@ -129,10 +199,11 @@ class DireccionDTO(BaseModel):
 class CompraFullDTO(CompraDTO, CompraContextoDTO):
     """
     Detalle enriquecido: Compra base + contexto + Items con Medidor.
-    Sobrescribimos Items para usar la versión “Full”.
+    Sobrescribe Items para usar la versión “Full”.
     """
     Items: List[CompraMedidorItemFullDTO] = Field(default_factory=list)
-    EnergeticoNombre: Optional[str] = None  
+    EnergeticoNombre: Optional[str] = None
+
 
 class CompraFullDetalleDTO(CompraFullDTO):
     """
@@ -144,16 +215,24 @@ class CompraFullDetalleDTO(CompraFullDTO):
 # ─────────────────────────────────────────────────────────────────────────────
 # Payloads de creación / edición (escritura)
 # ─────────────────────────────────────────────────────────────────────────────
+class CompraMedidorItemCreate(BaseModel):
+    Consumo: float
+    MedidorId: int
+    ParametroMedicionId: Optional[int] = None
+    UnidadMedidaId: Optional[int] = None
+
+
 class CompraCreate(BaseModel):
     """
-    Para crear: acá SÍ usamos datetime, porque es lo que envías desde el front.
+    Para crear: aceptamos string/date/datetime y normalizamos a datetime,
+    pero al serializar de vuelta (si aplica) emitimos string.
     """
     Consumo: float
-    InicioLectura: datetime
-    FinLectura: datetime
+    InicioLectura: DateLike
+    FinLectura: DateLike
     DivisionId: int
     EnergeticoId: int
-    FechaCompra: datetime
+    FechaCompra: DateLike
     Costo: float
     FacturaId: int
     NumeroClienteId: Optional[int] = None
@@ -164,17 +243,26 @@ class CompraCreate(BaseModel):
     SinMedidor: bool = False
     Items: List[CompraMedidorItemCreate] = Field(default_factory=list)
 
+    @field_validator("FechaCompra", "InicioLectura", "FinLectura", mode="before")
+    @classmethod
+    def _coerce_dates(cls, v):
+        return _to_datetime(v)
+
+    @field_serializer("FechaCompra", "InicioLectura", "FinLectura", when_used="json")
+    def _ser_dates(self, v: Optional[datetime], _info):
+        return _ser_date(v)
+
 
 class CompraUpdate(BaseModel):
     """
-    Patch/put de campos. Mantén datetime aquí (escritura).
+    Patch/put: mismos criterios; no rompemos llamados existentes.
     """
     Consumo: Optional[float] = None
-    InicioLectura: Optional[datetime] = None
-    FinLectura: Optional[datetime] = None
+    InicioLectura: Optional[DateLike] = None
+    FinLectura: Optional[DateLike] = None
     DivisionId: Optional[int] = None
     EnergeticoId: Optional[int] = None
-    FechaCompra: Optional[datetime] = None
+    FechaCompra: Optional[DateLike] = None
     Costo: Optional[float] = None
     FacturaId: Optional[int] = None
     NumeroClienteId: Optional[int] = None
@@ -182,10 +270,19 @@ class CompraUpdate(BaseModel):
     Observacion: Optional[str] = None
     EstadoValidacionId: Optional[str] = None
     RevisadoPor: Optional[str] = None
-    ReviewedAt: Optional[datetime] = None
+    ReviewedAt: Optional[DateLike] = None
     CreatedByDivisionId: Optional[int] = None
     ObservacionRevision: Optional[str] = None
     SinMedidor: Optional[bool] = None
+
+    @field_validator("FechaCompra", "InicioLectura", "FinLectura", "ReviewedAt", mode="before")
+    @classmethod
+    def _coerce_dates(cls, v):
+        return _to_datetime(v)
+
+    @field_serializer("FechaCompra", "InicioLectura", "FinLectura", "ReviewedAt", when_used="json")
+    def _ser_dates(self, v: Optional[datetime], _info):
+        return _ser_date(v)
 
 
 class CompraItemsPayload(BaseModel):
@@ -198,18 +295,22 @@ class CompraItemsPayload(BaseModel):
 class CompraListFullDTO(BaseModel):
     """
     Útil si tu /list devuelve campos enriquecidos en el mismo renglón.
+    Mantiene contrato de fechas como string al serializar.
     """
     model_config = ConfigDict(from_attributes=True)
+
     Id: int
     DivisionId: int
     EnergeticoId: int
-    EnergeticoNombre: Optional[str] = None  
+    EnergeticoNombre: Optional[str] = None
     NumeroClienteId: Optional[int] = None
-    FechaCompra: str
+
+    FechaCompra: DateLike = None
+    InicioLectura: DateLike = None
+    FinLectura: DateLike = None
+
     Consumo: float
     Costo: float
-    InicioLectura: str
-    FinLectura: str
     Active: bool = True
 
     # Enriquecidos
@@ -226,10 +327,18 @@ class CompraListFullDTO(BaseModel):
     MedidorIds: List[int] = Field(default_factory=list)
     PrimerMedidorId: Optional[int] = None
 
+    @field_validator("FechaCompra", "InicioLectura", "FinLectura", mode="before")
+    @classmethod
+    def _coerce_dates(cls, v):
+        return _to_datetime(v)
+
+    @field_serializer("FechaCompra", "InicioLectura", "FinLectura", when_used="json")
+    def _ser_dates(self, v: Optional[datetime], _info):
+        return _ser_date(v)
+
 
 class CompraFullPage(BaseModel):
     total: int
     page: int
     page_size: int
-   # items: List[CompraListFullDTO]
-    items: List[CompraFullDetalleDTO] 
+    items: List[CompraFullDetalleDTO]
