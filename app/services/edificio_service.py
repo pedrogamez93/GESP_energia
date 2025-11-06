@@ -1,10 +1,10 @@
+# app/services/edificio_service.py
 from __future__ import annotations
 from typing import List, Optional
 from datetime import datetime
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-
+from sqlalchemy import func, and_
 from fastapi import HTTPException
 
 from app.db.models.edificio import Edificio
@@ -16,6 +16,13 @@ def _display_nombre(e: Edificio) -> str:
     if base and num:
         return f"{base} {num}"
     return base or num or f"Edificio #{e.Id}"
+
+
+# Helpers de normalización (evita aplicar lower() a tipos no-string)
+def _norm_str(s: Optional[str]) -> Optional[str]:
+    if s is None:
+        return None
+    return str(s).strip().lower()
 
 
 class EdificioService:
@@ -33,11 +40,12 @@ class EdificioService:
             query = query.filter(Edificio.Active == active)
 
         if q:
-            like = f"%{q}%"
+            like = f"%{q.strip().lower()}%"
+            # Solo aplicamos lower() a columnas de texto
             query = query.filter(
-                func.lower(func.coalesce(Edificio.Calle, "")).like(func.lower(like)) |
-                func.lower(func.coalesce(Edificio.Direccion, "")).like(func.lower(like)) |
-                func.lower(func.coalesce(Edificio.Numero, "")).like(func.lower(like))
+                func.lower(func.coalesce(Edificio.Calle, "")).like(like) |
+                func.lower(func.coalesce(Edificio.Direccion, "")).like(like) |
+                func.lower(func.coalesce(Edificio.Numero, "")).like(like)
             )
 
         if ComunaId is not None:
@@ -59,10 +67,10 @@ class EdificioService:
             query = query.filter(Edificio.ComunaId == ComunaId)
 
         if q:
-            like = f"%{q}%"
+            like = f"%{q.strip().lower()}%"
             query = query.filter(
-                func.lower(func.coalesce(Edificio.Calle, "")).like(func.lower(like)) |
-                func.lower(func.coalesce(Edificio.Direccion, "")).like(func.lower(like))
+                func.lower(func.coalesce(Edificio.Calle, "")).like(like) |
+                func.lower(func.coalesce(Edificio.Direccion, "")).like(like)
             )
 
         rows = query.order_by(Edificio.Calle, Edificio.Numero, Edificio.Id).all()
@@ -82,21 +90,39 @@ class EdificioService:
         comuna_id: int | None,
         exclude_id: int | None = None,
     ) -> bool:
-        if not (calle and numero and comuna_id):
+        """
+        Verifica duplicados evitando SELECT EXISTS de nivel superior,
+        que en SQL Server produce 'Incorrect syntax near EXISTS'.
+        Usamos COUNT(*) (válido en SQL Server) sobre columnas de texto normalizadas.
+        """
+        calle_n  = _norm_str(calle)
+        numero_n = _norm_str(numero)
+
+        if calle_n is None or numero_n is None or comuna_id is None:
             return False
 
-        q = db.query(Edificio).filter(
-            func.lower(func.coalesce(Edificio.Calle, ""))  == calle.lower(),
-            func.lower(func.coalesce(Edificio.Numero, "")) == numero.lower(),
+        filters = [
+            func.lower(func.coalesce(Edificio.Calle, "")) == calle_n,
+            func.lower(func.coalesce(Edificio.Numero, "")) == numero_n,
             Edificio.ComunaId == comuna_id,
-        )
+        ]
         if exclude_id:
-            q = q.filter(Edificio.Id != exclude_id)
+            filters.append(Edificio.Id != exclude_id)
 
-        return db.query(q.exists()).scalar() or False
+        dup_count = (
+            db.query(func.count())
+              .select_from(Edificio)
+              .filter(and_(*filters))
+              .scalar()
+        )
+        return bool(dup_count)
 
     def create(self, db: Session, data: dict, created_by: str | None) -> Edificio:
-        if self._exists_same_address(db, data.get("Calle"), data.get("Numero"), data.get("ComunaId")):
+        calle  = (data.get("Calle") or "").strip()
+        numero = (data.get("Numero") or "").strip()
+        comuna = data.get("ComunaId")
+
+        if self._exists_same_address(db, calle, numero, comuna):
             raise HTTPException(status_code=409, detail="Ya existe un edificio con esa dirección en la misma comuna.")
 
         now = datetime.utcnow()
@@ -108,6 +134,10 @@ class EdificioService:
             CreatedBy=created_by,
             **(data or {}),
         )
+        # Aseguramos campos saneados
+        obj.Calle = calle
+        obj.Numero = numero
+
         db.add(obj)
         db.commit()
         db.refresh(obj)
@@ -116,8 +146,8 @@ class EdificioService:
     def update(self, db: Session, edificio_id: int, data: dict, modified_by: str | None) -> Edificio:
         obj = self.get(db, edificio_id)
 
-        will_calle  = data.get("Calle", obj.Calle)
-        will_numero = data.get("Numero", obj.Numero)
+        will_calle  = (data.get("Calle", obj.Calle) or "").strip()
+        will_numero = (data.get("Numero", obj.Numero) or "").strip()
         will_comuna = data.get("ComunaId", obj.ComunaId)
 
         if self._exists_same_address(db, will_calle, will_numero, will_comuna, exclude_id=obj.Id):
@@ -125,6 +155,10 @@ class EdificioService:
 
         for k, v in (data or {}).items():
             setattr(obj, k, v)
+
+        # normalizamos los dos campos string críticos
+        obj.Calle = will_calle
+        obj.Numero = will_numero
 
         obj.ModifiedBy = modified_by
         obj.UpdatedAt = datetime.utcnow()
