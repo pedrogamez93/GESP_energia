@@ -1,25 +1,36 @@
 from __future__ import annotations
-from sqlalchemy.orm import Session
+
 from sqlalchemy import func
 from fastapi import HTTPException
+
+from sqlalchemy.orm import Session, load_only
+from app.db.models.tipo_colector import TipoColector  # tu modelo
 
 from app.db.models.tipo_colector import TipoColector
 
 class TipoColectorService:
-    # ---------- Catálogo ----------
     def list(self, db: Session, q: str | None, page: int, page_size: int) -> dict:
         page = max(1, int(page or 1))
         size = max(1, min(200, int(page_size or 50)))
-        query = db.query(TipoColector)
-        if q:
-            like = f"%{q}%"
-            query = query.filter(func.lower(TipoColector.Nombre).like(func.lower(like)))
-        total = query.count()
+
+        # Filtro base
+        filters = []
+        if q and isinstance(q, str) and q.strip():
+            like = f"%{q.strip()}%"
+            filters.append(func.lower(TipoColector.Nombre).like(func.lower(like)))
+
+        # 👉 total sin tocar todas las columnas
+        total = db.query(func.count(TipoColector.Id)).filter(*filters).scalar() or 0
+
+        # 👉 items trayendo sólo Id/Nombre
         items = (
-            query.order_by(TipoColector.Nombre, TipoColector.Id)
-                 .offset((page - 1) * size)
-                 .limit(size)
-                 .all()
+            db.query(TipoColector)
+              .options(load_only(TipoColector.Id, TipoColector.Nombre))
+              .filter(*filters)
+              .order_by(TipoColector.Nombre, TipoColector.Id)
+              .offset((page - 1) * size)
+              .limit(size)
+              .all()
         )
         return {"total": total, "page": page, "page_size": size, "items": items}
 
