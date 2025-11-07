@@ -14,6 +14,7 @@ class DivisionListDTO(DivisionSelectDTO):
     ServicioId: Optional[int] = None
     RegionId: Optional[int] = None
     ComunaId: Optional[int] = None
+    DireccionInmuebleId: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 class DivisionDTO(DivisionListDTO):

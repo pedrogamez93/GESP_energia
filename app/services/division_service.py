@@ -105,6 +105,8 @@ class DivisionService:
                         func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                         func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
                         DirPref.label("Direccion"),
+                        # ── NUEVO ──
+                        Division.DireccionInmuebleId.label("DireccionInmuebleId"),
                     )
                     .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
                     .filter(Division.Id.in_(ids))
@@ -122,6 +124,8 @@ class DivisionService:
                     "ProvinciaId": r.ProvinciaId,
                     "ComunaId": r.ComunaId,
                     "Direccion": r.Direccion,
+                    # ── NUEVO ──
+                    "DireccionInmuebleId": r.DireccionInmuebleId,
                 }
                 for r in rows
             ]
@@ -193,6 +197,8 @@ class DivisionService:
                 func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                 func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
                 DirPref.label("Direccion"),
+                # ── NUEVO ──
+                Division.DireccionInmuebleId.label("DireccionInmuebleId"),
                 rn,
             )
         ).subquery()
@@ -211,6 +217,8 @@ class DivisionService:
                 ranked.c.ProvinciaId,
                 ranked.c.ComunaId,
                 ranked.c.Direccion,
+                # ── NUEVO ──
+                ranked.c.DireccionInmuebleId,
             )
             .filter(ranked.c.rn.between(start, end))
             .order_by(ranked.c.rn.asc())
@@ -231,6 +239,8 @@ class DivisionService:
                 "ProvinciaId": r.ProvinciaId,
                 "ComunaId": r.ComunaId,
                 "Direccion": r.Direccion,
+                # ── NUEVO ──
+                "DireccionInmuebleId": r.DireccionInmuebleId,
             }
             for r in rows
         ]
