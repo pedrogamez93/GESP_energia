@@ -1,4 +1,3 @@
-# app/services/division_service.py
 from __future__ import annotations
 
 import logging
@@ -33,6 +32,123 @@ def _any_key_in(keys: Iterable[str], payload_keys: Iterable[str]) -> bool:
     return any(k.lower() in pl for k in keys)
 
 
+def _select_columns(DirPref):
+    """
+    Conjunto de columnas que devolvemos en list() (fast y slow) para evitar
+    duplicar listas. Mantiene COALESCE territoriales y agrega todas las
+    columnas solicitadas.
+    """
+    return [
+        Division.Id.label("Id"),
+        Division.Nombre.label("Nombre"),
+        Division.Active.label("Active"),
+        Division.ServicioId.label("ServicioId"),
+
+        # Territoriales por COALESCE (como antes)
+        func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
+        func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
+        func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
+
+        DirPref.label("Direccion"),
+
+        # Campos pedidos originalmente
+        Division.DireccionInmuebleId.label("DireccionInmuebleId"),
+        Division.IndicadorEE.label("IndicadorEE"),
+        Division.AccesoFactura.label("AccesoFactura"),
+
+        # Nuevos señalados por captura
+        Division.ComparteMedidorElectricidad.label("ComparteMedidorElectricidad"),
+        Division.ComparteMedidorGasCanieria.label("ComparteMedidorGasCanieria"),
+
+        # “todas las columnas faltantes” que puedan ser útiles en list()
+        Division.PisosIguales.label("PisosIguales"),
+        Division.NivelPaso3.label("NivelPaso3"),
+        Division.Calle.label("Calle"),
+        Division.Numero.label("Numero"),
+        Division.GeVersion.label("GeVersion"),
+        Division.ParentId.label("ParentId"),
+        Division.TipoAdministracionId.label("TipoAdministracionId"),
+        Division.TipoInmueble.label("TipoInmueble"),
+        Division.AdministracionServicioId.label("AdministracionServicioId"),
+        Division.DpSt1.label("DpSt1"),
+        Division.DpSt2.label("DpSt2"),
+        Division.DpSt3.label("DpSt3"),
+        Division.DpSt4.label("DpSt4"),
+        Division.OrganizacionResponsable.label("OrganizacionResponsable"),
+        Division.ServicioResponsableId.label("ServicioResponsableId"),
+        Division.InstitucionResponsableId.label("InstitucionResponsableId"),
+        Division.JustificaRol.label("JustificaRol"),
+        Division.SinRol.label("SinRol"),
+        Division.Compromiso2022.label("Compromiso2022"),
+        Division.Justificacion.label("Justificacion"),
+        Division.ObservacionCompromiso2022.label("ObservacionCompromiso2022"),
+        Division.EstadoCompromiso2022.label("EstadoCompromiso2022"),
+        Division.AnioInicioGestionEnergetica.label("AnioInicioGestionEnergetica"),
+        Division.AnioInicioRestoItems.label("AnioInicioRestoItems"),
+        Division.DisponeVehiculo.label("DisponeVehiculo"),
+        Division.VehiculosIds.label("VehiculosIds"),
+        Division.AireAcondicionadoElectricidad.label("AireAcondicionadoElectricidad"),
+        Division.CalefaccionGas.label("CalefaccionGas"),
+        Division.DisponeCalefaccion.label("DisponeCalefaccion"),
+        Division.NroOtrosColaboradores.label("NroOtrosColaboradores"),
+        Division.ObservacionPapel.label("ObservacionPapel"),
+        Division.ObservaPapel.label("ObservaPapel"),
+        Division.ObservacionResiduos.label("ObservacionResiduos"),
+        Division.ObservaResiduos.label("ObservaResiduos"),
+        Division.ObservacionAgua.label("ObservacionAgua"),
+        Division.ObservaAgua.label("ObservaAgua"),
+        Division.JustificaResiduos.label("JustificaResiduos"),
+        Division.JustificacionResiduos.label("JustificacionResiduos"),
+        Division.ReportaEV.label("ReportaEV"),
+        Division.TieneMedidorElectricidad.label("TieneMedidorElectricidad"),
+        Division.TieneMedidorGas.label("TieneMedidorGas"),
+        Division.AccesoFacturaAgua.label("AccesoFacturaAgua"),
+        Division.InstitucionResponsableAguaId.label("InstitucionResponsableAguaId"),
+        Division.OrganizacionResponsableAgua.label("OrganizacionResponsableAgua"),
+        Division.ServicioResponsableAguaId.label("ServicioResponsableAguaId"),
+        Division.ComparteMedidorAgua.label("ComparteMedidorAgua"),
+        Division.NoDeclaraImpresora.label("NoDeclaraImpresora"),
+        Division.NoDeclaraArtefactos.label("NoDeclaraArtefactos"),
+        Division.NoDeclaraContenedores.label("NoDeclaraContenedores"),
+        Division.GestionBienes.label("GestionBienes"),
+        Division.UsaBidon.label("UsaBidon"),
+        Division.JustificaResiduosNoReciclados.label("JustificaResiduosNoReciclados"),
+        Division.JustificacionResiduosNoReciclados.label("JustificacionResiduosNoReciclados"),
+        Division.ColectorId.label("ColectorId"),
+        Division.EnergeticoAcsId.label("EnergeticoAcsId"),
+        Division.EnergeticoCalefaccionId.label("EnergeticoCalefaccionId"),
+        Division.EnergeticoRefrigeracionId.label("EnergeticoRefrigeracionId"),
+        Division.EquipoAcsId.label("EquipoAcsId"),
+        Division.EquipoCalefaccionId.label("EquipoCalefaccionId"),
+        Division.EquipoRefrigeracionId.label("EquipoRefrigeracionId"),
+        Division.FotoTecho.label("FotoTecho"),
+        Division.ImpSisFv.label("ImpSisFv"),
+        Division.InstTerSisFv.label("InstTerSisFv"),
+        Division.PotIns.label("PotIns"),
+        Division.SistemaSolarTermico.label("SistemaSolarTermico"),
+        Division.SupColectores.label("SupColectores"),
+        Division.SupFotoTecho.label("SupFotoTecho"),
+        Division.SupImptSisFv.label("SupImptSisFv"),
+        Division.SupInstTerSisFv.label("SupInstTerSisFv"),
+        Division.TempSeteoCalefaccionId.label("TempSeteoCalefaccionId"),
+        Division.TempSeteoRefrigeracionId.label("TempSeteoRefrigeracionId"),
+        Division.TipoLuminariaId.label("TipoLuminariaId"),
+        Division.MantColectores.label("MantColectores"),
+        Division.MantSfv.label("MantSfv"),
+        Division.CargaPosteriorT.label("CargaPosteriorT"),
+        Division.IndicadorEnegia.label("IndicadorEnegia"),
+        Division.ObsInexistenciaEyV.label("ObsInexistenciaEyV"),
+    ]
+
+
+def _row_to_item(r) -> Dict[str, Any]:
+    """
+    Convierte el row devuelto por SQLAlchemy a dict simple para el JSON.
+    (r es un Row con todas las labels definidas en _select_columns)
+    """
+    return {k: getattr(r, k) for k in r._mapping.keys()}
+
+
 class DivisionService:
     def list(
         self,
@@ -59,7 +175,7 @@ class DivisionService:
         size = max(1, min(200, page_size))
         page = max(1, page)
 
-        # Expresión de Dirección preferida (Division.Direccion o Direccion.DireccionCompleta)
+        # Dirección preferida (Division.Direccion o Direccion.DireccionCompleta)
         DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
 
         log.debug(
@@ -96,43 +212,14 @@ class DivisionService:
             rows = []
             if ids:
                 rows = (
-                    db.query(
-                        Division.Id.label("Id"),
-                        Division.Nombre.label("Nombre"),
-                        Division.Active.label("Active"),
-                        Division.ServicioId.label("ServicioId"),
-                        func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
-                        func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
-                        func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
-                        DirPref.label("Direccion"),
-                        # ── NUEVOS ──
-                        Division.DireccionInmuebleId.label("DireccionInmuebleId"),
-                        Division.IndicadorEE.label("IndicadorEE"),
-                        Division.AccesoFactura.label("AccesoFactura"),
-                    )
+                    db.query(*_select_columns(DirPref))
                     .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
                     .filter(Division.Id.in_(ids))
                     .order_by(DirPref.asc(), Division.Id.asc())
                     .all()
                 )
 
-            items = [
-                {
-                    "Id": r.Id,
-                    "Nombre": r.Nombre,
-                    "Active": r.Active,
-                    "ServicioId": r.ServicioId,
-                    "RegionId": r.RegionId,
-                    "ProvinciaId": r.ProvinciaId,
-                    "ComunaId": r.ComunaId,
-                    "Direccion": r.Direccion,
-                    # ── NUEVOS ──
-                    "DireccionInmuebleId": r.DireccionInmuebleId,
-                    "IndicadorEE": r.IndicadorEE,
-                    "AccesoFactura": r.AccesoFactura,
-                }
-                for r in rows
-            ]
+            items = [_row_to_item(r) for r in rows]
 
             log.debug(
                 "DIVISIONES.list[FAST] → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
@@ -201,10 +288,6 @@ class DivisionService:
                 func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                 func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
                 DirPref.label("Direccion"),
-                # ── NUEVOS ──
-                Division.DireccionInmuebleId.label("DireccionInmuebleId"),
-                Division.IndicadorEE.label("IndicadorEE"),
-                Division.AccesoFactura.label("AccesoFactura"),
                 rn,
             )
         ).subquery()
@@ -214,46 +297,32 @@ class DivisionService:
 
         t_page = time.perf_counter()
         rows = (
-            db.query(
-                ranked.c.Id,
-                ranked.c.Nombre,
-                ranked.c.Active,
-                ranked.c.ServicioId,
-                ranked.c.RegionId,
-                ranked.c.ProvinciaId,
-                ranked.c.ComunaId,
-                ranked.c.Direccion,
-                # ── NUEVOS ──
-                ranked.c.DireccionInmuebleId,
-                ranked.c.IndicadorEE,
-                ranked.c.AccesoFactura,
-            )
+            db.query(ranked, *_select_columns(DirPref)[4:])  # ya incluye Direccion/labels; añadimos resto por join
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+            .join(Division, Division.Id == ranked.c.Id)
             .filter(ranked.c.rn.between(start, end))
             .order_by(ranked.c.rn.asc())
             .all()
         )
-        log.debug(
-            "DIVISIONES.list[SLOW] → page=%s size=%s fetched=%s (%.1f ms desde rank)",
-            page, size, len(rows), (time.perf_counter() - t_page) * 1000
-        )
 
-        items = [
-            {
-                "Id": r.Id,
-                "Nombre": r.Nombre,
-                "Active": r.Active,
-                "ServicioId": r.ServicioId,
-                "RegionId": r.RegionId,
-                "ProvinciaId": r.ProvinciaId,
-                "ComunaId": r.ComunaId,
-                "Direccion": r.Direccion,
-                # ── NUEVOS ──
-                "DireccionInmuebleId": r.DireccionInmuebleId,
-                "IndicadorEE": r.IndicadorEE,
-                "AccesoFactura": r.AccesoFactura,
+        # Como consultamos ranked + columnas, armamos dict limpio:
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            # row[0] es ranked, el resto son columnas seleccionadas
+            base_map = {
+                "Id": row.ranked.Id,
+                "Nombre": row.ranked.Nombre,
+                "Active": row.ranked.Active,
+                "ServicioId": row.ranked.ServicioId,
+                "RegionId": row.ranked.RegionId,
+                "ProvinciaId": row.ranked.ProvinciaId,
+                "ComunaId": row.ranked.ComunaId,
+                "Direccion": row.ranked.Direccion,
             }
-            for r in rows
-        ]
+            # r._mapping para las demás columnas
+            extra = {k: v for k, v in row._mapping.items() if k not in base_map and k != "rn" and k != "ranked"}
+            base_map.update(extra)
+            items.append(base_map)
 
         log.debug(
             "DIVISIONES.list[SLOW] → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
