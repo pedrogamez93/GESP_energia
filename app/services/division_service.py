@@ -107,6 +107,8 @@ class DivisionService:
                         DirPref.label("Direccion"),
                         # ── NUEVO ──
                         Division.DireccionInmuebleId.label("DireccionInmuebleId"),
+                        # ── NUEVO ──
+                        Division.IndicadorEE.label("IndicadorEE"),
                     )
                     .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
                     .filter(Division.Id.in_(ids))
@@ -126,6 +128,8 @@ class DivisionService:
                     "Direccion": r.Direccion,
                     # ── NUEVO ──
                     "DireccionInmuebleId": r.DireccionInmuebleId,
+                    # ── NUEVO ──
+                    "IndicadorEE": r.IndicadorEE,
                 }
                 for r in rows
             ]
@@ -197,8 +201,9 @@ class DivisionService:
                 func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                 func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
                 DirPref.label("Direccion"),
-                # ── NUEVO ──
+                # ── NUEVOS ──
                 Division.DireccionInmuebleId.label("DireccionInmuebleId"),
+                Division.IndicadorEE.label("IndicadorEE"),
                 rn,
             )
         ).subquery()
@@ -217,8 +222,9 @@ class DivisionService:
                 ranked.c.ProvinciaId,
                 ranked.c.ComunaId,
                 ranked.c.Direccion,
-                # ── NUEVO ──
+                # ── NUEVOS ──
                 ranked.c.DireccionInmuebleId,
+                ranked.c.IndicadorEE,
             )
             .filter(ranked.c.rn.between(start, end))
             .order_by(ranked.c.rn.asc())
@@ -239,8 +245,9 @@ class DivisionService:
                 "ProvinciaId": r.ProvinciaId,
                 "ComunaId": r.ComunaId,
                 "Direccion": r.Direccion,
-                # ── NUEVO ──
+                # ── NUEVOS ──
                 "DireccionInmuebleId": r.DireccionInmuebleId,
+                "IndicadorEE": r.IndicadorEE,
             }
             for r in rows
         ]
@@ -334,35 +341,18 @@ class DivisionService:
         d = self.get(db, division_id)
         return ObservacionDTO(CheckObserva=d.ObservaResiduos, Observacion=d.ObservacionResiduos)
 
-    def set_observacion_residuos(self, db: Session, division_id: int, payload: ObservacionDTO) -> None:
+    def set_observacion_residuos(self, db: Session, division_id: int, payload: ReportaResiduosDTO) -> None:
         d = self.get(db, division_id)
-        d.ObservaResiduos = payload.CheckObserva
-        d.ObservacionResiduos = payload.Observacion
+        d.ObservaResiduos = payload.CheckReporta
+        d.ObservacionResiduos = payload.Justificacion
         d.UpdatedAt = datetime.utcnow()
         d.Version = (d.Version or 0) + 1
         db.commit()
 
-    def get_reporta_residuos(self, db: Session, division_id: int) -> ReportaResiduosDTO:
+    def set_observacion_residuos_no_reciclados(self, db: Session, division_id: int, payload: ReportaResiduosDTO) -> None:
         d = self.get(db, division_id)
-        return ReportaResiduosDTO(
-            CheckReporta=d.JustificaResiduos,
-            Justificacion=d.JustificacionResiduos,
-            CheckReportaNoReciclados=d.JustificaResiduosNoReciclados,
-            JustificacionNoReciclados=d.JustificacionNoReciclados,
-        )
-
-    def set_reporta_residuos(self, db: Session, division_id: int, payload: ReportaResiduosDTO) -> None:
-        d = self.get(db, division_id)
-        d.JustificaResiduos = payload.CheckReporta
-        d.JustificacionResiduos = payload.Justificacion
-        d.UpdatedAt = datetime.utcnow()
-        d.Version = (d.Version or 0) + 1
-        db.commit()
-
-    def set_reporta_residuos_no_reciclados(self, db: Session, division_id: int, payload: ReportaResiduosDTO) -> None:
-        d = self.get(db, division_id)
-        d.JustificaResiduosNoReciclados = payload.CheckReportaNoReciclados
-        d.JustificacionNoReciclados = payload.JustificacionNoReciclados
+        d.ObservaResiduosNoReciclados = payload.CheckReportaNoReciclados
+        d.ObservacionNoReciclados = payload.JustificacionNoReciclados
         d.UpdatedAt = datetime.utcnow()
         d.Version = (d.Version or 0) + 1
         db.commit()
