@@ -297,7 +297,7 @@ class DivisionService:
 
         t_page = time.perf_counter()
         rows = (
-            db.query(ranked, *_select_columns(DirPref)[4:])  # ya incluye Direccion/labels; añadimos resto por join
+            db.query(ranked, *_select_columns(DirPref)[4:])  # añadimos el resto de columnas después de territoriales
             .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
             .join(Division, Division.Id == ranked.c.Id)
             .filter(ranked.c.rn.between(start, end))
@@ -305,10 +305,9 @@ class DivisionService:
             .all()
         )
 
-        # Como consultamos ranked + columnas, armamos dict limpio:
+        # Armar dict limpio:
         items: List[Dict[str, Any]] = []
         for row in rows:
-            # row[0] es ranked, el resto son columnas seleccionadas
             base_map = {
                 "Id": row.ranked.Id,
                 "Nombre": row.ranked.Nombre,
@@ -319,8 +318,7 @@ class DivisionService:
                 "ComunaId": row.ranked.ComunaId,
                 "Direccion": row.ranked.Direccion,
             }
-            # r._mapping para las demás columnas
-            extra = {k: v for k, v in row._mapping.items() if k not in base_map and k != "rn" and k != "ranked"}
+            extra = {k: v for k, v in row._mapping.items() if k not in base_map and k not in ("rn", "ranked")}
             base_map.update(extra)
             items.append(base_map)
 

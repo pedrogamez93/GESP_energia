@@ -29,7 +29,7 @@ class DivisionListDTO(DivisionSelectDTO):
     NivelPaso3: Optional[int] = None
     Calle: Optional[str] = None
     Numero: Optional[str] = None
-    GeVersion: Optional[str] = None
+    GeVersion: Optional[int] = None          # <-- corregido: llega como entero
     ParentId: Optional[int] = None
     TipoAdministracionId: Optional[int] = None
     TipoInmueble: Optional[int] = None
@@ -100,7 +100,7 @@ class DivisionListDTO(DivisionSelectDTO):
     MantColectores: Optional[bool] = None
     MantSfv: Optional[bool] = None
     CargaPosteriorT: Optional[bool] = None
-    IndicadorEnegia: Optional[int] = None
+    IndicadorEnegia: Optional[float] = None  # <-- corregido: llega con decimal
     ObsInexistenciaEyV: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
