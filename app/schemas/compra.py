@@ -4,8 +4,14 @@ from __future__ import annotations
 from typing import Optional, List, Union
 from datetime import datetime, date, time
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator, field_serializer
-
+from pydantic import (
+    BaseModel,
+    Field,
+    ConfigDict,
+    field_validator,
+    field_serializer,
+    model_validator,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilidades de fechas (Pydantic v2)
@@ -60,7 +66,7 @@ class CompraMedidorItemDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     Id: int
     Consumo: float
-    MedidorId: int
+    MedidorId: Optional[int] = None
     ParametroMedicionId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
 
@@ -73,9 +79,28 @@ class CompraMedidorItemFullDTO(CompraMedidorItemDTO):
 class CompraMedidorItemCreate(BaseModel):
     """Payload de creación/edición de items."""
     Consumo: float
-    MedidorId: int
+    MedidorId: Optional[int] = None
     ParametroMedicionId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("Consumo")
+    @classmethod
+    def _consumo_pos(cls, v: float):
+        if v is None or float(v) < 0:
+            raise ValueError("Consumo (item) debe ser ≥ 0")
+        return float(v)
+
+    @field_validator("MedidorId", "ParametroMedicionId", "UnidadMedidaId")
+    @classmethod
+    def _ints_ok(cls, v):
+        if v is None:
+            return None
+        iv = int(v)
+        if iv <= 0:
+            raise ValueError("Ids de item deben ser enteros positivos")
+        return iv
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,17 +240,17 @@ class CompraFullDetalleDTO(CompraFullDTO):
 # ─────────────────────────────────────────────────────────────────────────────
 # Payloads de creación / edición (escritura)
 # ─────────────────────────────────────────────────────────────────────────────
-class CompraMedidorItemCreate(BaseModel):
-    Consumo: float
-    MedidorId: int
-    ParametroMedicionId: Optional[int] = None
-    UnidadMedidaId: Optional[int] = None
-
-
 class CompraCreate(BaseModel):
     """
     Para crear: aceptamos string/date/datetime y normalizamos a datetime,
     pero al serializar de vuelta (si aplica) emitimos string.
+    Reglas fuertes:
+      - Consumo y Costo ≥ 0.
+      - InicioLectura ≤ FinLectura.
+      - Si existen todas, FechaCompra ∈ [InicioLectura, FinLectura].
+      - Si SinMedidor=false → debe haber Items y todos con MedidorId.
+      - Si SinMedidor=true  → no debe venir MedidorId en Items.
+      - Suma de Consumo de Items == Consumo total (si hay Items).
     """
     Consumo: float
     InicioLectura: DateLike
@@ -237,20 +262,87 @@ class CompraCreate(BaseModel):
     FacturaId: Optional[int] = None
     NumeroClienteId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
-    Observacion: Optional[str] = None
+    Observacion: Optional[str] = Field(default=None, max_length=1000)
     EstadoValidacionId: Optional[str] = "sin_revision"
     CreatedByDivisionId: Optional[int] = None
     SinMedidor: bool = False
     Items: List[CompraMedidorItemCreate] = Field(default_factory=list)
-    
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # ---- Normalización de entrada de fechas ----
     @field_validator("FechaCompra", "InicioLectura", "FinLectura", mode="before")
     @classmethod
     def _coerce_dates(cls, v):
         return _to_datetime(v)
 
+    # ---- Serialización de salida de fechas ----
     @field_serializer("FechaCompra", "InicioLectura", "FinLectura", when_used="json")
     def _ser_dates(self, v: Optional[datetime], _info):
         return _ser_date(v)
+
+    # ---- Validadores de números base ----
+    @field_validator("Consumo")
+    @classmethod
+    def _consumo_total_pos(cls, v: float):
+        if v is None or float(v) < 0:
+            raise ValueError("Consumo total debe ser ≥ 0")
+        return float(v)
+
+    @field_validator("Costo")
+    @classmethod
+    def _costo_pos(cls, v: float):
+        if v is None or float(v) < 0:
+            raise ValueError("Costo debe ser ≥ 0")
+        return float(v)
+
+    @field_validator("DivisionId", "EnergeticoId", "CreatedByDivisionId", "FacturaId",
+                    "NumeroClienteId", "UnidadMedidaId", mode="before")
+    @classmethod
+    def _ints_ok(cls, v):
+        if v is None or v == "":
+            return None
+        iv = int(v)
+        if iv <= 0:
+            raise ValueError("Ids deben ser enteros positivos")
+        return iv
+
+    # ---- Chequeos cruzados (negocio) ----
+    @model_validator(mode="after")
+    def _cross_checks(self):
+        # 1) CreatedByDivisionId por defecto = DivisionId
+        if self.CreatedByDivisionId is None:
+            object.__setattr__(self, "CreatedByDivisionId", self.DivisionId)
+
+        # 2) Rango de lecturas coherente
+        if self.InicioLectura and self.FinLectura:
+            if self.InicioLectura > self.FinLectura:
+                raise ValueError("InicioLectura no puede ser mayor que FinLectura")
+
+        # 3) FechaCompra dentro del rango si existen las tres fechas
+        if self.FechaCompra and self.InicioLectura and self.FinLectura:
+            if not (self.InicioLectura <= self.FechaCompra <= self.FinLectura):
+                raise ValueError("FechaCompra debe caer dentro del rango de lectura")
+
+        # 4) Reglas de Items vs SinMedidor
+        if self.SinMedidor:
+            # Si no se usarán medidores, no permitimos Items con MedidorId
+            if any(it.MedidorId is not None for it in self.Items):
+                raise ValueError("SinMedidor=true: no debe enviarse MedidorId en Items")
+        else:
+            # Con medidor: al menos un item y todos con MedidorId presente
+            if len(self.Items) == 0:
+                raise ValueError("Debe incluir al menos un Item cuando SinMedidor=false")
+            if any(it.MedidorId is None for it in self.Items):
+                raise ValueError("Todos los Items deben incluir MedidorId cuando SinMedidor=false")
+
+        # 5) Suma de Items = Consumo total (si hay Items)
+        if self.Items:
+            suma_items = sum(float(it.Consumo or 0) for it in self.Items)
+            if abs(float(self.Consumo) - suma_items) > 1e-6:
+                raise ValueError("La suma de Consumo en Items debe igualar el Consumo total")
+
+        return self
 
 
 class CompraUpdate(BaseModel):

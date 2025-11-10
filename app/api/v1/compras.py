@@ -24,8 +24,11 @@ DbDep = Annotated[Session, Depends(get_db)]
 svc = CompraService()
 
 _MAX_PAGE_SIZE = 100
+
+
 def _clamp_page(n: int) -> int:
     return 1 if n < 1 else n
+
 
 def _clamp_page_size(n: int) -> int:
     if n < 1:
@@ -33,6 +36,7 @@ def _clamp_page_size(n: int) -> int:
     if n > _MAX_PAGE_SIZE:
         return _MAX_PAGE_SIZE
     return n
+
 
 def _nz_str(s: Optional[str]) -> Optional[str]:
     if s is None:
@@ -55,16 +59,28 @@ def list_compras(
     ServicioId: int | None = Query(default=None),
     EnergeticoId: int | None = Query(default=None),
     NumeroClienteId: int | None = Query(default=None),
-    FechaDesde: str | None = Query(default=None),
-    FechaHasta: str | None = Query(default=None),
+    # Nota: el service trata FechaHasta como inclusiva (convierte a < día_siguiente)
+    FechaDesde: str | None = Query(default=None, description="ISO date (YYYY-MM-DD)"),
+    FechaHasta: str | None = Query(default=None, description="ISO date (YYYY-MM-DD) — inclusiva"),
     active: bool | None = Query(default=True),
     MedidorId: int | None = Query(default=None),
     EstadoValidacionId: str | None = Query(default=None),
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
-    NombreOpcional: str | None = Query(default=None),
-    full: bool = Query(default=True),
+    NombreOpcional: str | None = Query(default=None, description="Match en c.NombreOpcional o d.Nombre"),
+    full: bool = Query(default=True, description="Si true, retorna versión enriquecida"),
 ):
+    # Blindaje adicional (además de Query) por si se llama internamente o cambia el límite
+    page = _clamp_page(page)
+    page_size = _clamp_page_size(page_size)
+
+    # Normaliza strings (evita búsquedas con espacios vacíos)
+    q = _nz_str(q)
+    FechaDesde = _nz_str(FechaDesde)
+    FechaHasta = _nz_str(FechaHasta)
+    EstadoValidacionId = _nz_str(EstadoValidacionId)
+    NombreOpcional = _nz_str(NombreOpcional)
+
     if full:
         # ===== Enriquecido: usa el batch del service y evita que Pydantic pode =====
         total, items = svc.list_full(
@@ -74,7 +90,7 @@ def list_compras(
             energetico_id=EnergeticoId,
             numero_cliente_id=NumeroClienteId,
             fecha_desde=FechaDesde,
-            fecha_hasta=FechaHasta,
+            fecha_hasta=FechaHasta,  # inclusiva dentro del service
             active=active,
             medidor_id=MedidorId,
             estado_validacion_id=EstadoValidacionId,
@@ -212,5 +228,6 @@ def replace_items_compra(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
 ):
+    # Permite limpiar items si viene Items=[]
     rows = svc.replace_items(db, compra_id, [x.model_dump() for x in (payload.Items or [])])
     return [CompraMedidorItemDTO.model_validate(x) for x in rows]

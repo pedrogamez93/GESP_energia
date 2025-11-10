@@ -1,13 +1,13 @@
 # app/services/compra_service.py
 from __future__ import annotations
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Tuple, Any, Dict
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from sqlalchemy import select, func, and_  
+from sqlalchemy import select, func, and_
 from sqlalchemy.orm import selectinload
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
@@ -28,6 +28,13 @@ def _to_dt(s: str | datetime | None) -> datetime | None:
         return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except Exception:
         return datetime.strptime(str(s)[:10], "%Y-%m-%d")
+
+
+def _end_inclusive(dt: datetime | None) -> datetime | None:
+    """Convierte una fecha 'YYYY-MM-DD' a límite superior exclusivo del día siguiente."""
+    if not dt:
+        return None
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
 
 def _fmt_dt(dt: datetime | None) -> str | None:
@@ -89,11 +96,8 @@ def _col_exists_cached(db: Session, schema: str, table: str, column: str) -> boo
 # ─────────────────────────────────────────────────────────────────────────────
 class CompraService:
     # ======================================================================
-    # LISTA BÁSICA (paginada)
+    # LISTA BÁSICA (paginada) — incluye modo full con EnergeticoNombre
     # ======================================================================
-# ======================================================================
-# LISTA BÁSICA (paginada)  — incluye modo full con EnergeticoNombre
-# ======================================================================
     def list(
         self,
         db: Session,
@@ -119,9 +123,6 @@ class CompraService:
         Si full=False => devuelve CompraPage (básico)
         Si full=True  => devuelve CompraFullPage (enriquecido: Items + Medidor + Dirección + contexto)
         """
-        from sqlalchemy import select, func, and_
-        from sqlalchemy.orm import selectinload
-
         # =========================
         # 1) Base query + filtros
         # =========================
@@ -142,11 +143,11 @@ class CompraService:
             conds.append(Compra.EstadoValidacionId == EstadoValidacionId)
 
         fdesde = _to_dt(FechaDesde)
-        fhasta = _to_dt(FechaHasta)
+        fhasta = _end_inclusive(_to_dt(FechaHasta))  # ← fin inclusivo
         if fdesde:
             conds.append(Compra.FechaCompra >= fdesde)
         if fhasta:
-            conds.append(Compra.FechaCompra <= fhasta)
+            conds.append(Compra.FechaCompra < fhasta)
 
         if conds:
             stmt = stmt.where(and_(*conds))
@@ -286,7 +287,7 @@ class CompraService:
                 s.Nombre                          AS ServicioNombre,
                 s.InstitucionId                   AS InstitucionId,
                 i.Nombre                          AS InstitucionNombre,
-                e.Nombre                          AS EnergeticoNombre,   -- NUEVO
+                e.Nombre                          AS EnergeticoNombre,
                 {edi_calle}                       AS EDI_Calle,
                 {edi_numero}                      AS EDI_Numero,
                 {edi_dirlib}                      AS EDI_DireccionLibre,
@@ -299,7 +300,7 @@ class CompraService:
             LEFT JOIN dbo.Divisiones d   WITH (NOLOCK) ON d.Id   = c.DivisionId
             LEFT JOIN dbo.Servicios  s   WITH (NOLOCK) ON s.Id   = d.ServicioId
             LEFT JOIN dbo.Instituciones i WITH (NOLOCK) ON i.Id  = s.InstitucionId
-            LEFT JOIN dbo.Energeticos e  WITH (NOLOCK) ON e.Id   = c.EnergeticoId   -- NUEVO
+            LEFT JOIN dbo.Energeticos e  WITH (NOLOCK) ON e.Id   = c.EnergeticoId
             LEFT JOIN dbo.Edificios  efi WITH (NOLOCK) ON efi.Id = d.EdificioId
             LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
             LEFT JOIN dbo.Regiones   r   WITH (NOLOCK) ON r.Id   = com.RegionId
@@ -375,7 +376,7 @@ class CompraService:
                 "ServicioNombre": r.get("ServicioNombre"),
                 "InstitucionId": int(r["InstitucionId"]) if r["InstitucionId"] is not None else None,
                 "InstitucionNombre": r.get("InstitucionNombre"),
-                "EnergeticoNombre": r.get("EnergeticoNombre"),           # NUEVO
+                "EnergeticoNombre": r.get("EnergeticoNombre"),
                 "RegionId": int(r["COM_RegionId"]) if r.get("COM_RegionId") is not None else (int(r["R_Id"]) if r.get("R_Id") is not None else None),
                 "EdificioId": int(r["EdificioId"]) if r["EdificioId"] is not None else None,
                 "NombreOpcional": nombre_opc,
@@ -415,8 +416,6 @@ class CompraService:
             "page_size": page_size,
             "items": items_full,
         }
-
-
 
     # ======================================================================
     # CRUD BÁSICO
@@ -536,7 +535,7 @@ class CompraService:
         - Secciones extra (Items, Division, Servicio, etc.) como campos adyacentes
         """
         ctx = self.get_context(db, compra_id)
-        
+
         required_root = [
             "Id","DivisionId","EnergeticoId","NumeroClienteId","FechaCompra","Consumo","Costo",
             "InicioLectura","FinLectura","FacturaId","CreatedByDivisionId","EstadoValidacionId",
@@ -819,7 +818,7 @@ class CompraService:
 
     # ======================================================================
     # LISTA ENRIQUECIDA (paginada) - MISMO set de filtros
-    # ======================================================================    
+    # ======================================================================
     def list_full(
         self,
         db: Session,
@@ -869,7 +868,7 @@ class CompraService:
             params["desde"] = _to_dt(fecha_desde)
         if fecha_hasta:
             where_parts.append("c.FechaCompra < :hasta")
-            params["hasta"] = _to_dt(fecha_hasta)
+            params["hasta"] = _end_inclusive(_to_dt(fecha_hasta))
         if q:
             where_parts.append("LOWER(ISNULL(c.Observacion,'')) LIKE LOWER(:q_like)")
             params["q_like"] = f"%{q}%"
@@ -902,7 +901,7 @@ class CompraService:
             params["nombre_opcional_like"] = f"%{nombre_opcional}%"
 
         where_sql = " AND ".join(where_parts)
-        size = max(1, min(50, page_size))
+        size = max(1, min(100, page_size))  # ← límite coherente con el endpoint
         offset = (page - 1) * size
 
         # ---- Total
@@ -961,7 +960,7 @@ class CompraService:
                     s.Nombre                        AS ServicioNombre,
                     s.InstitucionId                 AS InstitucionId,
                     i.Nombre                        AS InstitucionNombre,
-                    e.Nombre                        AS EnergeticoNombre,      -- NUEVO
+                    e.Nombre                        AS EnergeticoNombre,
                     d.EdificioId                    AS EdificioId,
                     d.ReportaPMG                    AS UnidadReportaPMG,
                     d.Nombre                        AS DivisionNombre,
@@ -977,7 +976,7 @@ class CompraService:
                 LEFT JOIN dbo.Divisiones d   WITH (NOLOCK) ON d.Id   = c.DivisionId
                 LEFT JOIN dbo.Servicios  s   WITH (NOLOCK) ON s.Id   = d.ServicioId
                 LEFT JOIN dbo.Instituciones i WITH (NOLOCK) ON i.Id  = s.InstitucionId
-                LEFT JOIN dbo.Energeticos e  WITH (NOLOCK) ON e.Id   = c.EnergeticoId   -- NUEVO
+                LEFT JOIN dbo.Energeticos e  WITH (NOLOCK) ON e.Id   = c.EnergeticoId
                 LEFT JOIN dbo.Edificios  efi WITH (NOLOCK) ON efi.Id = d.EdificioId
                 LEFT JOIN dbo.Comunas    com WITH (NOLOCK) ON com.Id = efi.ComunaId
                 LEFT JOIN dbo.Regiones   r   WITH (NOLOCK) ON r.Id   = com.RegionId
@@ -1054,7 +1053,7 @@ class CompraService:
                 "ServicioNombre": r.get("ServicioNombre"),
                 "InstitucionId": int(r["InstitucionId"]) if r["InstitucionId"] is not None else None,
                 "InstitucionNombre": r.get("InstitucionNombre"),
-                "EnergeticoNombre": r.get("EnergeticoNombre"),          # NUEVO
+                "EnergeticoNombre": r.get("EnergeticoNombre"),
                 "RegionId": int(r["COM_RegionId"]) if r.get("COM_RegionId") is not None else (int(r["R_Id"]) if r.get("R_Id") is not None else None),
                 "EdificioId": int(r["EdificioId"]) if r["EdificioId"] is not None else None,
                 "NombreOpcional": r.get("DivisionNombre"),
@@ -1136,4 +1135,3 @@ class CompraService:
 
         db.commit()
         return rows_out
-
