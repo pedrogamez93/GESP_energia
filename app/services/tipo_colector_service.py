@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from sqlalchemy import func
 from fastapi import HTTPException
-
 from sqlalchemy.orm import Session, load_only
-from app.db.models.tipo_colector import TipoColector  # tu modelo
 
 from app.db.models.tipo_colector import TipoColector
+
 
 class TipoColectorService:
     def list(self, db: Session, q: str | None, page: int, page_size: int) -> dict:
@@ -14,24 +13,28 @@ class TipoColectorService:
         size = max(1, min(200, int(page_size or 50)))
 
         # Filtro base
-        filters = []
+        filters: list = []
         if q and isinstance(q, str) and q.strip():
             like = f"%{q.strip()}%"
             filters.append(func.lower(TipoColector.Nombre).like(func.lower(like)))
 
+        # Query base reutilizable
+        base_query = db.query(TipoColector)
+        if filters:
+            base_query = base_query.filter(*filters)
+
         # 👉 total sin tocar todas las columnas
-        total = db.query(func.count(TipoColector.Id)).filter(*filters).scalar() or 0
+        total = base_query.with_entities(func.count(TipoColector.Id)).scalar() or 0
 
         # 👉 items trayendo sólo Id/Nombre
         items = (
-            db.query(TipoColector)
-              .options(load_only(TipoColector.Id, TipoColector.Nombre))
-              .filter(*filters)
-              .order_by(TipoColector.Nombre, TipoColector.Id)
-              .offset((page - 1) * size)
-              .limit(size)
-              .all()
+            base_query.options(load_only(TipoColector.Id, TipoColector.Nombre))
+            .order_by(TipoColector.Nombre, TipoColector.Id)
+            .offset((page - 1) * size)
+            .limit(size)
+            .all()
         )
+
         return {"total": total, "page": page, "page_size": size, "items": items}
 
     def get(self, db: Session, id_: int) -> TipoColector:
@@ -79,9 +82,11 @@ class TipoColectorService:
     # PATCH: actualiza cualquier campo enviado
     def update_fields(self, db: Session, id_: int, data, user: str | None = None):
         obj = self.get(db, id_)
-        payload = data.model_dump(exclude_unset=True) if hasattr(data, "model_dump") else {
-            k: v for k, v in dict(data).items() if v is not None
-        }
+        payload = (
+            data.model_dump(exclude_unset=True)
+            if hasattr(data, "model_dump")
+            else {k: v for k, v in dict(data).items() if v is not None}
+        )
 
         allowed = {c.key for c in TipoColector.__table__.columns}
         for k, v in payload.items():
