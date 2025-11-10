@@ -105,10 +105,10 @@ class DivisionService:
                         func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
                         func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
                         DirPref.label("Direccion"),
-                        # ── NUEVO ──
+                        # ── NUEVOS ──
                         Division.DireccionInmuebleId.label("DireccionInmuebleId"),
-                        # ── NUEVO ──
                         Division.IndicadorEE.label("IndicadorEE"),
+                        Division.AccesoFactura.label("AccesoFactura"),
                     )
                     .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
                     .filter(Division.Id.in_(ids))
@@ -126,10 +126,10 @@ class DivisionService:
                     "ProvinciaId": r.ProvinciaId,
                     "ComunaId": r.ComunaId,
                     "Direccion": r.Direccion,
-                    # ── NUEVO ──
+                    # ── NUEVOS ──
                     "DireccionInmuebleId": r.DireccionInmuebleId,
-                    # ── NUEVO ──
                     "IndicadorEE": r.IndicadorEE,
+                    "AccesoFactura": r.AccesoFactura,
                 }
                 for r in rows
             ]
@@ -204,6 +204,7 @@ class DivisionService:
                 # ── NUEVOS ──
                 Division.DireccionInmuebleId.label("DireccionInmuebleId"),
                 Division.IndicadorEE.label("IndicadorEE"),
+                Division.AccesoFactura.label("AccesoFactura"),
                 rn,
             )
         ).subquery()
@@ -225,6 +226,7 @@ class DivisionService:
                 # ── NUEVOS ──
                 ranked.c.DireccionInmuebleId,
                 ranked.c.IndicadorEE,
+                ranked.c.AccesoFactura,
             )
             .filter(ranked.c.rn.between(start, end))
             .order_by(ranked.c.rn.asc())
@@ -248,6 +250,7 @@ class DivisionService:
                 # ── NUEVOS ──
                 "DireccionInmuebleId": r.DireccionInmuebleId,
                 "IndicadorEE": r.IndicadorEE,
+                "AccesoFactura": r.AccesoFactura,
             }
             for r in rows
         ]

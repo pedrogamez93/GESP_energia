@@ -15,8 +15,9 @@ class DivisionListDTO(DivisionSelectDTO):
     RegionId: Optional[int] = None
     ComunaId: Optional[int] = None
     DireccionInmuebleId: Optional[int] = None
-    # NUEVO
+    # NUEVOS
     IndicadorEE: Optional[int] = None
+    AccesoFactura: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 class DivisionDTO(DivisionListDTO):
