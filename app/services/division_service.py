@@ -149,6 +149,20 @@ def _row_to_item(r) -> Dict[str, Any]:
     return {k: getattr(r, k) for k in r._mapping.keys()}
 
 
+# <<< MINIMO: helper local para sanear Pisos en el detalle
+def _normalize_pisos_value(raw: Any) -> tuple[Optional[int], Optional[str]]:
+    if raw is None or isinstance(raw, int):
+        return (raw, None)
+    s = str(raw).strip()
+    try:
+        if "." in s:
+            s = s.split(".", 1)[0]
+        return (int(s), None)
+    except Exception:
+        return (None, s)
+# >>>
+
+
 class DivisionService:
     def list(
         self,
@@ -334,6 +348,21 @@ class DivisionService:
         obj = db.query(Division).filter(Division.Id == division_id).first()
         if not obj:
             raise HTTPException(status_code=404, detail="División no encontrada")
+
+        # <<< MINIMO: normalizar solo para la respuesta del detalle
+        pisos_int, pisos_txt = _normalize_pisos_value(getattr(obj, "Pisos", None))
+        try:
+            # si añadiste PisosTexto en el DTO, lo exponemos:
+            setattr(obj, "PisosTexto", pisos_txt)
+        except Exception:
+            pass
+        try:
+            obj.Pisos = pisos_int
+        except Exception:
+            # si por algún motivo no pudiese asignar, al menos evita romper
+            pass
+        # >>>
+
         return obj
 
     def by_user(self, db: Session, user_id: str) -> List[Division]:
