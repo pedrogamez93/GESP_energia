@@ -1,34 +1,19 @@
 from __future__ import annotations
 from typing import List, Optional
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field
-
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 class IdsPayload(BaseModel):
     Ids: List[int] = []
 
-
-class UserDetailDTO(BaseModel):
-    """DTO compacto (el que tenías)."""
-    Id: str
-    UserName: str | None = None
-    Email: str | None = None
-    Active: bool | None = None
-    Roles: List[str] = []
-    InstitucionIds: List[int] = []
-    ServicioIds: List[int] = []
-    DivisionIds: List[int] = []
-    UnidadIds: List[int] = []
-
-    model_config = ConfigDict(from_attributes=True)
-
+def _ser_dt(v: Optional[datetime]) -> Optional[str]:
+    if v is None:
+        return None
+    # ISO sin microsegundos
+    return v.replace(microsecond=0).isoformat()
 
 class UserDetailFullDTO(BaseModel):
-    """
-    DTO completo con TODAS las columnas de dbo.AspNetUsers + sets/roles.
-    Tipos alineados a SQL Server (bit->bool, datetime/datetimeoffset->datetime, nvarchar->str).
-    """
-    # ---- columnas de AspNetUsers ----
+    # ====== columnas AspNetUsers ======
     AccessFailedCount: Optional[int] = None
     EmailConfirmed: Optional[bool] = None
     LockoutEnabled: Optional[bool] = None
@@ -51,31 +36,29 @@ class UserDetailFullDTO(BaseModel):
     City: Optional[str] = None
     PostalCode: Optional[str] = None
     Cargo: Optional[str] = None
-
-    # IMPORTANTE: en tu BD este campo llega como bit -> bool
     Certificado: Optional[bool] = None
-
     Nacionalidad: Optional[str] = None
     Rut: Optional[str] = None
-
-    # También suelen ser bit en tu esquema
     Validado: Optional[bool] = None
-
-    OldId: Optional[str] = None
+    OldId: Optional[int] = None
     ComunaId: Optional[int] = None
     SexoId: Optional[int] = None
     NumeroTelefonoOpcional: Optional[str] = None
-
     CreatedAt: Optional[datetime] = None
     CreatedBy: Optional[str] = None
     ModifiedBy: Optional[str] = None
     UpdatedAt: Optional[datetime] = None
 
-    # ---- agregados del endpoint ----
-    Roles: List[str] = Field(default_factory=list)
-    InstitucionIds: List[int] = Field(default_factory=list)
-    ServicioIds: List[int] = Field(default_factory=list)
-    DivisionIds: List[int] = Field(default_factory=list)
-    UnidadIds: List[int] = Field(default_factory=list)
+    # ====== agregados (sets vinculados) ======
+    Roles: List[str] = []
+    InstitucionIds: List[int] = []
+    ServicioIds: List[int] = []
+    DivisionIds: List[int] = []
+    UnidadIds: List[int] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+    # Serializadores para fechas (cuando salen a JSON)
+    @field_serializer("LockoutEnd", "CreatedAt", "UpdatedAt", when_used="json")
+    def _ser_dates(self, v: Optional[datetime], _info):
+        return _ser_dt(v)

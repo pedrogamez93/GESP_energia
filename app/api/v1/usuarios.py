@@ -1,12 +1,14 @@
+# app/api/v1/usuarios.py
 from __future__ import annotations
+
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
-from app.schemas.usuario_vinculo import IdsPayload, UserDetailDTO, UserDetailFullDTO
+from app.schemas.usuario_vinculo import IdsPayload, UserDetailFullDTO
 from app.services.usuario_vinculo_service import UsuarioVinculoService
 from app.db.models.identity import AspNetUser
 
@@ -20,18 +22,26 @@ def _actor_id(current_user: UserPublic | None, request: Request | None) -> Optio
     return (current_user.id if current_user else None) or (request.headers.get("X-User-Id") if request else None)
 
 
-def _to_full_dto(user: AspNetUser, roles: list[str],
-                 inst_ids: list[int], srv_ids: list[int], div_ids: list[int], uni_ids: list[int]) -> UserDetailFullDTO:
+def _to_full_dto(
+    user: AspNetUser,
+    roles: list[str],
+    inst_ids: list[int],
+    srv_ids: list[int],
+    div_ids: list[int],
+    uni_ids: list[int],
+) -> UserDetailFullDTO:
     """
     Mapea directamente todas las columnas del modelo AspNetUser (from_attributes=True)
     y 'inyecta' roles y sets vinculados.
+    Importante: asegúrate de que UserDetailFullDTO tenga tipos reales (bool/int/datetime)
+    para evitar ValidationError.
     """
     base = UserDetailFullDTO.model_validate(user)  # toma todos los campos del modelo
-    base.Roles = roles
-    base.InstitucionIds = inst_ids
-    base.ServicioIds = srv_ids
-    base.DivisionIds = div_ids
-    base.UnidadIds = uni_ids
+    base.Roles = roles or []
+    base.InstitucionIds = inst_ids or []
+    base.ServicioIds = srv_ids or []
+    base.DivisionIds = div_ids or []
+    base.UnidadIds = uni_ids or []
     return base
 
 

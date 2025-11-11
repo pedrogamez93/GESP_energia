@@ -101,3 +101,61 @@ class UsuarioVinculoService:
         db.commit()
         db.refresh(user)
         return user
+    
+    def to_full_dto(
+        self,
+        user: AspNetUser,
+        roles: list[str],
+        inst_ids: list[int],
+        srv_ids: list[int],
+        div_ids: list[int],
+        uni_ids: list[int],
+    ) -> dict:
+        """
+        Devuelve un dict listo para UserDetailFullDTO con TODAS
+        las columnas del usuario + los sets vinculados.
+        """
+        base = {
+            # columnas AspNetUsers (mapeo directo)
+            "AccessFailedCount": getattr(user, "AccessFailedCount", None),
+            "EmailConfirmed": getattr(user, "EmailConfirmed", None),
+            "LockoutEnabled": getattr(user, "LockoutEnabled", None),
+            "LockoutEnd": getattr(user, "LockoutEnd", None),
+            "PhoneNumberConfirmed": getattr(user, "PhoneNumberConfirmed", None),
+            "TwoFactorEnabled": getattr(user, "TwoFactorEnabled", None),
+            "Id": str(user.Id),
+            "UserName": user.UserName,
+            "NormalizedUserName": getattr(user, "NormalizedUserName", None),
+            "Email": user.Email,
+            "NormalizedEmail": getattr(user, "NormalizedEmail", None),
+            "PasswordHash": getattr(user, "PasswordHash", None),
+            "SecurityStamp": getattr(user, "SecurityStamp", None),
+            "ConcurrencyStamp": getattr(user, "ConcurrencyStamp", None),
+            "PhoneNumber": getattr(user, "PhoneNumber", None),
+            "Nombres": getattr(user, "Nombres", None),
+            "Apellidos": getattr(user, "Apellidos", None),
+            "Active": getattr(user, "Active", None),
+            "Address": getattr(user, "Address", None),
+            "City": getattr(user, "City", None),
+            "PostalCode": getattr(user, "PostalCode", None),
+            "Cargo": getattr(user, "Cargo", None),
+            "Certificado": getattr(user, "Certificado", None),
+            "Nacionalidad": getattr(user, "Nacionalidad", None),
+            "Rut": getattr(user, "Rut", None),
+            "Validado": getattr(user, "Validado", None),
+            "OldId": getattr(user, "OldId", None),
+            "ComunaId": getattr(user, "ComunaId", None),
+            "SexoId": getattr(user, "SexoId", None),
+            "NumeroTelefonoOpcional": getattr(user, "NumeroTelefonoOpcional", None),
+            "CreatedAt": getattr(user, "CreatedAt", None),
+            "CreatedBy": getattr(user, "CreatedBy", None),
+            "ModifiedBy": getattr(user, "ModifiedBy", None),
+            "UpdatedAt": getattr(user, "UpdatedAt", None),
+            # agregados
+            "Roles": roles or [],
+            "InstitucionIds": inst_ids or [],
+            "ServicioIds": srv_ids or [],
+            "DivisionIds": div_ids or [],
+            "UnidadIds": uni_ids or [],
+        }
+        return base
