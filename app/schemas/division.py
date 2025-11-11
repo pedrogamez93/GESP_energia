@@ -1,27 +1,48 @@
 from __future__ import annotations
 from typing import Optional, List, Any
 from datetime import datetime
+import re
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers de normalización para Pydantic v2
 # ─────────────────────────────────────────────────────────────────────────────
+_INT_RE = re.compile(r"^\s*-?\d+\s*$")
+
 def _to_int_maybe(v: Any) -> Optional[int]:
+    """
+    Convierte a int si:
+    - Es int ya
+    - Es bool (True->1, False->0)
+    - Es string con solo dígitos (y signo), p.ej. '7', '-1'
+    - Es string flotante exacta entera '7.0' / '15.00' (sin resto)
+    Si no, retorna None (ej: '-1,1,Entrepiso,7,8' → None).
+    """
     if v is None or v == "":
         return None
     if isinstance(v, bool):
         return int(v)
     if isinstance(v, int):
         return v
+
+    s = str(v).strip()
+    # si es entero puro
+    if _INT_RE.match(s):
+        try:
+            return int(s)
+        except Exception:
+            return None
+
+    # si es flotante representando un entero exacto (7.0 → 7)
     try:
-        s = str(v).strip()
-        # corta decimales tipo "7.0"
-        if "." in s:
-            s = s.split(".", 1)[0]
-        return int(s)
+        f = float(s.replace(",", "."))  # por si viniera con coma decimal
+        if f.is_integer():
+            return int(f)
     except Exception:
-        return None
+        pass
+    return None
+
 
 def _to_float_maybe(v: Any) -> Optional[float]:
     if v is None or v == "":
@@ -33,6 +54,10 @@ def _to_float_maybe(v: Any) -> Optional[float]:
         return float(s)
     except Exception:
         return None
+
+
+def _blank_to_none(v: Any) -> Any:
+    return None if isinstance(v, str) and v.strip() == "" else v
 
 
 # ---------- EXISTENTES (ajustados a Pydantic v2) ----------
@@ -143,13 +168,12 @@ class DivisionListDTO(DivisionSelectDTO):
     @classmethod
     def _normalize_list(cls, data):
         if isinstance(data, dict):
-            gv = data.get("GeVersion")
-            if gv is not None:
-                data["GeVersion"] = _to_int_maybe(gv)
-
-            ind = data.get("IndicadorEnegia")
-            if ind is not None:
-                data["IndicadorEnegia"] = _to_float_maybe(ind)
+            data["GeVersion"] = _to_int_maybe(data.get("GeVersion"))
+            data["IndicadorEnegia"] = _to_float_maybe(data.get("IndicadorEnegia"))
+            # limpiamos strings vacíos frecuentes
+            for k in ("Direccion", "Calle", "Numero", "OrganizacionResponsable"):
+                if k in data:
+                    data[k] = _blank_to_none(data.get(k))
         return data
 
 
@@ -195,13 +219,12 @@ class DivisionDTO(DivisionListDTO):
                 data.setdefault("PisosTexto", None)
 
         # Coherencia de otros campos que llegan como string
-        gv = data.get("GeVersion")
-        if gv is not None:
-            data["GeVersion"] = _to_int_maybe(gv)
-
-        ind = data.get("IndicadorEnegia")
-        if ind is not None:
-            data["IndicadorEnegia"] = _to_float_maybe(ind)
+        data["GeVersion"] = _to_int_maybe(data.get("GeVersion"))
+        data["IndicadorEnegia"] = _to_float_maybe(data.get("IndicadorEnegia"))
+        data["AnyoConstruccion"] = _to_int_maybe(data.get("AnyoConstruccion"))
+        data["Latitud"] = _to_float_maybe(data.get("Latitud"))
+        data["Longitud"] = _to_float_maybe(data.get("Longitud"))
+        data["NroRol"] = _blank_to_none(data.get("NroRol"))
 
         return data
 
