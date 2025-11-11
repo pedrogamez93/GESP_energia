@@ -1,5 +1,7 @@
 from typing import List, Annotated
 from datetime import datetime
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Path, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select
@@ -21,12 +23,16 @@ DbDep = Annotated[Session, Depends(get_db)]
 router = APIRouter(prefix="/api/v1/servicios", tags=["Servicios"])
 ADMIN_ROLE_NAME = "ADMINISTRADOR"
 
+log = logging.getLogger("uvicorn.error")
+
+
 def _current_user_id(request: Request) -> str:
     # Se mantiene para endpoints no-ADMIN que ya lo usan
     uid = getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
     if not uid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="userId no presente")
     return uid
+
 
 def _is_user_admin(db: Session, user_id: str) -> bool:
     stmt = (
@@ -37,6 +43,25 @@ def _is_user_admin(db: Session, user_id: str) -> bool:
         .limit(1)
     )
     return db.execute(stmt).first() is not None
+
+
+def _soft_app_validate(request: Request) -> bool:
+    """
+    Validación 'suave' para endpoints AllowAnonymous (no debe romper).
+    - Si la app está 'ok', devuelve True.
+    - Si falta header o falla validación, devuelve False y LOGUEA, pero NO levanta 401.
+    """
+    try:
+        ok = is_app_validate(request)
+        if not ok:
+            log.info("[SERVICIOS] AllowAnonymous: app header ausente/invalid. path=%s origin=%s",
+                     request.url.path, request.headers.get("origin"))
+        return ok
+    except Exception as e:
+        log.info("[SERVICIOS] AllowAnonymous: excepción en validación app (%s). path=%s",
+                 repr(e), request.url.path)
+        return False
+
 
 # ---------------------------
 # Públicos / Compatibles (ya existentes)
@@ -64,11 +89,12 @@ def get_by_institucion_and_user(
     servicios = q.order_by(Servicio.Nombre).all()
     return [ServicioDTO.model_validate(x) for x in servicios]
 
+
 @router.get(
     "/lista/institucion/{institucion_id}",
     response_model=List[ServicioListDTO],
     summary="Lista ligera de servicios por institución (AllowAnonymous)",
-    description="Valida app y devuelve (Id, Nombre) ordenado."
+    description="Devuelve (Id, Nombre) ordenado. **No exige** encabezados de app ni Authorization.",
 )
 @router.get(  # alias legacy (OCULTO en Swagger)
     "/getlist-by-institucionid/{institucion_id}",
@@ -80,8 +106,9 @@ def get_list_by_institucionid(
     request: Request,
     db: DbDep
 ) -> List[ServicioListDTO]:
-    if not is_app_validate(request):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    # Validación suave (NO bloquea). Se mantiene por telemetría, pero nunca retorna 401.
+    _soft_app_validate(request)
+
     servicios = (
         db.query(Servicio)
           .filter(Servicio.Active == True, Servicio.InstitucionId == institucion_id)
@@ -89,6 +116,7 @@ def get_list_by_institucionid(
           .all()
     )
     return [ServicioListDTO.model_validate(x) for x in servicios]
+
 
 @router.get(
     "/usuario/{user_id}",
@@ -113,6 +141,7 @@ def get_by_user_id(
         )
     servicios = q.order_by(Servicio.Nombre).all()
     return ServicioResponse(Ok=True, Servicios=[ServicioDTO.model_validate(s) for s in servicios])
+
 
 @router.get(
     "/usuario",
@@ -181,6 +210,7 @@ def get_by_user_id_pagin(
 
     return ServicioResponse(Ok=True, Servicios=[ServicioDTO.model_validate(s) for s in items])
 
+
 # ---------------------------
 # Escrituras existentes
 # ---------------------------
@@ -199,6 +229,7 @@ def set_justificacion(model: ServicioDTO, db: DbDep):
     from app.services.servicio_service import ServicioService
     ServicioService(db).save_justificacion(model)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 @router.patch(
     "/{servicio_id}",
@@ -229,6 +260,7 @@ def patch_servicio(
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 # ---------------------------
 # Diagnóstico
 # ---------------------------
@@ -250,6 +282,7 @@ def get_diagnostico(
     from app.services.servicio_service import ServicioService
     return ServicioService(db).get_diagnostico(servicio_id)
 
+
 # ---------------------------
 # CRUD ADMIN
 # ---------------------------
@@ -269,6 +302,7 @@ def crear_servicio(
     srv = ServicioService(db).create(data, created_by=current_user.id)
     return ServicioDTO.model_validate(srv)
 
+
 @router.put(
     "/{servicio_id}",
     response_model=ServicioDTO,
@@ -285,6 +319,7 @@ def actualizar_servicio(
     if not srv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
+
 
 # ---- NUEVO: activar/desactivar ----
 
@@ -305,6 +340,7 @@ def set_estado_servicio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
 
+
 @router.patch(
     "/{servicio_id}/reactivar",
     response_model=ServicioDTO,
@@ -321,6 +357,7 @@ def reactivar_servicio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
 
+
 @router.delete(
     "/{servicio_id}",
     response_model=ServicioDTO,
@@ -336,6 +373,7 @@ def eliminar_servicio(
     if not srv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
+
 
 from app.db.models.institucion import Institucion
 from app.schemas.institucion import InstitucionListDTO
