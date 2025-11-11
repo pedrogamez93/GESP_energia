@@ -35,9 +35,7 @@ def _to_full_dto(
 ) -> UserDetailFullDTO:
     """
     Mapea directamente todas las columnas del modelo AspNetUser (from_attributes=True)
-    y 'inyecta' roles y sets vinculados.
-    Importante: asegúrate de que UserDetailFullDTO tenga tipos reales (bool/int/datetime)
-    para evitar ValidationError.
+    e inyecta roles y sets vinculados.
     """
     base = UserDetailFullDTO.model_validate(user)  # toma todos los campos del modelo
     base.Roles = roles or []
@@ -101,7 +99,7 @@ def set_user_instituciones(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-    payload: Annotated[IdsPayload | None, Body(None)] = None,
+    payload: IdsPayload | None = Body(None),
 ):
     ids = payload.Ids if payload else []
     return svc.set_instituciones(db, user_id, ids)
@@ -116,7 +114,7 @@ def set_user_servicios(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-    payload: Annotated[IdsPayload | None, Body(None)] = None,
+    payload: IdsPayload | None = Body(None),
 ):
     ids = payload.Ids if payload else []
     return svc.set_servicios(db, user_id, ids)
@@ -131,7 +129,7 @@ def set_user_divisiones(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-    payload: Annotated[IdsPayload | None, Body(None)] = None,
+    payload: IdsPayload | None = Body(None),
 ):
     ids = payload.Ids if payload else []
     return svc.set_divisiones(db, user_id, ids)
@@ -146,7 +144,7 @@ def set_user_unidades(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
-    payload: Annotated[IdsPayload | None, Body(None)] = None,
+    payload: IdsPayload | None = Body(None),
 ):
     ids = payload.Ids if payload else []
     return svc.set_unidades(db, user_id, ids)
