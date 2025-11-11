@@ -35,6 +35,7 @@ try:
             "http://localhost:4200",
             "http://energia.metasoft-testing.com",
             "https://energia.metasoft-testing.com",
+            "https://api-energia.metasoft-testing.com"
         ],
     )
 except Exception:
@@ -42,6 +43,7 @@ except Exception:
         "http://localhost:4200",
         "http://energia.metasoft-testing.com",
         "https://energia.metasoft-testing.com",
+        "https://api-energia.metasoft-testing.com"
     ]
 
 # ───────────────────────────────────────────────────────────────────────────────
