@@ -1,7 +1,39 @@
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, model_validator
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers de normalización para Pydantic v2
+# ─────────────────────────────────────────────────────────────────────────────
+def _to_int_maybe(v: Any) -> Optional[int]:
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    try:
+        s = str(v).strip()
+        # corta decimales tipo "7.0"
+        if "." in s:
+            s = s.split(".", 1)[0]
+        return int(s)
+    except Exception:
+        return None
+
+def _to_float_maybe(v: Any) -> Optional[float]:
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        s = str(v).strip().replace(",", ".")
+        return float(s)
+    except Exception:
+        return None
+
 
 # ---------- EXISTENTES (ajustados a Pydantic v2) ----------
 class DivisionSelectDTO(BaseModel):
@@ -30,7 +62,7 @@ class DivisionListDTO(DivisionSelectDTO):
     NivelPaso3: Optional[int] = None
     Calle: Optional[str] = None
     Numero: Optional[str] = None
-    GeVersion: Optional[int] = None          # llega como entero
+    GeVersion: Optional[int] = None
     ParentId: Optional[int] = None
     TipoAdministracionId: Optional[int] = None
     TipoInmueble: Optional[int] = None
@@ -101,10 +133,24 @@ class DivisionListDTO(DivisionSelectDTO):
     MantColectores: Optional[bool] = None
     MantSfv: Optional[bool] = None
     CargaPosteriorT: Optional[bool] = None
-    IndicadorEnegia: Optional[float] = None  # llega con decimal
+    IndicadorEnegia: Optional[float] = None
     ObsInexistenciaEyV: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    # Normalización también para listados
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_list(cls, data):
+        if isinstance(data, dict):
+            gv = data.get("GeVersion")
+            if gv is not None:
+                data["GeVersion"] = _to_int_maybe(gv)
+
+            ind = data.get("IndicadorEnegia")
+            if ind is not None:
+                data["IndicadorEnegia"] = _to_float_maybe(ind)
+        return data
 
 
 class DivisionDTO(DivisionListDTO):
@@ -120,8 +166,9 @@ class DivisionDTO(DivisionListDTO):
     TipoPropiedadId: Optional[int] = None
     Superficie: Optional[float] = None
 
-    # —— PUNTO CLAVE: normalizamos Pisos y exponemos PisosTexto cuando no es número
+    # ⬇️ Campo conflictivo (viene a veces como string mezclado):
     Pisos: Optional[int] = None
+    # ⬇️ Guardamos el valor original cuando no era parseable:
     PisosTexto: Optional[str] = None
 
     TipoUsoId: Optional[int] = None
@@ -129,47 +176,32 @@ class DivisionDTO(DivisionListDTO):
 
     model_config = ConfigDict(from_attributes=True)
 
-    # ---------- Normalizadores tolerantes (evitan 500 por ResponseValidationError) ----------
+    # Normaliza y evita ResponseValidationError
     @model_validator(mode="before")
     @classmethod
-    def _normalize_fields(cls, data):
-        """
-        - Si 'Pisos' es string mixto (e.g. '-1,1,Entrepiso,7,8'), lo mueve a PisosTexto y deja Pisos=None.
-        - Convierte a int seguro: DireccionInmuebleId, IndicadorEE (si llegan como str).
-        """
+    def _normalize_detail(cls, data):
         if not isinstance(data, dict):
             return data
 
-        # Pisos -> entero o PisosTexto
-        raw = data.get("Pisos", None)
-        if raw is not None:
-            if isinstance(raw, int):
-                pass  # ok
-            elif isinstance(raw, float) and raw.is_integer():
-                data["Pisos"] = int(raw)
+        # Pisos: intenta a int; si no se puede, lo deja en PisosTexto y nulifica Pisos
+        raw_pisos = data.get("Pisos")
+        if raw_pisos is not None and not isinstance(raw_pisos, int):
+            parsed = _to_int_maybe(raw_pisos)
+            if parsed is None:
+                data["PisosTexto"] = str(raw_pisos)
+                data["Pisos"] = None
             else:
-                s = str(raw).strip()
-                if s.lstrip("+-").isdigit():  # numérico puro (con signo)
-                    data["Pisos"] = int(s)
-                else:
-                    data["PisosTexto"] = s
-                    data["Pisos"] = None
+                data["Pisos"] = parsed
+                data.setdefault("PisosTexto", None)
 
-        # casteos seguros a int para campos problemáticos
-        for key in ("DireccionInmuebleId", "IndicadorEE"):
-            v = data.get(key, None)
-            if v is None or isinstance(v, int):
-                continue
-            try:
-                s = str(v).strip()
-                if s == "" or s.lower() == "null":
-                    data[key] = None
-                elif s.lstrip("+-").isdigit():
-                    data[key] = int(s)
-                else:
-                    data[key] = None
-            except Exception:
-                data[key] = None
+        # Coherencia de otros campos que llegan como string
+        gv = data.get("GeVersion")
+        if gv is not None:
+            data["GeVersion"] = _to_int_maybe(gv)
+
+        ind = data.get("IndicadorEnegia")
+        if ind is not None:
+            data["IndicadorEnegia"] = _to_float_maybe(ind)
 
         return data
 
