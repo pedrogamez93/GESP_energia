@@ -26,25 +26,51 @@ from app.audit.context import current_request_meta
 log = logging.getLogger("uvicorn.error")
 logger = logging.getLogger("uvicorn.error")
 
+def _parse_origins(value) -> list[str]:
+    """
+    Acepta lista o string separado por comas desde settings.CORS_ORIGINS.
+    Normaliza y filtra vacíos.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(o).strip() for o in value if str(o).strip()]
+    # si es string: "http://a,http://b"
+    s = str(value).strip()
+    if not s:
+        return []
+    return [o.strip() for o in s.split(",") if o.strip()]
+
+# valores por defecto seguros
+_DEFAULT_ORIGINS = [
+    "http://localhost:4200",
+    "http://energia.metasoft-testing.com",
+    "https://energia.metasoft-testing.com",
+    "https://api-energia.metasoft-testing.com",
+]
+
+ALLOW_ORIGINS: list[str] = _DEFAULT_ORIGINS
+ALLOW_ORIGIN_REGEX: str | None = None
+
 try:
     from app.core.config import settings
-    ALLOW_ORIGINS = getattr(
-        settings,
-        "CORS_ORIGINS",
-        [
-            "http://localhost:4200",
-            "http://energia.metasoft-testing.com",
-            "https://energia.metasoft-testing.com",
-            "https://api-energia.metasoft-testing.com"
-        ],
-    )
-except Exception:
-    ALLOW_ORIGINS = [
-        "http://localhost:4200",
-        "http://energia.metasoft-testing.com",
-        "https://energia.metasoft-testing.com",
-        "https://api-energia.metasoft-testing.com"
-    ]
+
+    # 1) Lista/CSV de orígenes exactos
+    ALLOW_ORIGINS = _parse_origins(
+        getattr(settings, "CORS_ORIGINS", _DEFAULT_ORIGINS)
+    ) or _DEFAULT_ORIGINS
+
+    # 2) Patrón opcional con regex (por ejemplo: r"^https?://(localhost:4200|.*\.metasoft-testing\.com)$")
+    _regex = getattr(settings, "CORS_ORIGINS_REGEX", None)
+    if _regex:
+        ALLOW_ORIGIN_REGEX = str(_regex)
+
+except Exception as e:
+    logger.warning("CORS settings fallback por excepción: %r", e)
+    ALLOW_ORIGINS = _DEFAULT_ORIGINS
+    ALLOW_ORIGIN_REGEX = None
+
+logger.info("CORS configurado. allow_origins=%s allow_origin_regex=%s", ALLOW_ORIGINS, ALLOW_ORIGIN_REGEX)
 
 # ───────────────────────────────────────────────────────────────────────────────
 # OpenAPI tags
@@ -96,15 +122,21 @@ app = FastAPI(title="API GESP", version="1.0.0", openapi_tags=tags_metadata)
 app.add_middleware(ProxyHeadersMiddleware)
 
 # CORS (incluye OPTIONS/preflight y expone cabeceras de trazabilidad)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOW_ORIGINS,
+# Nota: Si defines ALLOW_ORIGIN_REGEX, Starlette usará el regex; de lo contrario usa la lista exacta.
+cors_kwargs = dict(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["x-request-id", "x-error-id", "content-disposition"],
     max_age=86400,
 )
+
+if ALLOW_ORIGIN_REGEX:
+    cors_kwargs["allow_origin_regex"] = ALLOW_ORIGIN_REGEX
+else:
+    cors_kwargs["allow_origins"] = ALLOW_ORIGINS
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 # ====== Auditoría: captura body en métodos de escritura, con redacción ======
 SENSITIVE_KEYS = {
