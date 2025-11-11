@@ -244,6 +244,7 @@ class CompraCreate(BaseModel):
     """
     Para crear: aceptamos string/date/datetime y normalizamos a datetime,
     pero al serializar de vuelta (si aplica) emitimos string.
+
     Reglas fuertes:
       - Consumo y Costo ≥ 0.
       - InicioLectura ≤ FinLectura.
@@ -251,6 +252,7 @@ class CompraCreate(BaseModel):
       - Si SinMedidor=false → debe haber Items y todos con MedidorId.
       - Si SinMedidor=true  → no debe venir MedidorId en Items.
       - Suma de Consumo de Items == Consumo total (si hay Items).
+      - 🔴 FacturaId es OBLIGATORIO (>0).  ← evita IntegrityError en SQL Server
     """
     Consumo: float
     InicioLectura: DateLike
@@ -259,6 +261,7 @@ class CompraCreate(BaseModel):
     EnergeticoId: int
     FechaCompra: DateLike
     Costo: float
+    # mantenemos Optional para no romper firmas previas, pero validamos que sea requerido
     FacturaId: Optional[int] = None
     NumeroClienteId: Optional[int] = None
     UnidadMedidaId: Optional[int] = None
@@ -326,11 +329,9 @@ class CompraCreate(BaseModel):
 
         # 4) Reglas de Items vs SinMedidor
         if self.SinMedidor:
-            # Si no se usarán medidores, no permitimos Items con MedidorId
             if any(it.MedidorId is not None for it in self.Items):
                 raise ValueError("SinMedidor=true: no debe enviarse MedidorId en Items")
         else:
-            # Con medidor: al menos un item y todos con MedidorId presente
             if len(self.Items) == 0:
                 raise ValueError("Debe incluir al menos un Item cuando SinMedidor=false")
             if any(it.MedidorId is None for it in self.Items):
@@ -341,6 +342,10 @@ class CompraCreate(BaseModel):
             suma_items = sum(float(it.Consumo or 0) for it in self.Items)
             if abs(float(self.Consumo) - suma_items) > 1e-6:
                 raise ValueError("La suma de Consumo en Items debe igualar el Consumo total")
+
+        # 6) 🔴 FacturaId requerido (>0)
+        if self.FacturaId is None or int(self.FacturaId) <= 0:
+            raise ValueError("FacturaId es obligatorio y debe ser > 0")
 
         return self
 
