@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
 DbDep = Annotated[Session, Depends(get_db)]
 svc = CompraService()
 
-_MAX_PAGE_SIZE = 100
+_MAX_PAGE_SIZE = 200
 
 
 def _clamp_page(n: int) -> int:
