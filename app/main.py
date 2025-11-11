@@ -257,35 +257,54 @@ async def attach_request_meta(request: Request, call_next):
 
         log.info("[AUTH-CHK] path=%s auth=%s", request.url.path, redact(auth))
 
-    # Captura body para auditoría en métodos de escritura
-    capture_body = request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in EXCLUDED_PATHS
+    # Captura body para auditoría en métodos de escritura,
+    # evitando romper uploads multipart/form-data.
+    capture_body = (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.url.path not in EXCLUDED_PATHS
+    )
     body_json_str = None
     body_hash = None
+
     if capture_body:
-        body_bytes = await request.body()
+        ctype_full = (request.headers.get("content-type") or "").lower()
+        ctype = ctype_full.split(";")[0].strip()
 
-        async def _receive():
-            return {"type": "http.request", "body": body_bytes, "more_body": False}
+        # ⛔️ NO leer cuerpo si es multipart (subidas de archivo) para no agotar el stream
+        if ctype.startswith("multipart/"):
+            body_json_str = None  # explícito: no capturamos
+        else:
+            # Solo leer para JSON o x-www-form-urlencoded
+            if ctype in ("application/json", "application/x-www-form-urlencoded"):
+                body_bytes = await request.body()
 
-        request._receive = _receive  # reinyecta el body al endpoint
-        if body_bytes:
-            sample = body_bytes[:MAX_BODY_LOG]
-            body_hash = sha256(body_bytes).hexdigest()
-            ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-            try:
-                if "application/json" in ctype:
-                    from json import loads, dumps
-                    parsed = loads(sample.decode("utf-8"))
-                    body_json_str = dumps(parsed, ensure_ascii=False)
-                elif "application/x-www-form-urlencoded" in ctype:
-                    parsed_raw = parse_qs(sample.decode("utf-8"))
-                    parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_raw.items()}
-                    from json import dumps
-                    body_json_str = dumps(parsed, ensure_ascii=False)
-                else:
-                    body_json_str = json.dumps({"_raw_preview": sample.decode("utf-8", errors="ignore")}, ensure_ascii=False)
-            except Exception:
-                body_json_str = json.dumps({"_raw_preview": sample.decode("utf-8", errors="ignore")}, ensure_ascii=False)
+                async def _receive():
+                    return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+                # reinyecta el body al endpoint
+                request._receive = _receive
+
+                if body_bytes:
+                    sample = body_bytes[:MAX_BODY_LOG]
+                    body_hash = sha256(body_bytes).hexdigest()
+                    try:
+                        if ctype == "application/json":
+                            from json import loads, dumps
+                            parsed = loads(sample.decode("utf-8"))
+                            body_json_str = dumps(parsed, ensure_ascii=False)
+                        else:  # application/x-www-form-urlencoded
+                            parsed_raw = parse_qs(sample.decode("utf-8"))
+                            parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_raw.items()}
+                            from json import dumps
+                            body_json_str = dumps(parsed, ensure_ascii=False)
+                    except Exception:
+                        body_json_str = json.dumps(
+                            {"_raw_preview": sample.decode("utf-8", errors="ignore")},
+                            ensure_ascii=False,
+                        )
+            else:
+                # Otros tipos (text/plain, etc.) → no capturamos contenido para evitar ruido
+                body_json_str = None
 
     meta["request_body_json"] = body_json_str
     meta["request_body_sha256"] = body_hash
