@@ -1,4 +1,3 @@
-# app/api/v1/divisiones.py
 from __future__ import annotations
 
 from typing import Annotated, List, Optional
@@ -38,7 +37,7 @@ def list_divisiones(
     db: DbDep,
     q: Optional[str] = Query(None, description="Busca en Dirección o Nombre (case-insensitive)"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(15, ge=1, le=200),   # ← aquí cambié el default de 50 a 15
+    page_size: int = Query(15, ge=1, le=200),   # default 15
     active: Optional[bool] = Query(True),
     ServicioId: Optional[int] = Query(None),
     RegionId: Optional[int] = Query(None),

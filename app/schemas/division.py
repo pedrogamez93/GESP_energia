@@ -1,13 +1,14 @@
 from __future__ import annotations
 from typing import Optional, List
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 # ---------- EXISTENTES (ajustados a Pydantic v2) ----------
 class DivisionSelectDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
+
 
 class DivisionListDTO(DivisionSelectDTO):
     Active: Optional[bool] = True
@@ -29,7 +30,7 @@ class DivisionListDTO(DivisionSelectDTO):
     NivelPaso3: Optional[int] = None
     Calle: Optional[str] = None
     Numero: Optional[str] = None
-    GeVersion: Optional[int] = None          # <-- corregido: llega como entero
+    GeVersion: Optional[int] = None          # llega como entero
     ParentId: Optional[int] = None
     TipoAdministracionId: Optional[int] = None
     TipoInmueble: Optional[int] = None
@@ -100,10 +101,11 @@ class DivisionListDTO(DivisionSelectDTO):
     MantColectores: Optional[bool] = None
     MantSfv: Optional[bool] = None
     CargaPosteriorT: Optional[bool] = None
-    IndicadorEnegia: Optional[float] = None  # <-- corregido: llega con decimal
+    IndicadorEnegia: Optional[float] = None  # llega con decimal
     ObsInexistenciaEyV: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
 
 class DivisionDTO(DivisionListDTO):
     CreatedAt: Optional[datetime] = None
@@ -117,16 +119,67 @@ class DivisionDTO(DivisionListDTO):
     TipoUnidadId: Optional[int] = None
     TipoPropiedadId: Optional[int] = None
     Superficie: Optional[float] = None
+
+    # —— PUNTO CLAVE: normalizamos Pisos y exponemos PisosTexto cuando no es número
     Pisos: Optional[int] = None
+    PisosTexto: Optional[str] = None
+
     TipoUsoId: Optional[int] = None
     NroRol: Optional[str] = None
+
     model_config = ConfigDict(from_attributes=True)
+
+    # ---------- Normalizadores tolerantes (evitan 500 por ResponseValidationError) ----------
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_fields(cls, data):
+        """
+        - Si 'Pisos' es string mixto (e.g. '-1,1,Entrepiso,7,8'), lo mueve a PisosTexto y deja Pisos=None.
+        - Convierte a int seguro: DireccionInmuebleId, IndicadorEE (si llegan como str).
+        """
+        if not isinstance(data, dict):
+            return data
+
+        # Pisos -> entero o PisosTexto
+        raw = data.get("Pisos", None)
+        if raw is not None:
+            if isinstance(raw, int):
+                pass  # ok
+            elif isinstance(raw, float) and raw.is_integer():
+                data["Pisos"] = int(raw)
+            else:
+                s = str(raw).strip()
+                if s.lstrip("+-").isdigit():  # numérico puro (con signo)
+                    data["Pisos"] = int(s)
+                else:
+                    data["PisosTexto"] = s
+                    data["Pisos"] = None
+
+        # casteos seguros a int para campos problemáticos
+        for key in ("DireccionInmuebleId", "IndicadorEE"):
+            v = data.get(key, None)
+            if v is None or isinstance(v, int):
+                continue
+            try:
+                s = str(v).strip()
+                if s == "" or s.lower() == "null":
+                    data[key] = None
+                elif s.lstrip("+-").isdigit():
+                    data[key] = int(s)
+                else:
+                    data[key] = None
+            except Exception:
+                data[key] = None
+
+        return data
+
 
 # ---------- NUEVOS: equivalentes a DTOs .NET ----------
 class ObservacionDTO(BaseModel):
     CheckObserva: bool
     Observacion: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
+
 
 class ReportaResiduosDTO(BaseModel):
     CheckReporta: bool
@@ -135,9 +188,11 @@ class ReportaResiduosDTO(BaseModel):
     JustificacionNoReciclados: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
+
 class ObservacionInexistenciaDTO(BaseModel):
     Observacion: str
     model_config = ConfigDict(from_attributes=True)
+
 
 class DivisionPatchDTO(BaseModel):
     NroRol: Optional[str] = None
@@ -159,16 +214,19 @@ class DivisionPatchDTO(BaseModel):
     UsaBidon: bool = False
     model_config = ConfigDict(from_attributes=True)
 
+
 class DivisionAniosDTO(BaseModel):
     Id: int
     AnioInicioGestionEnergetica: Optional[int] = None
     AnioInicioRestoItems: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
+
 class OkMessage(BaseModel):
     Ok: bool = True
     Message: str = "ok"
     model_config = ConfigDict(from_attributes=True)
+
 
 # ---------- NUEVO: page para listados ----------
 class DivisionPage(BaseModel):
