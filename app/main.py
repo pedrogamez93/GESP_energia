@@ -12,6 +12,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+from pydantic import ValidationError
 from sqlalchemy import text
 from starlette.responses import Response
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
@@ -162,6 +164,9 @@ def _redact_json(obj):
         return [_redact_json(v) for v in obj]
     return obj
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Exception Handlers (mejorados y JSON-seguros)
+# ───────────────────────────────────────────────────────────────────────────────
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     try:
@@ -170,11 +175,41 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     except Exception:
         body_preview = "<no-body-read>"
 
+    req_id = getattr(getattr(request, "state", None), "audit_meta", {}) or {}
+    req_id = req_id.get("request_id")
+
     logger.error(
-        "[422] %s %s\nBody: %s\nDetail: %s",
-        request.method, request.url.path, body_preview, exc.errors()
+        "[422] %s %s request_id=%s\nBody: %s\nDetail: %s",
+        request.method, request.url.path, req_id, body_preview, exc.errors()
     )
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder({"detail": exc.errors()}),
+        headers={"X-Request-Id": req_id or ""},
+    )
+
+@app.exception_handler(ValidationError)
+async def pyd_validation_exception_handler(request: Request, exc: ValidationError):
+    req_id = getattr(getattr(request, "state", None), "audit_meta", {}) or {}
+    req_id = req_id.get("request_id")
+    logger.error("[422] Pydantic ValidationError %s %s request_id=%s", request.method, request.url.path, req_id)
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder({"detail": exc.errors()}),
+        headers={"X-Request-Id": req_id or ""},
+    )
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    # Para ValueError de negocio (por ej., validaciones en model_validator)
+    req_id = getattr(getattr(request, "state", None), "audit_meta", {}) or {}
+    req_id = req_id.get("request_id")
+    logger.warning("[400] ValueError %s %s request_id=%s: %s", request.method, request.url.path, req_id, str(exc))
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+        headers={"X-Request-Id": req_id or ""},
+    )
 
 # 👉 Manejador global para devolver error_id y request_id
 @app.exception_handler(Exception)
@@ -194,6 +229,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         headers={"X-Error-Id": error_id, "X-Request-Id": request_id or ""},
     )
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Middleware de auditoría / request meta
+# ───────────────────────────────────────────────────────────────────────────────
 @app.middleware("http")
 async def attach_request_meta(request: Request, call_next):
     xff = request.headers.get("x-forwarded-for")
