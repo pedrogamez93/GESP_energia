@@ -13,6 +13,10 @@ from app.services.user_service import (
     soft_delete_user, toggle_active_user, change_password
 )
 
+# 👇 Import para control de roles (no cambia nada del resto)
+from app.core.security import require_roles
+from app.schemas.auth import UserPublic
+
 router = APIRouter(prefix="/api/v1/users", tags=["Users"])
 
 DbDep = Depends(get_db)
@@ -73,12 +77,20 @@ def partial_update(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Solo ADMIN puede cambiar la contraseña de otros usuarios
+# ─────────────────────────────────────────────────────────────────────────────
 @router.post("/{user_id}/password", response_model=UserOut)
 def update_password(
     user_id: Union[int, str],
     body: ChangePassword,
     db: Session = DbDep,
+    current_user: UserPublic = Depends(require_roles("ADMINISTRADOR")),  # ← control de acceso
 ):
+    """
+    Cambia la contraseña del usuario indicado.
+    Restringido a ADMINISTRADORES.
+    """
     try:
         return change_password(db, user_id, body.new_password)
     except ValueError as e:
@@ -116,3 +128,12 @@ def toggle_active(
         return toggle_active_user(db, user_id, enable)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+@router.post("/me/password", response_model=UserOut)
+def self_update_password(
+    body: ChangePassword,
+    db: Session = DbDep,
+    current_user: UserPublic = Depends(require_roles("ADMINISTRADOR", "USUARIO")),
+):
+    """El usuario autenticado cambia su propia contraseña."""
+    return change_password(db, current_user.id, body.new_password)
