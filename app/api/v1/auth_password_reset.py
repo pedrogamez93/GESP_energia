@@ -10,7 +10,6 @@ router = APIRouter(prefix="/api/v1/auth", tags=["Auth"])
 
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)):
-    # Siempre 200: evita enumeración de emails
     create_reset_token(db, payload.email, request.client.host if request.client else None)
     return {"detail": "Si el correo existe, enviaremos instrucciones para restablecer la contraseña."}
 
