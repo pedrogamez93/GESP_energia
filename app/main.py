@@ -396,7 +396,7 @@ from app.api.v1 import tipo_equipo_calefaccion_energeticos
 from app.api.v1 import division_sistemas_detalle
 from app.api.v1 import areas_unidades_router
 from app.api.v1.archivos import router as archivos_router
-from app.api.v1 import router as auht_password_reset
+from app.api.routes import auth_password_reset
 
 # Montaje
 app.include_router(debug.dbg)
@@ -450,4 +450,4 @@ app.include_router(division_sistemas_detalle.router)
 app.include_router(unidades_router)
 app.include_router(areas_unidades_router.router)
 app.include_router(archivos_router)
-app.include_router(auht_password_reset.router)
+app.include_router(auth_password_reset.router)
