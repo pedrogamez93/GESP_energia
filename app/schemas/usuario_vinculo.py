@@ -1,16 +1,35 @@
 from __future__ import annotations
 from typing import List, Optional
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, field_serializer
+
+from pydantic import BaseModel, ConfigDict, field_serializer, Field
+
 
 class IdsPayload(BaseModel):
-    Ids: List[int] = []
+    """
+    Payload usado en:
+      PUT /api/v1/usuarios/{user_id}/instituciones
+      PUT /api/v1/usuarios/{user_id}/servicios
+      PUT /api/v1/usuarios/{user_id}/divisiones
+      PUT /api/v1/usuarios/{user_id}/unidades
+
+    El front envía: { "ids": [1, 2, 3] }
+    Internamente sigues usando `Ids`.
+    """
+    Ids: List[int] = Field(default_factory=list, alias="ids")
+
+    # Permite poblar tanto por alias ("ids") como por nombre de campo ("Ids")
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
 
 def _ser_dt(v: Optional[datetime]) -> Optional[str]:
     if v is None:
         return None
     # ISO sin microsegundos
     return v.replace(microsecond=0).isoformat()
+
 
 class UserDetailFullDTO(BaseModel):
     # ====== columnas AspNetUsers ======
@@ -50,11 +69,12 @@ class UserDetailFullDTO(BaseModel):
     UpdatedAt: Optional[datetime] = None
 
     # ====== agregados (sets vinculados) ======
-    Roles: List[str] = []
-    InstitucionIds: List[int] = []
-    ServicioIds: List[int] = []
-    DivisionIds: List[int] = []
-    UnidadIds: List[int] = []
+    # Usamos default_factory para evitar mutables compartidos
+    Roles: List[str] = Field(default_factory=list)
+    InstitucionIds: List[int] = Field(default_factory=list)
+    ServicioIds: List[int] = Field(default_factory=list)
+    DivisionIds: List[int] = Field(default_factory=list)
+    UnidadIds: List[int] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
