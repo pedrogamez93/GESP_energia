@@ -72,14 +72,26 @@ def create_user(db: Session, data: UserCreate):
     if not (email_field and password_field):
         raise RuntimeError("Modelo User no define Email/PasswordHash.")
 
-    payload: dict = {email_field: data.email.strip().lower(),
-                     password_field: Hash.bcrypt(data.password)}
+    # Log de entrada (enmascarando password)
+    Log.info("[USER_SERVICE] Creando usuario con email=%s", data.email)
+    try:
+        debug_data = data.model_dump()
+    except Exception:
+        debug_data = {}
+    if "password" in debug_data:
+        debug_data["password"] = "***"
+    Log.debug("[USER_SERVICE] Payload recibido (DTO): %s", debug_data)
+
+    payload: dict = {
+        email_field: data.email.strip().lower(),
+        password_field: Hash.bcrypt(data.password),
+    }
 
     # Cargar extras si el modelo los tiene
     def put_if_model_has(field_name: str, value):
         if value is None:
             return
-        model_name = _resolve_name(User, field_name, field_name[:1].lower()+field_name[1:])
+        model_name = _resolve_name(User, field_name, field_name[:1].lower() + field_name[1:])
         if model_name:
             payload[model_name] = value
 
@@ -102,6 +114,12 @@ def create_user(db: Session, data: UserCreate):
     put_if_model_has("Validado", data.Validado)
     put_if_model_has("Active", True if data.Active is None else data.Active)
 
+    # Payload que va a DB (password enmascarado para debug)
+    debug_payload = payload.copy()
+    if password_field in debug_payload:
+        debug_payload[password_field] = "***"
+    Log.debug("[USER_SERVICE] Payload a persistir (User): %s", debug_payload)
+
     user = User(**payload)
     db.add(user)
 
@@ -109,10 +127,38 @@ def create_user(db: Session, data: UserCreate):
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        # Colisión de email u otra restricción
-        raise ValueError("No se pudo crear el usuario (posible email duplicado).") from e
+
+        # Log completo del error de integridad (incluye stacktrace)
+        Log.exception("[USER_SERVICE] IntegrityError al crear usuario")
+
+        # Mensaje base genérico
+        detail = "No se pudo crear el usuario."
+
+        # Intentar afinar el motivo según el mensaje del motor
+        msg = ""
+        if hasattr(e, "orig") and e.orig is not None:
+            msg = str(e.orig)
+        else:
+            msg = str(e)
+
+        msg_lower = msg.lower()
+
+        # Heurísticas típicas en MSSQL para UNIQUE / FK
+        if "unique" in msg_lower and "email" in msg_lower:
+            detail = "Ya existe un usuario con ese email."
+        elif "uq__aspnetus" in msg_lower:
+            detail = "Ya existe un usuario con ese email."
+        elif "foreign key" in msg_lower and "comuna" in msg_lower:
+            detail = "Comuna no válida (FK ComunaId)."
+        elif "foreign key" in msg_lower and "sexo" in msg_lower:
+            detail = "Sexo no válido (FK SexoId)."
+        # puedes seguir afinando condiciones acá si aparecen otros nombres de constraints
+
+        # Llevamos el mensaje hacia la capa API como ValueError
+        raise ValueError(detail) from e
 
     db.refresh(user)
+    Log.info("[USER_SERVICE] Usuario creado con Id=%s", getattr(user, "Id", None))
     return user
 
 def get_user_by_id(db: Session, user_id: Union[int, str]) -> Optional[User]:
@@ -126,12 +172,15 @@ def update_user(db: Session, user_id: Union[int, str], data: UserUpdate) -> User
     if not user:
         raise ValueError("Usuario no encontrado.")
 
+    Log.info("[USER_SERVICE] Actualizando usuario Id=%s", user_id)
+
     # Campos permitidos a actualizar (no email ni password aquí)
     payload: dict = {}
+
     def put_if_model_has(field_name: str, value):
         if value is None:
             return
-        model_name = _resolve_name(User, field_name, field_name[:1].lower()+field_name[1:])
+        model_name = _resolve_name(User, field_name, field_name[:1].lower() + field_name[1:])
         if model_name:
             payload[model_name] = value
 
@@ -152,6 +201,8 @@ def update_user(db: Session, user_id: Union[int, str], data: UserUpdate) -> User
     put_if_model_has("Validado", data.Validado)
     if data.Active is not None:
         put_if_model_has("Active", data.Active)
+
+    Log.debug("[USER_SERVICE] Campos a actualizar para Id=%s: %s", user_id, payload)
 
     for k, v in payload.items():
         setattr(user, k, v)
@@ -174,6 +225,8 @@ def change_password(db: Session, user_id: Union[int, str], new_password: str) ->
     if not password_field:
         raise RuntimeError("Modelo User no define PasswordHash.")
 
+    Log.info("[USER_SERVICE] Cambiando password de usuario Id=%s", user_id)
+
     setattr(user, password_field, Hash.bcrypt(new_password))
     db.add(user)
     db.commit()
@@ -190,6 +243,8 @@ def soft_delete_user(db: Session, user_id: Union[int, str]) -> User:
     if not active_field:
         raise RuntimeError("Modelo User no tiene columna Active para soft delete.")
 
+    Log.info("[USER_SERVICE] Soft delete usuario Id=%s", user_id)
+
     setattr(user, active_field, False)
     db.add(user)
     db.commit()
@@ -203,6 +258,8 @@ def toggle_active_user(db: Session, user_id: Union[int, str], enable: bool) -> U
     active_field = _resolve_name(User, "Active", "active")
     if not active_field:
         raise RuntimeError("Modelo User no tiene columna Active.")
+
+    Log.info("[USER_SERVICE] Toggle Active usuario Id=%s -> %s", user_id, enable)
 
     setattr(user, active_field, enable)
     db.add(user)

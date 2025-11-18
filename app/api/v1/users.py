@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Literal, Union
 from fastapi import APIRouter, Depends, Query, Path, HTTPException, status
 from sqlalchemy.orm import Session
@@ -20,6 +21,7 @@ from app.schemas.auth import UserPublic
 router = APIRouter(prefix="/api/v1/users", tags=["Users"])
 
 DbDep = Depends(get_db)
+Log = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints
@@ -27,10 +29,27 @@ DbDep = Depends(get_db)
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def create(user: UserCreate, db: Session = DbDep):
+    # Log de entrada (password enmascarado)
+    data = user.model_dump()
+    if "password" in data:
+        data["password"] = "***"
+    Log.info("[USERS_ROUTER] POST /users payload: %s", data)
+
     try:
-        return create_user(db, user)
+        resp = create_user(db, user)
+        Log.info("[USERS_ROUTER] Usuario creado OK (Id=%s)", getattr(resp, "Id", None))
+        return resp
     except ValueError as e:
+        # Errores de negocio esperados (email duplicado, FK inválida, etc.)
+        Log.warning("[USERS_ROUTER] Error de negocio al crear usuario: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Cualquier otra cosa inesperada
+        Log.exception("[USERS_ROUTER] Error inesperado al crear usuario")
+        raise HTTPException(
+            status_code=500,
+            detail="Error interno al crear usuario",
+        ) from e
 
 @router.get("", response_model=list[UserOut])
 def read_users(
