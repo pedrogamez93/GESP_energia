@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from uuid import uuid4
+from datetime import datetime
 from typing import Optional, Literal, Union
 
 from sqlalchemy.orm import Session
@@ -108,7 +109,6 @@ def create_user(db: Session, data: UserCreate):
     # ── UserName y normalizados estilo Identity ─────────────────────────────
     username_field = _resolve_name(User, "UserName", "username", "user_name")
     if username_field:
-        # Si algún día tienes campo username en el DTO, úsalo; por ahora usamos email
         username = email_norm
         payload[username_field] = username
 
@@ -132,7 +132,6 @@ def create_user(db: Session, data: UserCreate):
     if access_failed_field and access_failed_field not in payload:
         payload[access_failed_field] = 0
     if lockout_enabled_field and lockout_enabled_field not in payload:
-        # En muchos proyectos Identity viene en 1, pero lo dejamos True por defecto
         payload[lockout_enabled_field] = True
     if phone_confirmed_field and phone_confirmed_field not in payload:
         payload[phone_confirmed_field] = False
@@ -166,10 +165,15 @@ def create_user(db: Session, data: UserCreate):
     put_if_model_has("Validado", data.Validado)
     put_if_model_has("Active", True if data.Active is None else data.Active)
 
-    # Estos vienen del front en tu payload, los usamos si existen en el modelo:
+    # Estos vienen del front en tu payload
     put_if_model_has("InstitucionId", getattr(data, "InstitucionId", None))
     put_if_model_has("ServicioId", getattr(data, "ServicioId", None))
     put_if_model_has("TipoGestorId", getattr(data, "TipoGestorId", None))
+
+    # ── CreatedAt automático al momento del insert ──────────────────────────
+    created_at_field = _resolve_name(User, "CreatedAt", "created_at", "Created")
+    if created_at_field and created_at_field not in payload:
+        payload[created_at_field] = datetime.utcnow()
 
     # Payload que va a DB (password enmascarado para debug)
     debug_payload = payload.copy()
@@ -188,10 +192,8 @@ def create_user(db: Session, data: UserCreate):
         # Log completo del error de integridad (incluye stacktrace)
         Log.exception("[USER_SERVICE] IntegrityError al crear usuario")
 
-        # Mensaje base genérico
         detail = "No se pudo crear el usuario."
 
-        # Intentar afinar el motivo según el mensaje del motor
         msg = ""
         if hasattr(e, "orig") and e.orig is not None:
             msg = str(e.orig)
@@ -211,9 +213,7 @@ def create_user(db: Session, data: UserCreate):
             detail = "Sexo no válido (FK SexoId)."
         elif "cannot insert the value null into column 'id'" in msg_lower:
             detail = "Error al generar el Id del usuario."
-        # puedes seguir afinando condiciones acá si aparecen otros nombres de constraints
 
-        # Llevamos el mensaje hacia la capa API como ValueError
         raise ValueError(detail) from e
 
     db.refresh(user)
@@ -235,7 +235,6 @@ def update_user(db: Session, user_id: Union[int, str], data: UserUpdate) -> User
 
     Log.info("[USER_SERVICE] Actualizando usuario Id=%s", user_id)
 
-    # Campos permitidos a actualizar (no email ni password aquí)
     payload: dict = {}
 
     def put_if_model_has(field_name: str, value):
@@ -275,7 +274,6 @@ def update_user(db: Session, user_id: Union[int, str], data: UserUpdate) -> User
 
 
 def patch_user(db: Session, user_id: Union[int, str], data: UserPatch) -> User:
-    # Misma lógica que update (PATCH parcial)
     return update_user(db, user_id, data)
 
 
