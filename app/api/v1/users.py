@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Literal, Union
+
 from fastapi import APIRouter, Depends, Query, Path, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -13,8 +14,6 @@ from app.services.user_service import (
     create_user, get_users, get_user_by_id, update_user, patch_user,
     soft_delete_user, toggle_active_user, change_password
 )
-
-# 👇 Import para control de roles (no cambia nada del resto)
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 
@@ -40,16 +39,15 @@ def create(user: UserCreate, db: Session = DbDep):
         Log.info("[USERS_ROUTER] Usuario creado OK (Id=%s)", getattr(resp, "Id", None))
         return resp
     except ValueError as e:
-        # Errores de negocio esperados (email duplicado, FK inválida, etc.)
         Log.warning("[USERS_ROUTER] Error de negocio al crear usuario: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        # Cualquier otra cosa inesperada
         Log.exception("[USERS_ROUTER] Error inesperado al crear usuario")
         raise HTTPException(
             status_code=500,
             detail="Error interno al crear usuario",
         ) from e
+
 
 @router.get("", response_model=list[UserOut])
 def read_users(
@@ -64,6 +62,7 @@ def read_users(
 ):
     return get_users(db, skip=skip, limit=limit, sort_by=sort_by, sort_dir=sort_dir, status=status)
 
+
 @router.get("/{user_id}", response_model=UserOut)
 def read_user_by_id(
     user_id: Union[int, str] = Path(..., description="Id del usuario"),
@@ -73,6 +72,7 @@ def read_user_by_id(
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     return user
+
 
 @router.put("/{user_id}", response_model=UserOut)
 def update(
@@ -85,6 +85,7 @@ def update(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+
 @router.patch("/{user_id}", response_model=UserOut)
 def partial_update(
     user_id: Union[int, str],
@@ -96,15 +97,13 @@ def partial_update(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Solo ADMIN puede cambiar la contraseña de otros usuarios
-# ─────────────────────────────────────────────────────────────────────────────
+
 @router.post("/{user_id}/password", response_model=UserOut)
 def update_password(
     user_id: Union[int, str],
     body: ChangePassword,
     db: Session = DbDep,
-    current_user: UserPublic = Depends(require_roles("ADMINISTRADOR")),  # ← control de acceso
+    current_user: UserPublic = Depends(require_roles("ADMINISTRADOR")),
 ):
     """
     Cambia la contraseña del usuario indicado.
@@ -114,6 +113,7 @@ def update_password(
         return change_password(db, user_id, body.new_password)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
 
 @router.delete("/{user_id}", response_model=UserOut, status_code=status.HTTP_200_OK)
 def soft_delete(
@@ -127,6 +127,7 @@ def soft_delete(
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @router.post("/{user_id}/restore", response_model=UserOut)
 def restore_user(
     user_id: Union[int, str],
@@ -136,6 +137,7 @@ def restore_user(
         return toggle_active_user(db, user_id, True)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
 
 @router.post("/{user_id}/toggle", response_model=UserOut)
 def toggle_active(
@@ -147,6 +149,7 @@ def toggle_active(
         return toggle_active_user(db, user_id, enable)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
 
 @router.post("/me/password", response_model=UserOut)
 def self_update_password(
