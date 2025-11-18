@@ -7,7 +7,7 @@ from typing import Optional, Literal, Union
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import asc, desc, or_
+from sqlalchemy import asc, desc, or_, func
 
 from app.schemas.user import UserCreate, UserUpdate, UserPatch
 from app.db.models.user import User  # alias de AspNetUser
@@ -366,3 +366,23 @@ def get_users(
             q = q.filter(active_col == False)
 
     return q.order_by(order_expr).offset(skip).limit(limit).all()
+
+
+def count_users(
+    db: Session,
+    status: Literal["active", "inactive", "all"] = "active",
+) -> int:
+    """
+    Devuelve el total de usuarios según el mismo filtro de 'status'
+    que usa get_users.
+    """
+    q = db.query(func.count(_resolve_attr(User, "Id", "id")))
+
+    if hasattr(User, "Active"):
+        active_col = getattr(User, "Active")
+        if status == "active":
+            q = q.filter(or_(active_col == True, active_col.is_(None)))
+        elif status == "inactive":
+            q = q.filter(active_col == False)
+
+    return q.scalar() or 0

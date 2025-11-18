@@ -4,6 +4,7 @@ import logging
 from typing import Literal, Union
 
 from fastapi import APIRouter, Depends, Query, Path, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -12,7 +13,8 @@ from app.schemas.user import (
 )
 from app.services.user_service import (
     create_user, get_users, get_user_by_id, update_user, patch_user,
-    soft_delete_user, toggle_active_user, change_password
+    soft_delete_user, toggle_active_user, change_password,
+    count_users,
 )
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
@@ -21,6 +23,17 @@ router = APIRouter(prefix="/api/v1/users", tags=["Users"])
 
 DbDep = Depends(get_db)
 Log = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Schemas de respuesta
+# ─────────────────────────────────────────────────────────────────────────────
+
+class UsersListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[UserOut]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Endpoints
@@ -49,7 +62,7 @@ def create(user: UserCreate, db: Session = DbDep):
         ) from e
 
 
-@router.get("", response_model=list[UserOut])
+@router.get("", response_model=UsersListResponse)
 def read_users(
     db: Session = DbDep,
     skip: int = Query(0, ge=0, description="Registros a omitir"),
@@ -60,7 +73,33 @@ def read_users(
         "active", description="Filtrar por estado: active | inactive | all"
     ),
 ):
-    return get_users(db, skip=skip, limit=limit, sort_by=sort_by, sort_dir=sort_dir, status=status)
+    """
+    Lista de usuarios con paginación tipo:
+
+    {
+      "total": 7069,
+      "page": 1,
+      "page_size": 15,
+      "items": [ ... ]
+    }
+
+    Donde:
+      - page      = (skip / limit) + 1
+      - page_size = limit
+    """
+    items = get_users(db, skip=skip, limit=limit,
+                      sort_by=sort_by, sort_dir=sort_dir, status=status)
+    total = count_users(db, status=status)
+
+    page_size = limit
+    page = (skip // page_size) + 1 if page_size else 1
+
+    return UsersListResponse(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
 
 
 @router.get("/{user_id}", response_model=UserOut)
