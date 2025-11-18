@@ -26,6 +26,7 @@ class CurrentUser:
         self.id = id
         self.is_admin = is_admin
 
+
 def get_current_user() -> CurrentUser:
     return CurrentUser(id="system", is_admin=True)
 
@@ -81,6 +82,31 @@ def get_by_filter(
         InstitucionId=institucionId,
         ServicioId=servicioId,
         RegionId=regionId,
+    )
+    page = svc.list_filter(f, page=1, page_size=100000)
+    return [UnidadListDTO.model_validate(x) for x in page.data]
+
+
+# ────────────────────────────────────────────────
+# NUEVO: Unidades por Servicio (id en la ruta)
+# ────────────────────────────────────────────────
+@router.get("/por-servicio/{servicio_id}", response_model=List[UnidadListDTO])
+def list_unidades_by_servicio(
+    servicio_id: int,
+    db: Session = Depends(get_db),
+    me: CurrentUser = Depends(get_current_user),
+):
+    """
+    Retorna todas las unidades asociadas a un ServicioId dado.
+    No hay paginación, se devuelven todas las coincidencias.
+    """
+    svc = UnidadService(db, me.id, me.is_admin)
+    f = UnidadFilterDTO(
+        Unidad=None,
+        userId=None,
+        InstitucionId=None,
+        ServicioId=servicio_id,
+        RegionId=None,
     )
     page = svc.list_filter(f, page=1, page_size=100000)
     return [UnidadListDTO.model_validate(x) for x in page.data]
