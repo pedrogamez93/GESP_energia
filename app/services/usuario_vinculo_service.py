@@ -1,4 +1,3 @@
-# app/services/usuario_vinculo_service.py
 from __future__ import annotations
 from datetime import datetime
 import logging
@@ -125,14 +124,27 @@ class UsuarioVinculoService:
         return final_ids
 
     def set_unidades(self, db: Session, user_id: str, ids: list[int]) -> list[int]:
+        """
+        Reemplaza unidades vinculadas y además loguea explícitamente
+        lo que quedó en la tabla inmediatamente después del commit.
+        """
         self._ensure_user(db, user_id)
         norm_ids = self._normalize_ids(ids)
         Log.info("set_unidades user_id=%s raw_ids=%s norm_ids=%s", user_id, ids, norm_ids)
 
+        # borra vínculos previos
         db.execute(delete(UsuarioUnidad).where(UsuarioUnidad.UsuarioId == user_id))
+        # inserta nuevos
         for i in norm_ids:
             db.add(UsuarioUnidad(UsuarioId=user_id, UnidadId=i))
         db.commit()
+
+        # verificación post-commit directamente con SELECT
+        rows = db.execute(
+            select(UsuarioUnidad.UsuarioId, UsuarioUnidad.UnidadId)
+            .where(UsuarioUnidad.UsuarioId == user_id)
+        ).all()
+        Log.info("set_unidades user_id=%s rows_after_commit=%s", user_id, rows)
 
         final_ids = [r.UnidadId for r in db.query(UsuarioUnidad).filter_by(UsuarioId=user_id).all()]
         Log.info("set_unidades user_id=%s persisted_ids=%s", user_id, final_ids)

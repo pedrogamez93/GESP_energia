@@ -1,4 +1,3 @@
-# app/api/v1/usuarios.py
 from __future__ import annotations
 
 from typing import Annotated, List, Optional
@@ -6,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Body, Depends, Path, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.db.session import get_db
 from app.core.security import require_roles
@@ -13,6 +13,7 @@ from app.schemas.auth import UserPublic
 from app.schemas.usuario_vinculo import IdsPayload, UserDetailFullDTO
 from app.services.usuario_vinculo_service import UsuarioVinculoService
 from app.db.models.identity import AspNetUser
+from app.db.models.usuarios_unidades import UsuarioUnidad
 
 router = APIRouter(prefix="/api/v1/usuarios", tags=["Usuarios (admin)"])
 svc = UsuarioVinculoService()
@@ -74,6 +75,24 @@ def usuarios_index(
             "desactivar": "/api/v1/usuarios/{user_id}/desactivar",
         },
     }
+
+
+# ---------------- DEBUG: ver lo que el backend ve en UsuariosUnidades -----------
+@router.get(
+    "/{user_id}/debug-unidades",
+    summary="DEBUG: Unidades vinculadas según la BD que ve el backend",
+)
+def debug_unidades_usuario(
+    user_id: Annotated[str, Path(...)],
+    db: DbDep,
+    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    rows = db.execute(
+        select(UsuarioUnidad.UsuarioId, UsuarioUnidad.UnidadId)
+        .where(UsuarioUnidad.UsuarioId == user_id)
+    ).all()
+    Log.info("DEBUG-unidades user_id=%s rows=%s", user_id, rows)
+    return [{"UsuarioId": r[0], "UnidadId": r[1]} for r in rows]
 
 
 # ---------------- Detalle admin ----------------
