@@ -1,6 +1,7 @@
 # app/services/usuario_vinculo_service.py
 from __future__ import annotations
 from datetime import datetime
+import logging
 
 from sqlalchemy.orm import Session
 from sqlalchemy import delete, select
@@ -12,12 +13,15 @@ from app.db.models.usuarios_divisiones import UsuarioDivision
 from app.db.models.usuarios_unidades import UsuarioUnidad
 from app.db.models.usuarios_servicios import UsuarioServicio  # ya existe en tu proyecto
 
+Log = logging.getLogger(__name__)
+
 
 class UsuarioVinculoService:
     # --------- helpers ---------
     def _ensure_user(self, db: Session, user_id: str) -> AspNetUser:
         user = db.get(AspNetUser, user_id)
         if not user:
+            Log.warning("Usuario no encontrado en _ensure_user: %s", user_id)
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
         return user
 
@@ -28,11 +32,13 @@ class UsuarioVinculoService:
               .filter(AspNetUserRole.UserId == user_id)
               .order_by(AspNetRole.Name)
         )
-        return [r[0] for r in q.all()]
+        roles = [r[0] for r in q.all()]
+        Log.debug("Roles para usuario %s: %s", user_id, roles)
+        return roles
 
     # --------- detail ---------
     def get_detail(self, db: Session, user_id: str):
-        user = self._ensure_user(db, user_id)
+        self._ensure_user(db, user_id)
 
         inst_ids = [r[0] for r in db.execute(
             select(UsuarioInstitucion.InstitucionId).where(UsuarioInstitucion.UsuarioId == user_id)
@@ -52,40 +58,85 @@ class UsuarioVinculoService:
 
         roles = self._roles_by_user(db, user_id)
 
+        Log.debug(
+            "Detalle vínculos usuario %s -> inst=%s srv=%s div=%s uni=%s",
+            user_id, inst_ids, srv_ids, div_ids, uni_ids,
+        )
+
+        user = db.get(AspNetUser, user_id)
         return user, roles, inst_ids, srv_ids, div_ids, uni_ids
+
+    # --------- helpers para normalizar ids ---------
+    @staticmethod
+    def _normalize_ids(raw_ids: list[int] | None) -> list[int]:
+        """
+        Normaliza la lista de IDs:
+        - convierte a int
+        - filtra None y <= 0
+        - deduplica
+        - ordena para que sea más fácil de leer en los logs
+        """
+        if not raw_ids:
+            return []
+        norm = {int(i) for i in raw_ids if i is not None and int(i) > 0}
+        return sorted(norm)
 
     # --------- replace sets (borra todo y vuelve a insertar) ---------
     def set_instituciones(self, db: Session, user_id: str, ids: list[int]) -> list[int]:
         self._ensure_user(db, user_id)
+        norm_ids = self._normalize_ids(ids)
+        Log.info("set_instituciones user_id=%s raw_ids=%s norm_ids=%s", user_id, ids, norm_ids)
+
         db.execute(delete(UsuarioInstitucion).where(UsuarioInstitucion.UsuarioId == user_id))
-        for i in set(ids or []):
-            db.add(UsuarioInstitucion(UsuarioId=user_id, InstitucionId=int(i)))
+        for i in norm_ids:
+            db.add(UsuarioInstitucion(UsuarioId=user_id, InstitucionId=i))
         db.commit()
-        return [r.InstitucionId for r in db.query(UsuarioInstitucion).filter_by(UsuarioId=user_id).all()]
+
+        final_ids = [r.InstitucionId for r in db.query(UsuarioInstitucion).filter_by(UsuarioId=user_id).all()]
+        Log.info("set_instituciones user_id=%s persisted_ids=%s", user_id, final_ids)
+        return final_ids
 
     def set_servicios(self, db: Session, user_id: str, ids: list[int]) -> list[int]:
         self._ensure_user(db, user_id)
+        norm_ids = self._normalize_ids(ids)
+        Log.info("set_servicios user_id=%s raw_ids=%s norm_ids=%s", user_id, ids, norm_ids)
+
         db.execute(delete(UsuarioServicio).where(UsuarioServicio.UsuarioId == user_id))
-        for i in set(ids or []):
-            db.add(UsuarioServicio(UsuarioId=user_id, ServicioId=int(i)))
+        for i in norm_ids:
+            db.add(UsuarioServicio(UsuarioId=user_id, ServicioId=i))
         db.commit()
-        return [r.ServicioId for r in db.query(UsuarioServicio).filter_by(UsuarioId=user_id).all()]
+
+        final_ids = [r.ServicioId for r in db.query(UsuarioServicio).filter_by(UsuarioId=user_id).all()]
+        Log.info("set_servicios user_id=%s persisted_ids=%s", user_id, final_ids)
+        return final_ids
 
     def set_divisiones(self, db: Session, user_id: str, ids: list[int]) -> list[int]:
         self._ensure_user(db, user_id)
+        norm_ids = self._normalize_ids(ids)
+        Log.info("set_divisiones user_id=%s raw_ids=%s norm_ids=%s", user_id, ids, norm_ids)
+
         db.execute(delete(UsuarioDivision).where(UsuarioDivision.UsuarioId == user_id))
-        for i in set(ids or []):
-            db.add(UsuarioDivision(UsuarioId=user_id, DivisionId=int(i)))
+        for i in norm_ids:
+            db.add(UsuarioDivision(UsuarioId=user_id, DivisionId=i))
         db.commit()
-        return [r.DivisionId for r in db.query(UsuarioDivision).filter_by(UsuarioId=user_id).all()]
+
+        final_ids = [r.DivisionId for r in db.query(UsuarioDivision).filter_by(UsuarioId=user_id).all()]
+        Log.info("set_divisiones user_id=%s persisted_ids=%s", user_id, final_ids)
+        return final_ids
 
     def set_unidades(self, db: Session, user_id: str, ids: list[int]) -> list[int]:
         self._ensure_user(db, user_id)
+        norm_ids = self._normalize_ids(ids)
+        Log.info("set_unidades user_id=%s raw_ids=%s norm_ids=%s", user_id, ids, norm_ids)
+
         db.execute(delete(UsuarioUnidad).where(UsuarioUnidad.UsuarioId == user_id))
-        for i in set(ids or []):
-            db.add(UsuarioUnidad(UsuarioId=user_id, UnidadId=int(i)))
+        for i in norm_ids:
+            db.add(UsuarioUnidad(UsuarioId=user_id, UnidadId=i))
         db.commit()
-        return [r.UnidadId for r in db.query(UsuarioUnidad).filter_by(UsuarioId=user_id).all()]
+
+        final_ids = [r.UnidadId for r in db.query(UsuarioUnidad).filter_by(UsuarioId=user_id).all()]
+        Log.info("set_unidades user_id=%s persisted_ids=%s", user_id, final_ids)
+        return final_ids
 
     # --------- activar/desactivar ---------
     def set_active(self, db: Session, user_id: str, active: bool, actor_id: str | None = None) -> AspNetUser:
@@ -93,6 +144,7 @@ class UsuarioVinculoService:
 
         # Idempotente
         if user.Active is not None and bool(user.Active) == bool(active):
+            Log.info("set_active sin cambios para user_id=%s (estado ya era %s)", user_id, active)
             return user
 
         user.Active = bool(active)
@@ -100,8 +152,9 @@ class UsuarioVinculoService:
         user.ModifiedBy = actor_id
         db.commit()
         db.refresh(user)
+        Log.info("set_active user_id=%s active=%s actor_id=%s", user_id, active, actor_id)
         return user
-    
+
     def to_full_dto(
         self,
         user: AspNetUser,
@@ -158,4 +211,5 @@ class UsuarioVinculoService:
             "DivisionIds": div_ids or [],
             "UnidadIds": uni_ids or [],
         }
+        Log.debug("to_full_dto user_id=%s payload_keys=%s", user.Id, list(base.keys()))
         return base

@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import List, Optional
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, field_serializer, Field
+from pydantic import BaseModel, ConfigDict, field_serializer, Field, AliasChoices, field_validator
 
 
 class IdsPayload(BaseModel):
@@ -13,15 +13,39 @@ class IdsPayload(BaseModel):
       PUT /api/v1/usuarios/{user_id}/divisiones
       PUT /api/v1/usuarios/{user_id}/unidades
 
-    El front envía: { "ids": [1, 2, 3] }
-    Internamente sigues usando `Ids`.
-    """
-    Ids: List[int] = Field(default_factory=list, alias="ids")
+    El front puede enviar:
+      { "ids": [1, 2, 3] }
+    o
+      { "Ids": [1, 2, 3] }
 
-    # Permite poblar tanto por alias ("ids") como por nombre de campo ("Ids")
+    Internamente siempre trabajamos con el atributo `Ids`.
+    """
+
     model_config = ConfigDict(
         populate_by_name=True,
     )
+
+    # Acepta tanto "Ids" como "ids" en el JSON de entrada
+    Ids: List[int] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("Ids", "ids"),
+        serialization_alias="Ids",   # si quieres que al salir siempre se vea como "Ids"
+    )
+
+    @field_validator("Ids")
+    @classmethod
+    def _clean_ids(cls, v: List[int]) -> List[int]:
+        """
+        Normaliza la lista:
+        - castea a int
+        - filtra None y <= 0
+        - elimina duplicados
+        - ordena (solo para dejarlo más prolijo)
+        """
+        if not v:
+            return []
+        norm = {int(i) for i in v if i is not None and int(i) > 0}
+        return sorted(norm)
 
 
 def _ser_dt(v: Optional[datetime]) -> Optional[str]:
@@ -69,7 +93,6 @@ class UserDetailFullDTO(BaseModel):
     UpdatedAt: Optional[datetime] = None
 
     # ====== agregados (sets vinculados) ======
-    # Usamos default_factory para evitar mutables compartidos
     Roles: List[str] = Field(default_factory=list)
     InstitucionIds: List[int] = Field(default_factory=list)
     ServicioIds: List[int] = Field(default_factory=list)

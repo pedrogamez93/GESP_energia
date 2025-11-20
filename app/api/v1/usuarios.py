@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Annotated, List, Optional
+import logging
 
 from fastapi import APIRouter, Body, Depends, Path, Request
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from app.db.models.identity import AspNetUser
 router = APIRouter(prefix="/api/v1/usuarios", tags=["Usuarios (admin)"])
 svc = UsuarioVinculoService()
 DbDep = Annotated[Session, Depends(get_db)]
+Log = logging.getLogger(__name__)
 
 
 def _actor_id(current_user: UserPublic | None, request: Request | None) -> Optional[str]:
@@ -86,6 +88,10 @@ def get_user_detail(
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
+    Log.info(
+        "GET detalle usuario %s -> inst=%s srv=%s div=%s uni=%s",
+        user_id, inst_ids, srv_ids, div_ids, uni_ids,
+    )
     return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
 
 
@@ -101,7 +107,13 @@ def set_user_instituciones(
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
     payload: IdsPayload | None = Body(None),
 ):
+    Log.info(
+        "PUT instituciones user_id=%s raw_payload=%s",
+        user_id,
+        payload.model_dump(mode="python") if payload else None,
+    )
     ids = payload.Ids if payload else []
+    Log.info("PUT instituciones user_id=%s normalized_ids=%s", user_id, ids)
     return svc.set_instituciones(db, user_id, ids)
 
 
@@ -116,7 +128,13 @@ def set_user_servicios(
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
     payload: IdsPayload | None = Body(None),
 ):
+    Log.info(
+        "PUT servicios user_id=%s raw_payload=%s",
+        user_id,
+        payload.model_dump(mode="python") if payload else None,
+    )
     ids = payload.Ids if payload else []
+    Log.info("PUT servicios user_id=%s normalized_ids=%s", user_id, ids)
     return svc.set_servicios(db, user_id, ids)
 
 
@@ -131,7 +149,13 @@ def set_user_divisiones(
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
     payload: IdsPayload | None = Body(None),
 ):
+    Log.info(
+        "PUT divisiones user_id=%s raw_payload=%s",
+        user_id,
+        payload.model_dump(mode="python") if payload else None,
+    )
     ids = payload.Ids if payload else []
+    Log.info("PUT divisiones user_id=%s normalized_ids=%s", user_id, ids)
     return svc.set_divisiones(db, user_id, ids)
 
 
@@ -146,7 +170,13 @@ def set_user_unidades(
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
     payload: IdsPayload | None = Body(None),
 ):
+    Log.info(
+        "PUT unidades user_id=%s raw_payload=%s",
+        user_id,
+        payload.model_dump(mode="python") if payload else None,
+    )
     ids = payload.Ids if payload else []
+    Log.info("PUT unidades user_id=%s normalized_ids=%s", user_id, ids)
     return svc.set_unidades(db, user_id, ids)
 
 
@@ -163,6 +193,7 @@ def activar_usuario(
 ):
     svc.set_active(db, user_id, True, actor_id=_actor_id(current_user, request))
     user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
+    Log.info("PUT activar usuario %s", user_id)
     return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
 
 
@@ -179,4 +210,5 @@ def desactivar_usuario(
 ):
     svc.set_active(db, user_id, False, actor_id=_actor_id(current_user, request))
     user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
+    Log.info("PUT desactivar usuario %s", user_id)
     return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
