@@ -23,10 +23,27 @@ from app.audit import hooks  # registra listeners al boot
 from app.audit.context import current_request_meta
 
 # ───────────────────────────────────────────────────────────────────────────────
-# CORS
+# Logging global
 # ───────────────────────────────────────────────────────────────────────────────
+# Configura el root logger (si uvicorn ya configuró algo, basicConfig no rompe,
+# pero nos aseguramos de tener nivel INFO hacia abajo para nuestros módulos app.*)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+# Loggers que ya usabas
 log = logging.getLogger("uvicorn.error")
 logger = logging.getLogger("uvicorn.error")
+
+# Logger para nuestra aplicación (app.*), útil para ver logs de servicios
+app_logger = logging.getLogger("app")
+app_logger.setLevel(logging.INFO)
+app_logger.info("API GESP main module loaded (logging configurado)")
+
+# ───────────────────────────────────────────────────────────────────────────────
+# CORS
+# ───────────────────────────────────────────────────────────────────────────────
 
 def _parse_origins(value) -> list[str]:
     """
