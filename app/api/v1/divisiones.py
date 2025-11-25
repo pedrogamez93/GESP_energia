@@ -62,8 +62,9 @@ def select_divisiones(
     db: DbDep,
     q: Optional[str] = Query(None, description="Busca en Dirección"),
     ServicioId: Optional[int] = Query(None),
+    RegionId: Optional[int] = Query(None),
 ):
-    rows = svc.list_select(db, q, ServicioId)
+    rows = svc.list_select(db, q, ServicioId, RegionId)
     return [DivisionSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
 

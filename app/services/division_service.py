@@ -12,6 +12,8 @@ from app.db.models.area import Area
 from app.db.models.direccion import Direccion
 from app.db.models.division import Division
 from app.db.models.piso import Piso
+from app.db.models.edificio import Edificio
+from app.db.models.comuna import Comuna
 from app.db.models.usuarios_divisiones import UsuarioDivision
 from app.schemas.division import (
     DivisionAniosDTO,
@@ -411,16 +413,51 @@ class DivisionService:
             .all()
         )
 
-    def list_select(self, db: Session, q: Optional[str], servicio_id: int | None) -> List[tuple[int, str | None]]:
+    def list_select(
+        self,
+        db: Session,
+        q: Optional[str],
+        servicio_id: int | None,
+        region_id: int | None = None,
+    ) -> List[tuple[int, str | None]]:
+        """
+        Devuelve (Id, Nombre) para picker:
+        - Filtra por ServicioId si viene.
+        - Filtra por q en Dirección preferida.
+        - Opcionalmente filtra por RegionId usando Division -> Edificio -> Comuna.
+        """
         DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
-        qy = db.query(Division.Id, DirPref.label("Nombre")).outerjoin(
-            Direccion, Direccion.Id == Division.DireccionInmuebleId
+
+        qy = (
+            db.query(Division.Id, DirPref.label("Nombre"))
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
         )
+
+        # Filtro por servicio (lo que ya existía)
         if servicio_id is not None:
             qy = qy.filter(Division.ServicioId == servicio_id)
+
+        # 🔍 Nuevo: filtro opcional por región
+        # Usamos:
+        #   Division.RegionId  (si está seteada)
+        #   O bien la región de la comuna del edificio asociado
+        if region_id is not None:
+            qy = (
+                qy.outerjoin(Edificio, Edificio.Id == Division.EdificioId)
+                  .outerjoin(Comuna, Comuna.Id == Edificio.ComunaId)
+                  .filter(
+                      or_(
+                          Division.RegionId == region_id,
+                          Comuna.RegionId == region_id,
+                      )
+                  )
+            )
+
+        # Búsqueda por texto (igual que antes)
         if q:
             like = f"%{q}%"
             qy = qy.filter(DirPref.like(like))
+
         return qy.order_by(DirPref.asc(), Division.Id.asc()).all()
 
     # --------- Observaciones / flags ---------
