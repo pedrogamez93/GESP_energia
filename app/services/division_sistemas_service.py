@@ -5,24 +5,55 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.models.division import Division
 from app.db.models.tipo_luminaria import TipoLuminaria
 from app.db.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
-from app.db.models.tipo_equipo_calefaccion_energetico import TipoEquipoCalefaccionEnergetico
+from app.db.models.tipo_equipo_calefaccion_energetico import (
+    TipoEquipoCalefaccionEnergetico,
+)
 from app.db.models.energetico import Energetico
-from app.db.models.tipos_colectores import TipoColector  # ajusta el nombre si tu modelo se llama distinto
-
-from app.schemas.division_sistemas import DivisionSistemasDTO, DivisionSistemasUpdate
+from app.db.models.tipos_colectores import TipoColector  # clase que mapea a dbo.TiposColectores
 from app.services.division_service import DivisionService
 
 log = logging.getLogger("division_sistemas")
 
 
-def _now():
+def _now() -> datetime:
     return datetime.utcnow()
+
+
+# Campos de sistemas que vamos a exponer/editar
+_SYSTEM_FIELDS = {
+    # Iluminación
+    "TipoLuminariaId",
+    # Calefacción
+    "EquipoCalefaccionId",
+    "EnergeticoCalefaccionId",
+    "TempSeteoCalefaccionId",
+    # Refrigeración
+    "EquipoRefrigeracionId",
+    "EnergeticoRefrigeracionId",
+    "TempSeteoRefrigeracionId",
+    # ACS
+    "EquipoAcsId",
+    "EnergeticoAcsId",
+    "SistemaSolarTermico",
+    "ColectorId",
+    "SupColectores",
+    "FotoTecho",
+    "SupFotoTecho",
+    # Fotovoltaico
+    "InstTerSisFv",
+    "SupInstTerSisFv",
+    "ImpSisFv",
+    "SupImptSisFv",
+    "PotIns",
+    # Mantenciones
+    "MantColectores",
+    "MantSfv",
+}
 
 
 class DivisionSistemasService:
@@ -31,8 +62,8 @@ class DivisionSistemasService:
     - Iluminación (TipoLuminariaId)
     - Calefacción (EquipoCalefaccion*, EnergeticoCalefaccion*, TempSeteoCalefaccionId)
     - Refrigeración (EquipoRefrigeracion*, EnergeticoRefrigeracion*, TempSeteoRefrigeracionId)
-    - ACS (EquipoAcs*, EnergeticoAcsId, SistemaSolarTermico, ColectorId, SupColectores, FotoTecho, SupFotoTecho,
-           MantColectores)
+    - ACS (EquipoAcs*, EnergeticoAcsId, SistemaSolarTermico, ColectorId, SupColectores,
+           FotoTecho, SupFotoTecho, MantColectores)
     - Fotovoltaico (InstTerSisFv, SupInstTerSisFv, ImpSisFv, SupImptSisFv, PotIns, MantSfv)
     """
 
@@ -50,51 +81,22 @@ class DivisionSistemasService:
         return self._division_svc.get(db, division_id)
 
     # ------------------------------------------------------------------ #
-    # Mapear Division -> DivisionSistemasDTO (dict)
+    # Mapear Division -> dict compatible con DivisionSistemasDTO
     # ------------------------------------------------------------------ #
     def to_dto(self, d: Division) -> Dict[str, Any]:
         """
         Convierte la entidad Division a un dict compatible con DivisionSistemasDTO.
-        Usamos getattr para no romper si faltara algún campo en el modelo.
+        Usa getattr para no romper si faltara algún campo en el modelo.
         """
-        return {
-            "DivisionId": d.Id,
-
-            # Iluminación
-            "TipoLuminariaId": getattr(d, "TipoLuminariaId", None),
-
-            # Calefacción
-            "EquipoCalefaccionId": getattr(d, "EquipoCalefaccionId", None),
-            "EnergeticoCalefaccionId": getattr(d, "EnergeticoCalefaccionId", None),
-            "TempSeteoCalefaccionId": getattr(d, "TempSeteoCalefaccionId", None),
-
-            # Refrigeración
-            "EquipoRefrigeracionId": getattr(d, "EquipoRefrigeracionId", None),
-            "EnergeticoRefrigeracionId": getattr(d, "EnergeticoRefrigeracionId", None),
-            "TempSeteoRefrigeracionId": getattr(d, "TempSeteoRefrigeracionId", None),
-
-            # ACS
-            "EquipoAcsId": getattr(d, "EquipoAcsId", None),
-            "EnergeticoAcsId": getattr(d, "EnergeticoAcsId", None),
-            "SistemaSolarTermico": getattr(d, "SistemaSolarTermico", None),
-            "ColectorId": getattr(d, "ColectorId", None),
-            "SupColectores": getattr(d, "SupColectores", None),
-            "FotoTecho": getattr(d, "FotoTecho", None),
-            "SupFotoTecho": getattr(d, "SupFotoTecho", None),
-
-            # Fotovoltaico
-            "InstTerSisFv": getattr(d, "InstTerSisFv", None),
-            "SupInstTerSisFv": getattr(d, "SupInstTerSisFv", None),
-            "ImpSisFv": getattr(d, "ImpSisFv", None),
-            "SupImptSisFv": getattr(d, "SupImptSisFv", None),
-            "PotIns": getattr(d, "PotIns", None),
-
-            # Mantenciones
-            "MantColectores": getattr(d, "MantColectores", None),
-            "MantSfv": getattr(d, "MantSfv", None),
-
-            "Version": getattr(d, "Version", None),
+        data: Dict[str, Any] = {
+            "DivisionId": getattr(d, "Id", None),
         }
+
+        for field in _SYSTEM_FIELDS:
+            data[field] = getattr(d, field, None)
+
+        data["Version"] = getattr(d, "Version", None)
+        return data
 
     # ------------------------------------------------------------------ #
     # UPDATE parcial de los campos de sistemas
@@ -107,41 +109,22 @@ class DivisionSistemasService:
         user: Optional[str] = None,
     ) -> Division:
         """
-        Actualiza solo los campos de sistemas definidos en DivisionSistemasUpdate.
+        Actualiza solo los campos de sistemas definidos en _SYSTEM_FIELDS.
         `payload` ya viene filtrado con exclude_unset=True desde el router.
         """
         d = self.get(db, division_id)
 
-        # Campos que permitimos tocar desde este mantenedor
-        allowed_fields = {
-            "TipoLuminariaId",
-            "EquipoCalefaccionId",
-            "EnergeticoCalefaccionId",
-            "TempSeteoCalefaccionId",
-            "EquipoRefrigeracionId",
-            "EnergeticoRefrigeracionId",
-            "TempSeteoRefrigeracionId",
-            "EquipoAcsId",
-            "EnergeticoAcsId",
-            "SistemaSolarTermico",
-            "ColectorId",
-            "SupColectores",
-            "FotoTecho",
-            "SupFotoTecho",
-            "InstTerSisFv",
-            "SupInstTerSisFv",
-            "ImpSisFv",
-            "SupImptSisFv",
-            "PotIns",
-            "MantColectores",
-            "MantSfv",
-        }
-
         for k, v in payload.items():
-            if k in allowed_fields and hasattr(d, k):
-                setattr(d, k, v)
+            if k in _SYSTEM_FIELDS:
+                if hasattr(d, k):
+                    setattr(d, k, v)
+                else:
+                    log.debug(
+                        "DivisionSistemas.update: campo %r permitido pero no existe en modelo Division",
+                        k,
+                    )
             else:
-                # Ignoramos silenciosamente claves fuera de allowed_fields
+                # Ignoramos silenciosamente claves fuera de _SYSTEM_FIELDS
                 log.debug("DivisionSistemas.update: ignorando campo no permitido %r", k)
 
         now = _now()
@@ -170,6 +153,7 @@ class DivisionSistemasService:
         - tiposColectores
         - compatibilidadesEquiposEnergeticos: lista de relaciones Equipo ↔ Energético
         """
+
         # Luminarias
         luminarias: List[TipoLuminaria] = (
             db.query(TipoLuminaria)
@@ -177,7 +161,7 @@ class DivisionSistemasService:
             .all()
         )
 
-        # Equipos de calefacción/refrigeración/ACS (el mismo catálogo)
+        # Equipos de calefacción/refrigeración/ACS (mismo catálogo)
         equipos: List[TipoEquipoCalefaccion] = (
             db.query(TipoEquipoCalefaccion)
             .order_by(TipoEquipoCalefaccion.Nombre, TipoEquipoCalefaccion.Id)
@@ -191,7 +175,7 @@ class DivisionSistemasService:
             .all()
         )
 
-        # Colectores (ACS)
+        # Colectores (ACS / FV térmico, etc.)
         colectores: List[TipoColector] = (
             db.query(TipoColector)
             .order_by(TipoColector.Nombre, TipoColector.Id)
@@ -210,30 +194,37 @@ class DivisionSistemasService:
 
         def _simple(obj: Any, extra_fields: Optional[List[str]] = None) -> Dict[str, Any]:
             """
-            Convierte una entidad simple en un dict con al menos Id, Nombre, Active (si existe).
-            `extra_fields` permite agregar columnas opcionales como Codigo/Tipo.
+            Convierte una entidad simple en un dict con al menos Id y Nombre.
+            Si el modelo tiene Active u otros campos extra (Codigo, Tipo, etc.),
+            se agregan solo si existen en el modelo (para no romper la BD).
             """
             data: Dict[str, Any] = {
                 "Id": getattr(obj, "Id", None),
                 "Nombre": getattr(obj, "Nombre", None),
             }
-            if hasattr(obj, "Active"):
+
+            # Active solo si existe en el modelo (evita errores si la columna no está en la tabla)
+            if hasattr(obj.__class__, "Active"):
+                # OJO: esto NO fuerza carga desde DB si ya vino en la query;
+                # pero si el modelo no tiene columna Active, ni siquiera lo intentamos.
                 data["Active"] = getattr(obj, "Active", None)
+
             if extra_fields:
                 for f in extra_fields:
-                    if hasattr(obj, f):
-                        data[f] = getattr(obj, f)
+                    if hasattr(obj.__class__, f):
+                        data[f] = getattr(obj, f, None)
+
             return data
 
         return {
             "tiposLuminarias": [_simple(l) for l in luminarias],
             "tiposEquiposCalefaccion": [
-                # Si tu modelo tiene columna Codigo/Tipo/FR/ACS, la exponemos:
+                # Si tu modelo tiene columna Codigo/Tipo, la exponemos:
                 _simple(e, extra_fields=["Codigo", "Tipo"])
                 for e in equipos
             ],
             "energeticos": [_simple(en) for en in energeticos],
-            "tiposColectores": [_simple(c) for c in colectores],
+            "tiposColectores": [_simple(c, extra_fields=["Tipo"]) for c in colectores],
             "compatibilidadesEquiposEnergeticos": [
                 {
                     "Id": r.Id,
