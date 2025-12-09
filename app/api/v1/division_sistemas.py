@@ -1,7 +1,8 @@
+# app/api/v1/division_sistemas.py
 from __future__ import annotations
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Depends, Path
 from sqlalchemy.orm import Session
 
 from app.dependencies.db import get_db
@@ -18,29 +19,34 @@ svc = DivisionSistemasService()
 @router.get(
     "/{division_id}/sistemas",
     response_model=DivisionSistemasDTO,
-    summary="Obtener configuración de sistemas para una División"
+    summary="Obtener configuración de sistemas para una División",
 )
 def get_division_sistemas(
     division_id: Annotated[int, Path(..., ge=1)],
     db: Session = Depends(get_db),
 ):
     div = svc.get(db, division_id)
-    return DivisionSistemasDTO(**svc.to_dto(div))
+    return svc.to_dto(div)
 
 
 @router.put(
     "/{division_id}/sistemas",
     response_model=DivisionSistemasDTO,
-    summary="Actualizar configuración de sistemas para una División"
+    summary="Actualizar configuración de sistemas para una División",
 )
 def put_division_sistemas(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: DivisionSistemasUpdate,
     db: Session = Depends(get_db),
-    u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))] = None,  # ajusta roles si corresponde
+    u: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))] = None,
 ):
-    updated = svc.update(db, division_id, payload.model_dump(exclude_unset=True), user=getattr(u, "Username", None) if u else None)
-    return DivisionSistemasDTO(**svc.to_dto(updated))
+    updated = svc.update(
+        db,
+        division_id,
+        payload=payload.model_dump(exclude_unset=True),
+        user=getattr(u, "Username", None) if u else None,
+    )
+    return svc.to_dto(updated)
 
 
 @router.get(
@@ -51,5 +57,4 @@ def get_division_sistemas_catalogs(
     division_id: Annotated[int, Path(..., ge=1)],
     db: Session = Depends(get_db),
 ):
-    # no usamos division_id para filtrar catálogos, pero dejamos la ruta contextual
     return svc.catalogs(db)
