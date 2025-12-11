@@ -16,7 +16,8 @@ from app.services.sistemas_mantenedores_service import SistemasMantenedoresServi
 
 
 DbDep = Annotated[Session, Depends(get_db)]
-CurrentAdmin = Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
+# Cualquier usuario logueado (sin restricción de rol)
+CurrentUser = Annotated[UserPublic, Depends(require_roles())]
 
 router = APIRouter(
     prefix="/api/v1/sistemas",
@@ -35,11 +36,11 @@ router = APIRouter(
 )
 def get_refrigeracion_catalogos(
     db: DbDep,
-    current_user: CurrentAdmin,
+    current_user: CurrentUser,
 ) -> RefrigeracionCatalogosDTO:
     svc = SistemasMantenedoresService(db)
     data = svc.catalogos_refrigeracion()
-    # data ya es un dict con listas de ORM; Pydantic las convierte usando from_attributes=True
+    # data es un dict; Pydantic lo adapta al DTO
     return RefrigeracionCatalogosDTO.model_validate(data)
 
 
@@ -54,7 +55,7 @@ def get_refrigeracion_catalogos(
 )
 def get_acs_catalogos(
     db: DbDep,
-    current_user: CurrentAdmin,
+    current_user: CurrentUser,
 ) -> ACSCatalogosDTO:
     svc = SistemasMantenedoresService(db)
     data = svc.catalogos_acs()
