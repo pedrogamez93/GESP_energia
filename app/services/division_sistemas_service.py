@@ -234,3 +234,165 @@ class DivisionSistemasService:
                 for r in rels
             ],
         }
+
+
+    # ------------------------------------------------------------------ #
+    # Catálogos específicos para mantenedores (Refrigeración y ACS)
+    # ------------------------------------------------------------------ #
+    def refrigeracion_catalogos(self, db: Session) -> Dict[str, Any]:
+        """
+        Catálogos para el mantenedor de Sistema de Refrigeración.
+        - Equipos de refrigeración (TipoEquipoCalefaccion.Tipo == 'FR')
+        - Energéticos compatibles por equipo (tabla puente)
+        - Temperaturas de seteo fijas (22, 23, 24)
+        """
+        # 1) Equipos marcados como FR (frío)
+        equipos_fr: List[TipoEquipoCalefaccion] = (
+            db.query(TipoEquipoCalefaccion)
+            .filter(
+                getattr(TipoEquipoCalefaccion, "Tipo") == "FR"
+            )
+            .order_by(TipoEquipoCalefaccion.Nombre, TipoEquipoCalefaccion.Id)
+            .all()
+        )
+
+        # 2) Energéticos (los usamos para armar diccionario por Id)
+        energeticos: List[Energetico] = (
+            db.query(Energetico)
+            .order_by(Energetico.Nombre, Energetico.Id)
+            .all()
+        )
+        energetico_by_id: Dict[int, Dict[str, Any]] = {
+            e.Id: {"id": e.Id, "nombre": e.Nombre}
+            for e in energeticos
+        }
+
+        # 3) Relaciones Equipo ↔ Energético solo para equipos FR
+        ids_equipos_fr = [e.Id for e in equipos_fr] or [-1]
+        rels: List[TipoEquipoCalefaccionEnergetico] = (
+            db.query(TipoEquipoCalefaccionEnergetico)
+            .filter(
+                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId.in_(ids_equipos_fr)
+            )
+            .order_by(
+                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId,
+                TipoEquipoCalefaccionEnergetico.EnergeticoId,
+            )
+            .all()
+        )
+
+        # 4) Armamos salida: cada equipo con su lista de energéticos
+        equipos_out: List[Dict[str, Any]] = []
+        for eq in equipos_fr:
+            eq_rels = [
+                r for r in rels
+                if r.TipoEquipoCalefaccionId == eq.Id
+            ]
+            eq_energeticos = [
+                energetico_by_id[r.EnergeticoId]
+                for r in eq_rels
+                if r.EnergeticoId in energetico_by_id
+            ]
+
+            equipos_out.append(
+                {
+                    "id": eq.Id,
+                    "nombre": eq.Nombre,
+                    "tipo": getattr(eq, "Tipo", None),
+                    "active": getattr(eq, "Active", None),
+                    "energeticos": eq_energeticos,
+                }
+            )
+
+        # Temperaturas de seteo: fijas (las que ya usas en el sistema viejo)
+        temperaturas_seteo = [22, 23, 24]
+
+        return {
+            "equipos": equipos_out,
+            "temperaturasSeteo": temperaturas_seteo,
+        }
+
+    def acs_catalogos(self, db: Session) -> Dict[str, Any]:
+        """
+        Catálogos para el mantenedor de Agua Caliente Sanitaria (ACS).
+        - Equipos ACS (TipoEquipoCalefaccion.Tipo == 'AC')
+        - Energéticos compatibles por equipo
+        - Tipos de colectores solares (TipoColector)
+        """
+        # 1) Equipos marcados como AC (ACS)
+        equipos_ac: List[TipoEquipoCalefaccion] = (
+            db.query(TipoEquipoCalefaccion)
+            .filter(
+                getattr(TipoEquipoCalefaccion, "Tipo") == "AC"
+            )
+            .order_by(TipoEquipoCalefaccion.Nombre, TipoEquipoCalefaccion.Id)
+            .all()
+        )
+
+        # 2) Energéticos
+        energeticos: List[Energetico] = (
+            db.query(Energetico)
+            .order_by(Energetico.Nombre, Energetico.Id)
+            .all()
+        )
+        energetico_by_id: Dict[int, Dict[str, Any]] = {
+            e.Id: {"id": e.Id, "nombre": e.Nombre}
+            for e in energeticos
+        }
+
+        # 3) Relaciones Equipo ↔ Energético solo para equipos AC
+        ids_equipos_ac = [e.Id for e in equipos_ac] or [-1]
+        rels: List[TipoEquipoCalefaccionEnergetico] = (
+            db.query(TipoEquipoCalefaccionEnergetico)
+            .filter(
+                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId.in_(ids_equipos_ac)
+            )
+            .order_by(
+                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId,
+                TipoEquipoCalefaccionEnergetico.EnergeticoId,
+            )
+            .all()
+        )
+
+        equipos_out: List[Dict[str, Any]] = []
+        for eq in equipos_ac:
+            eq_rels = [
+                r for r in rels
+                if r.TipoEquipoCalefaccionId == eq.Id
+            ]
+            eq_energeticos = [
+                energetico_by_id[r.EnergeticoId]
+                for r in eq_rels
+                if r.EnergeticoId in energetico_by_id
+            ]
+
+            equipos_out.append(
+                {
+                    "id": eq.Id,
+                    "nombre": eq.Nombre,
+                    "tipo": getattr(eq, "Tipo", None),
+                    "active": getattr(eq, "Active", None),
+                    "energeticos": eq_energeticos,
+                }
+            )
+
+        # 4) Colectores solares térmicos
+        colectores: List[TipoColector] = (
+            db.query(TipoColector)
+            .order_by(TipoColector.Nombre, TipoColector.Id)
+            .all()
+        )
+        colectores_out = [
+            {
+                "id": c.Id,
+                "nombre": c.Nombre,
+                "tipo": getattr(c, "Tipo", None),
+                "active": getattr(c, "Active", None),
+            }
+            for c in colectores
+        ]
+
+        return {
+            "equipos": equipos_out,
+            "colectores": colectores_out,
+        }
