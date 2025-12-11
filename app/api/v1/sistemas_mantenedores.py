@@ -1,10 +1,10 @@
-
+# app/api/v1/sistemas_mantenedores.py
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-
-from app.api.deps import get_db, get_current_active_user
+# 👇 Usa exactamente las mismas dependencias que usas en otros routers
+from app.db.session  import get_db, get_current_active_user
 
 from app.services.division_sistemas_service import DivisionSistemasService
 
