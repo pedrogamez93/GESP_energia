@@ -5,23 +5,24 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.models.division import Division
+
 from app.db.models.tipo_luminaria import TipoLuminaria
 from app.db.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
-from app.db.models.tipo_equipo_calefaccion_energetico import (
-    TipoEquipoCalefaccionEnergetico,
-)
+from app.db.models.tipo_equipo_calefaccion_energetico import TipoEquipoCalefaccionEnergetico
 from app.db.models.energetico import Energetico
-from app.db.models.tipo_colector import TipoColector  # clase que mapea a dbo.TiposColectores
+from app.db.models.tipo_colector import TipoColector  
+
+from app.schemas.division_sistemas import DivisionSistemasDTO, DivisionSistemasUpdate
 from app.services.division_service import DivisionService
 
 log = logging.getLogger("division_sistemas")
 
-
-def _now() -> datetime:
+def _now():
     return datetime.utcnow()
+
 
 
 # Campos de sistemas que vamos a exponer/editar
