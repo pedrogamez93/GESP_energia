@@ -423,7 +423,7 @@ class DivisionService:
         """
         Devuelve (Id, Nombre) para picker:
         - Filtra por ServicioId si viene.
-        - Filtra por q en Dirección preferida.
+        - Filtra por q en Dirección preferida **o Nombre**.
         - Opcionalmente filtra por RegionId usando Division -> Edificio -> Comuna.
         """
         DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
@@ -437,10 +437,7 @@ class DivisionService:
         if servicio_id is not None:
             qy = qy.filter(Division.ServicioId == servicio_id)
 
-        # 🔍 Nuevo: filtro opcional por región
-        # Usamos:
-        #   Division.RegionId  (si está seteada)
-        #   O bien la región de la comuna del edificio asociado
+        # 🔍 Filtro opcional por región (igual que ya tenías)
         if region_id is not None:
             qy = (
                 qy.outerjoin(Edificio, Edificio.Id == Division.EdificioId)
@@ -453,10 +450,15 @@ class DivisionService:
                   )
             )
 
-        # Búsqueda por texto (igual que antes)
+        # 🔍 Búsqueda por texto: ahora Dirección **o Nombre**
         if q:
             like = f"%{q}%"
-            qy = qy.filter(DirPref.like(like))
+            qy = qy.filter(
+                or_(
+                    DirPref.like(like),
+                    func.coalesce(Division.Nombre, "").like(like),
+                )
+            )
 
         return qy.order_by(DirPref.asc(), Division.Id.asc()).all()
 

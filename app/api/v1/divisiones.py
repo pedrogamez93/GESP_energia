@@ -60,7 +60,7 @@ def list_divisiones(
 @router.get("/select", response_model=List[DivisionSelectDTO], summary="(picker) Id/Dirección")
 def select_divisiones(
     db: DbDep,
-    q: Optional[str] = Query(None, description="Busca en Dirección"),
+    q: Optional[str] = Query(None, description="Busca en Dirección o Nombre"),
     ServicioId: Optional[int] = Query(None),
     RegionId: Optional[int] = Query(None),
 ):
