@@ -1,35 +1,47 @@
 # app/api/v1/sistemas_mantenedores.py
 
+from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-# 👇 Usa exactamente las mismas dependencias que usas en otros routers
-from app.db.session  import get_db, get_current_active_user
-
+from app.db.session import get_db
 from app.services.division_sistemas_service import DivisionSistemasService
 
-router = APIRouter(tags=["Sistemas - Mantenedores"])
+DbDep = Annotated[Session, Depends(get_db)]
+
+router = APIRouter(
+    prefix="/api/v1/sistemas",
+    tags=["Sistemas - Mantenedores"],
+)
 
 svc = DivisionSistemasService()
 
 
-@router.get("/sistemas/refrigeracion/catalogos")
+@router.get(
+    "/refrigeracion/catalogos",
+    summary="Catálogos para el mantenedor de Sistema de Refrigeración",
+)
 def get_refrigeracion_catalogos(
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_active_user),
+    db: DbDep,
 ):
     """
-    Catálogos para el mantenedor de Sistema de Refrigeración.
+    Devuelve:
+    - equipos de refrigeración (solo FR) con sus energéticos compatibles
+    - temperaturas de seteo fijas (22, 23, 24)
     """
     return svc.refrigeracion_catalogos(db)
 
 
-@router.get("/sistemas/acs/catalogos")
+@router.get(
+    "/acs/catalogos",
+    summary="Catálogos para el mantenedor de Agua Caliente Sanitaria (ACS)",
+)
 def get_acs_catalogos(
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_active_user),
+    db: DbDep,
 ):
     """
-    Catálogos para el mantenedor de Agua Caliente Sanitaria (ACS).
+    Devuelve:
+    - equipos ACS (solo AC) con sus energéticos compatibles
+    - tipos de colectores solares térmicos
     """
     return svc.acs_catalogos(db)
