@@ -14,7 +14,7 @@ from app.db.models.tipo_equipo_calefaccion_energetico import (
     TipoEquipoCalefaccionEnergetico,
 )
 from app.db.models.energetico import Energetico
-from app.db.models.tipos_colectores import TipoColector  # clase que mapea a dbo.TiposColectores
+from app.db.models.tipo_colector import TipoColector  # clase que mapea a dbo.TiposColectores
 from app.services.division_service import DivisionService
 
 log = logging.getLogger("division_sistemas")
