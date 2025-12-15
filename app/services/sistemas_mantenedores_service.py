@@ -1,127 +1,230 @@
 # app/services/sistemas_mantenedores_service.py
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
+
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
-from app.db.models.tipo_equipo_calefaccion_energetico import (
-    TipoEquipoCalefaccionEnergetico,
-)
+from app.db.models.tipo_equipo_calefaccion_energetico import TipoEquipoCalefaccionEnergetico
 from app.db.models.energetico import Energetico
-from app.db.models.tipo_colector import TipoColector
+from app.db.models.tipos_colectores import TipoColector
 
 
 class SistemasMantenedoresService:
     """
-    Catálogos globales para los mantenedores de:
+    Lógica para los mantenedores de:
     - Sistema de Refrigeración
     - Agua Caliente Sanitaria (ACS)
-
-    **OJO**: aquí NO se toca Division ni se usan los campos
-    EquipoRefrigeracionId / EquipoAcsId, etc. Son sólo catálogos.
     """
 
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    # ----------------- REFRIGERACIÓN ----------------- #
+    # ------------------------------------------------------------------
+    # Helpers internos
+    # ------------------------------------------------------------------
+    def _get_tipo_equipo(self, tipo_equipo_id: int) -> TipoEquipoCalefaccion:
+        obj = self.db.get(TipoEquipoCalefaccion, tipo_equipo_id)
+        if not obj:
+            raise HTTPException(status_code=404, detail="Tipo de equipo no encontrado")
+        return obj
+
+    def _get_rel(self, rel_id: int) -> TipoEquipoCalefaccionEnergetico:
+        obj = self.db.get(TipoEquipoCalefaccionEnergetico, rel_id)
+        if not obj:
+            raise HTTPException(
+                status_code=404,
+                detail="Compatibilidad equipo-energético no encontrada",
+            )
+        return obj
+
+    # ------------------------------------------------------------------
+    # Catálogos de lectura
+    # ------------------------------------------------------------------
     def catalogos_refrigeracion(self) -> Dict[str, Any]:
         """
         Devuelve:
-        - equiposRefrigeracion: lista de equipos marcados como FR (si existe el flag),
-          si no existe el flag, devuelve todos.
-        - energeticos: catálogo completo de energéticos.
-        - compatibilidades: relaciones Equipo↔Energético (sólo para equipos FR si el flag existe).
-        - temperaturasSeteo: lista fija [22, 23, 24].
+        - equipos con flag FR = true
+        - todos los energéticos
+        - compatibilidades equipo↔energético
+        - temperaturas fijas [22, 23, 24]
         """
-
-        # Intentamos filtrar por flag FR si existe en el modelo
-        flag_fr = getattr(TipoEquipoCalefaccion, "FR", None)
-        q_equipos = self.db.query(TipoEquipoCalefaccion)
-        if flag_fr is not None:
-            q_equipos = q_equipos.filter(flag_fr == True)  # noqa: E712
-
-        equipos: List[TipoEquipoCalefaccion] = (
-            q_equipos.order_by(TipoEquipoCalefaccion.Nombre, TipoEquipoCalefaccion.Id).all()
-        )
-
-        # Energéticos completos (si quieres luego filtras en front)
-        energeticos: List[Energetico] = (
-            self.db.query(Energetico)
-            .order_by(Energetico.Nombre, Energetico.Id)
+        equipos = (
+            self.db.query(TipoEquipoCalefaccion)
+            .filter(getattr(TipoEquipoCalefaccion, "FR") == True)  # noqa: E712
+            .order_by(TipoEquipoCalefaccion.Nombre)
             .all()
         )
 
-        # Compatibilidades Equipo↔Energético
-        q_rels = (
-            self.db.query(TipoEquipoCalefaccionEnergetico)
-            .join(
-                TipoEquipoCalefaccion,
-                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId
-                == TipoEquipoCalefaccion.Id,
-            )
+        energeticos = (
+            self.db.query(Energetico)
+            .order_by(Energetico.Nombre)
+            .all()
         )
-        if flag_fr is not None:
-            q_rels = q_rels.filter(flag_fr == True)  # noqa: E712
 
-        rels: List[TipoEquipoCalefaccionEnergetico] = q_rels.all()
+        compat = (
+            self.db.query(TipoEquipoCalefaccionEnergetico)
+            .order_by(
+                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId,
+                TipoEquipoCalefaccionEnergetico.EnergeticoId,
+            )
+            .all()
+        )
 
         return {
-            "equiposRefrigeracion": equipos,
+            "equipos": equipos,
             "energeticos": energeticos,
-            "compatibilidades": rels,
-            "temperaturasSeteo": [22, 23, 24],
+            "compatibilidades": compat,
+            "temperaturas": [22, 23, 24],
         }
 
-    # ----------------- ACS ----------------- #
     def catalogos_acs(self) -> Dict[str, Any]:
         """
         Devuelve:
-        - equiposAcs: lista de equipos marcados como AC (si existe el flag),
-          si no existe el flag, devuelve todos.
-        - energeticos: catálogo completo de energéticos.
-        - compatibilidades: relaciones Equipo↔Energético (sólo equipos AC si el flag existe).
-        - tiposColectores: catálogo de tipos de colectores.
+        - equipos con flag AC = true
+        - todos los energéticos
+        - compatibilidades equipo↔energético
+        - colectores solares
         """
-
-        flag_ac = getattr(TipoEquipoCalefaccion, "AC", None)
-        q_equipos = self.db.query(TipoEquipoCalefaccion)
-        if flag_ac is not None:
-            q_equipos = q_equipos.filter(flag_ac == True)  # noqa: E712
-
-        equipos: List[TipoEquipoCalefaccion] = (
-            q_equipos.order_by(TipoEquipoCalefaccion.Nombre, TipoEquipoCalefaccion.Id).all()
-        )
-
-        energeticos: List[Energetico] = (
-            self.db.query(Energetico)
-            .order_by(Energetico.Nombre, Energetico.Id)
+        equipos = (
+            self.db.query(TipoEquipoCalefaccion)
+            .filter(getattr(TipoEquipoCalefaccion, "AC") == True)  # noqa: E712
+            .order_by(TipoEquipoCalefaccion.Nombre)
             .all()
         )
 
-        q_rels = (
-            self.db.query(TipoEquipoCalefaccionEnergetico)
-            .join(
-                TipoEquipoCalefaccion,
-                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId
-                == TipoEquipoCalefaccion.Id,
-            )
+        energeticos = (
+            self.db.query(Energetico)
+            .order_by(Energetico.Nombre)
+            .all()
         )
-        if flag_ac is not None:
-            q_rels = q_rels.filter(flag_ac == True)  # noqa: E712
 
-        rels: List[TipoEquipoCalefaccionEnergetico] = q_rels.all()
+        compat = (
+            self.db.query(TipoEquipoCalefaccionEnergetico)
+            .order_by(
+                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId,
+                TipoEquipoCalefaccionEnergetico.EnergeticoId,
+            )
+            .all()
+        )
 
-        colectores: List[TipoColector] = (
+        colectores = (
             self.db.query(TipoColector)
-            .order_by(TipoColector.Nombre, TipoColector.Id)
+            .order_by(TipoColector.Nombre)
             .all()
         )
 
         return {
-            "equiposAcs": equipos,
+            "equipos": equipos,
             "energeticos": energeticos,
-            "compatibilidades": rels,
-            "tiposColectores": colectores,
+            "compatibilidades": compat,
+            "colectores": colectores,
         }
+
+    # ------------------------------------------------------------------
+    # CRUD Equipos Refrigeración
+    # ------------------------------------------------------------------
+    def crear_equipo_refrigeracion(self, data: Dict[str, Any]) -> TipoEquipoCalefaccion:
+        eq = TipoEquipoCalefaccion()
+        eq.Nombre = data["nombre"]
+        if hasattr(eq, "Codigo"):
+            eq.Codigo = data.get("codigo")
+        if hasattr(eq, "Active"):
+            eq.Active = data.get("active", True)
+        if hasattr(eq, "FR"):
+            eq.FR = True  # marcamos como equipo de Refrigeración
+        self.db.add(eq)
+        self.db.commit()
+        self.db.refresh(eq)
+        return eq
+
+    def actualizar_equipo_refrigeracion(
+        self,
+        tipo_equipo_id: int,
+        data: Dict[str, Any],
+    ) -> TipoEquipoCalefaccion:
+        eq = self._get_tipo_equipo(tipo_equipo_id)
+
+        if "nombre" in data:
+            eq.Nombre = data["nombre"]
+        if "codigo" in data and hasattr(eq, "Codigo"):
+            eq.Codigo = data["codigo"]
+        if "active" in data and hasattr(eq, "Active"):
+            eq.Active = data["active"]
+
+        if hasattr(eq, "FR") and not getattr(eq, "FR", False):
+            eq.FR = True
+
+        self.db.commit()
+        self.db.refresh(eq)
+        return eq
+
+    def eliminar_equipo_refrigeracion(self, tipo_equipo_id: int) -> None:
+        eq = self._get_tipo_equipo(tipo_equipo_id)
+        self.db.delete(eq)
+        self.db.commit()
+
+    # ------------------------------------------------------------------
+    # CRUD Equipos ACS
+    # ------------------------------------------------------------------
+    def crear_equipo_acs(self, data: Dict[str, Any]) -> TipoEquipoCalefaccion:
+        eq = TipoEquipoCalefaccion()
+        eq.Nombre = data["nombre"]
+        if hasattr(eq, "Codigo"):
+            eq.Codigo = data.get("codigo")
+        if hasattr(eq, "Active"):
+            eq.Active = data.get("active", True)
+        if hasattr(eq, "AC"):
+            eq.AC = True  # marcamos como equipo de ACS
+        self.db.add(eq)
+        self.db.commit()
+        self.db.refresh(eq)
+        return eq
+
+    def actualizar_equipo_acs(
+        self,
+        tipo_equipo_id: int,
+        data: Dict[str, Any],
+    ) -> TipoEquipoCalefaccion:
+        eq = self._get_tipo_equipo(tipo_equipo_id)
+
+        if "nombre" in data:
+            eq.Nombre = data["nombre"]
+        if "codigo" in data and hasattr(eq, "Codigo"):
+            eq.Codigo = data["codigo"]
+        if "active" in data and hasattr(eq, "Active"):
+            eq.Active = data["active"]
+
+        if hasattr(eq, "AC") and not getattr(eq, "AC", False):
+            eq.AC = True
+
+        self.db.commit()
+        self.db.refresh(eq)
+        return eq
+
+    def eliminar_equipo_acs(self, tipo_equipo_id: int) -> None:
+        eq = self._get_tipo_equipo(tipo_equipo_id)
+        self.db.delete(eq)
+        self.db.commit()
+
+    # ------------------------------------------------------------------
+    # CRUD Compatibilidades equipo ↔ energético
+    # ------------------------------------------------------------------
+    def crear_compatibilidad(
+        self,
+        data: Dict[str, Any],
+    ) -> TipoEquipoCalefaccionEnergetico:
+        rel = TipoEquipoCalefaccionEnergetico()
+        rel.TipoEquipoCalefaccionId = data["tipo_equipo_calefaccion_id"]
+        rel.EnergeticoId = data["energetico_id"]
+        self.db.add(rel)
+        self.db.commit()
+        self.db.refresh(rel)
+        return rel
+
+    def eliminar_compatibilidad(self, rel_id: int) -> None:
+        rel = self._get_rel(rel_id)
+        self.db.delete(rel)
+        self.db.commit()
