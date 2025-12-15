@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
 from app.db.models.tipo_equipo_calefaccion_energetico import TipoEquipoCalefaccionEnergetico
 from app.db.models.energetico import Energetico
-from app.db.models.tipos_colectores import TipoColector
+from app.db.models.tipo_colector import TipoColector
 
 
 class SistemasMantenedoresService:
