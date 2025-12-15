@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 from sqlalchemy import text
+from app.api.v1 import sistemas_mantenedores
 from starlette.responses import Response
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
@@ -468,3 +469,4 @@ app.include_router(unidades_router)
 app.include_router(areas_unidades_router.router)
 app.include_router(archivos_router)
 app.include_router(auth_password_reset_router)
+app.include_router(sistemas_mantenedores.router)
