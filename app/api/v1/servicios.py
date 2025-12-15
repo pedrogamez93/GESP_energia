@@ -27,7 +27,6 @@ log = logging.getLogger("uvicorn.error")
 
 
 def _current_user_id(request: Request) -> str:
-    # Se mantiene para endpoints no-ADMIN que ya lo usan
     uid = getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
     if not uid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="userId no presente")
@@ -46,11 +45,6 @@ def _is_user_admin(db: Session, user_id: str) -> bool:
 
 
 def _soft_app_validate(request: Request) -> bool:
-    """
-    Validación 'suave' para endpoints AllowAnonymous (no debe romper).
-    - Si la app está 'ok', devuelve True.
-    - Si falta header o falla validación, devuelve False y LOGUEA, pero NO levanta 401.
-    """
     try:
         ok = is_app_validate(request)
         if not ok:
@@ -64,7 +58,7 @@ def _soft_app_validate(request: Request) -> bool:
 
 
 # ---------------------------
-# Públicos / Compatibles (ya existentes)
+# Públicos / Compatibles
 # ---------------------------
 
 @router.get(
@@ -72,7 +66,7 @@ def _soft_app_validate(request: Request) -> bool:
     response_model=List[ServicioDTO],
     summary="Servicios por institución y usuario (respeta rol ADMINISTRADOR)",
 )
-@router.get(  # alias legacy (OCULTO en Swagger)
+@router.get(  # alias legacy
     "/getByInstitucionIdAndUserId/{institucion_id}/{user_id}",
     response_model=List[ServicioDTO],
     include_in_schema=False,
@@ -94,9 +88,12 @@ def get_by_institucion_and_user(
     "/lista/institucion/{institucion_id}",
     response_model=List[ServicioListDTO],
     summary="Lista ligera de servicios por institución (AllowAnonymous)",
-    description="Devuelve (Id, Nombre) ordenado. **No exige** encabezados de app ni Authorization.",
+    description=(
+        "Devuelve (Id, Nombre) ordenado. **No exige** encabezados de app ni Authorization.\n"
+        "Por defecto solo incluye servicios activos; se puede incluir inactivos con `include_inactive=true`."
+    ),
 )
-@router.get(  # alias legacy (OCULTO en Swagger)
+@router.get(  # alias legacy
     "/getlist-by-institucionid/{institucion_id}",
     response_model=List[ServicioListDTO],
     include_in_schema=False,
@@ -104,17 +101,22 @@ def get_by_institucion_and_user(
 def get_list_by_institucionid(
     institucion_id: Annotated[int, Path(..., ge=1)],
     request: Request,
-    db: DbDep
+    db: DbDep,
+    include_inactive: Annotated[
+        bool,
+        Query(
+            False,
+            description="Si es true, incluye también servicios inactivos (Active = false)",
+        ),
+    ] = False,
 ) -> List[ServicioListDTO]:
-    # Validación suave (NO bloquea). Se mantiene por telemetría, pero nunca retorna 401.
     _soft_app_validate(request)
 
-    servicios = (
-        db.query(Servicio)
-          .filter(Servicio.Active == True, Servicio.InstitucionId == institucion_id)
-          .order_by(Servicio.Nombre)
-          .all()
-    )
+    q = db.query(Servicio).filter(Servicio.InstitucionId == institucion_id)
+    if not include_inactive:
+        q = q.filter(Servicio.Active == True)
+
+    servicios = q.order_by(Servicio.Nombre).all()
     return [ServicioListDTO.model_validate(x) for x in servicios]
 
 
@@ -123,7 +125,7 @@ def get_list_by_institucionid(
     response_model=ServicioResponse,
     summary="Servicios asociados a un user_id (respeta rol ADMINISTRADOR)",
 )
-@router.get(  # alias legacy (OCULTO en Swagger)
+@router.get(  # alias legacy
     "/getByUserId/{user_id}",
     response_model=ServicioResponse,
     include_in_schema=False,
@@ -149,7 +151,7 @@ def get_by_user_id(
     summary="Servicios paginados del usuario autenticado (respeta rol ADMINISTRADOR)",
     description="Lee el user_id de request.state.user_id (o header X-User-Id para pruebas).",
 )
-@router.get(  # alias legacy (OCULTO en Swagger)
+@router.get(  # alias legacy
     "/getByUserIdPagin",
     response_model=ServicioResponse,
     include_in_schema=False,
@@ -175,7 +177,6 @@ def get_by_user_id_pagin(
 
     if InstitucionId is not None:
         base = base.filter(Servicio.InstitucionId == InstitucionId)
-
     if Pmg:
         base = base.filter(Servicio.ReportaPMG == True)
 
@@ -220,7 +221,7 @@ def get_by_user_id_pagin(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Guardar justificación del servicio",
 )
-@router.post(  # alias legacy (OCULTO en Swagger)
+@router.post(  # alias legacy
     "/set-justificacion",
     status_code=status.HTTP_204_NO_CONTENT,
     include_in_schema=False,
@@ -247,7 +248,6 @@ def patch_servicio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
 
     current_user_id = _current_user_id(request)
-
     srv.UpdatedAt = datetime.utcnow()
     srv.ModifiedBy = current_user_id
     srv.Version = (srv.Version or 0) + 1
@@ -270,7 +270,7 @@ def patch_servicio(
     response_model=DiagnosticoDTO,
     summary="Diagnóstico ambiental (RevisionDiagnosticoAmbiental, EtapaSEV)",
 )
-@router.get(  # alias legacy (OCULTO en Swagger)
+@router.get(  # alias legacy
     "/get-diagnostico/{servicio_id}",
     response_model=DiagnosticoDTO,
     include_in_schema=False,
@@ -320,8 +320,6 @@ def actualizar_servicio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
 
-
-# ---- NUEVO: activar/desactivar ----
 
 @router.patch(
     "/{servicio_id}/estado",
@@ -374,6 +372,10 @@ def eliminar_servicio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No encontrado")
     return ServicioDTO.model_validate(srv)
 
+
+# ---------------------------
+# Lista de instituciones por servicio
+# ---------------------------
 
 from app.db.models.institucion import Institucion
 from app.schemas.institucion import InstitucionListDTO
