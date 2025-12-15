@@ -79,7 +79,10 @@ def get_by_institucion_and_user(
     admin = _is_user_admin(db, user_id)
     q = db.query(Servicio).filter(Servicio.Active == True, Servicio.InstitucionId == institucion_id)
     if not admin:
-        q = q.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id).filter(UsuarioServicio.UsuarioId == user_id)
+        q = (
+            q.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id)
+             .filter(UsuarioServicio.UsuarioId == user_id)
+        )
     servicios = q.order_by(Servicio.Nombre).all()
     return [ServicioDTO.model_validate(x) for x in servicios]
 
@@ -105,7 +108,6 @@ def get_list_by_institucionid(
     include_inactive: Annotated[
         bool,
         Query(
-            False,
             description="Si es true, incluye también servicios inactivos (Active = false)",
         ),
     ] = False,
