@@ -10,20 +10,26 @@ class ServicioDTO(BaseModel):
     Justificacion: Optional[str] = None
     RevisionRed: bool
     ComentarioRed: Optional[str] = None
+    Active: Optional[bool] = None          # 👈 NUEVO CAMPO
     model_config = ConfigDict(from_attributes=True)
+
 
 class ServicioListDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
+    Active: Optional[bool] = None          # 👈 NUEVO CAMPO (el que usa tu endpoint lista)
     model_config = ConfigDict(from_attributes=True)
+
 
 class ServicioResponse(BaseModel):
     Ok: bool
     Servicios: List[ServicioDTO]
 
+
 class DiagnosticoDTO(BaseModel):
     RevisionDiagnosticoAmbiental: bool
     EtapaSEV: int
+
 
 # ------- Escrituras parciales (módulo original) -------
 
@@ -52,6 +58,7 @@ class ServicioPatchDTO(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 # ------- NUEVO: creación / actualización ADMIN -------
 
 class ServicioCreate(BaseModel):
@@ -59,6 +66,7 @@ class ServicioCreate(BaseModel):
     Identificador: Optional[str] = None
     ReportaPMG: bool
     InstitucionId: int
+
 
 class ServicioUpdate(BaseModel):
     Nombre: Optional[str] = None
@@ -69,6 +77,7 @@ class ServicioUpdate(BaseModel):
     PgaRevisionRed: Optional[bool] = None
     RevisionRed: Optional[bool] = None
     ValidacionConcientizacion: Optional[bool] = None
+
 
 # ------- NUEVO: set de estado (activar/desactivar) -------
 
