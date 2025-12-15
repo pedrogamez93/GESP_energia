@@ -2,7 +2,7 @@
 from typing import List, Annotated
 from fastapi import APIRouter, Depends, Path, status
 from sqlalchemy.orm import Session
-
+from fastapi import Query
 from app.db.session import get_db
 from app.services.institucion_service import InstitucionService
 from app.core.security import require_roles
@@ -126,3 +126,15 @@ def reactivar_institucion(
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ) -> InstitucionDTO:
     return InstitucionService(db).reactivate(institucion_id, modified_by=current_user.id)
+
+@router.get(
+    "",
+    response_model=List[InstitucionListDTO],
+    summary="Listar instituciones",
+    description="Devuelve las instituciones. Por defecto solo las activas; se puede incluir las inactivas.",
+)
+def get_list_all(
+    db: DbDep,
+    include_inactive: bool = Query(False, description="Si es true, incluye instituciones con Active = false"),
+) -> List[InstitucionListDTO]:
+    return InstitucionService(db).get_all(include_inactive=include_inactive)

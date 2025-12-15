@@ -142,3 +142,12 @@ class InstitucionService:
         self.db.commit()
         self.db.refresh(inst)
         return InstitucionDTO.model_validate(inst)
+
+    # --------- service ---------
+    def get_all(self, include_inactive: bool = False) -> List[InstitucionListDTO]:
+        q = select(Institucion).order_by(Institucion.Nombre.asc())
+        if not include_inactive:
+            q = q.where(Institucion.Active == True)  # noqa: E712
+
+        rows = self.db.execute(q).scalars().all()
+        return [InstitucionListDTO.model_validate(r) for r in rows]
