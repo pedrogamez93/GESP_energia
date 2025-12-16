@@ -1,14 +1,14 @@
 # app/api/v1/instituciones.py
 from typing import List, Annotated
-from fastapi import APIRouter, Depends, Path, status
+
+from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy.orm import Session
-from fastapi import Query
+
 from app.db.session import get_db
 from app.services.institucion_service import InstitucionService
 from app.core.security import require_roles
-from app.schemas.auth import UserPublic  # 👈 para inyectar el usuario (Opción B)
+from app.schemas.auth import UserPublic
 
-# Schemas
 from app.schemas.institucion import (
     InstitucionListDTO,
     InstitucionDTO,
@@ -19,6 +19,7 @@ from app.schemas.institucion import (
 DbDep = Annotated[Session, Depends(get_db)]
 router = APIRouter(prefix="/api/v1/instituciones", tags=["Instituciones"])
 
+
 # ---------------------------
 # Públicos (AllowAnonymous)
 # ---------------------------
@@ -26,10 +27,25 @@ router = APIRouter(prefix="/api/v1/instituciones", tags=["Instituciones"])
 @router.get(
     "",
     response_model=List[InstitucionListDTO],
-    summary="Listar instituciones activas",
-    description="Devuelve todas las instituciones activas, ordenadas por Nombre.",
+    summary="Listar instituciones",
+    description="Devuelve las instituciones. Por defecto solo las activas; se puede incluir las inactivas.",
 )
-def get_list_all(db: DbDep) -> List[InstitucionListDTO]:
+def list_instituciones(
+    db: DbDep,
+    include_inactive: bool = Query(
+        False,
+        description="Si es true, incluye instituciones con Active = false (devuelve activas + inactivas).",
+    ),
+) -> List[InstitucionListDTO]:
+    return InstitucionService(db).get_all(include_inactive=include_inactive)
+
+
+@router.get(  # alias “solo activas” por compatibilidad interna (OCULTO en Swagger)
+    "/active",
+    response_model=List[InstitucionListDTO],
+    include_in_schema=False,
+)
+def list_instituciones_active_alias(db: DbDep) -> List[InstitucionListDTO]:
     return InstitucionService(db).get_all_active()
 
 
@@ -55,7 +71,7 @@ def get_asociados_by_user_id(
 
 
 # ---------------------------
-# CRUD (solo ADMINISTRADOR) — Opción B
+# CRUD (solo ADMINISTRADOR)
 # ---------------------------
 
 @router.post(
@@ -97,7 +113,6 @@ def actualizar_institucion(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ) -> InstitucionDTO:
-    # Permite cambiar Nombre y Active (true/false)
     return InstitucionService(db).update(institucion_id, data, modified_by=current_user.id)
 
 
@@ -126,15 +141,3 @@ def reactivar_institucion(
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ) -> InstitucionDTO:
     return InstitucionService(db).reactivate(institucion_id, modified_by=current_user.id)
-
-@router.get(
-    "",
-    response_model=List[InstitucionListDTO],
-    summary="Listar instituciones",
-    description="Devuelve las instituciones. Por defecto solo las activas; se puede incluir las inactivas.",
-)
-def get_list_all(
-    db: DbDep,
-    include_inactive: bool = Query(False, description="Si es true, incluye instituciones con Active = false"),
-) -> List[InstitucionListDTO]:
-    return InstitucionService(db).get_all(include_inactive=include_inactive)

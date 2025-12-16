@@ -2,12 +2,12 @@
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models.institucion import Institucion
-from app.db.models.usuarios_instituciones import UsuarioInstitucion  # <-- import correcto
+from app.db.models.usuarios_instituciones import UsuarioInstitucion
 from app.db.models.identity import AspNetUser
 from app.schemas.institucion import (
     InstitucionListDTO,
@@ -49,19 +49,16 @@ class InstitucionService:
 
     # ---------- queries de lectura ----------
     def get_all_active(self) -> List[InstitucionListDTO]:
-        rows = (
-            self.db.execute(
-                select(Institucion)
-                .where(Institucion.Active == True)  # noqa: E712
-                .order_by(Institucion.Nombre.asc())
-            )
-            .scalars()
-            .all()
+        q = (
+            select(Institucion)
+            .where(Institucion.Active.is_(True))
+            .order_by(Institucion.Nombre.asc())
         )
+        rows = self.db.execute(q).scalars().all()
         return [InstitucionListDTO.model_validate(r) for r in rows]
 
     def get_by_user_id(self, user_id: str) -> List[InstitucionListDTO]:
-        # Admin ve todas
+        # Admin ve todas (activas, como hasta ahora)
         if self._is_admin_by_user_id(user_id):
             return self.get_all_active()
 
@@ -70,7 +67,7 @@ class InstitucionService:
             select(Institucion)
             .join(UsuarioInstitucion, UsuarioInstitucion.InstitucionId == Institucion.Id)
             .where(
-                Institucion.Active == True,  # noqa: E712
+                Institucion.Active.is_(True),
                 UsuarioInstitucion.UsuarioId == user_id,
             )
             .order_by(Institucion.Nombre.asc())
@@ -94,7 +91,12 @@ class InstitucionService:
         self.db.refresh(inst)
         return InstitucionDTO.model_validate(inst)
 
-    def update(self, institucion_id: int, data: InstitucionUpdate, modified_by: Optional[str] = None) -> InstitucionDTO:
+    def update(
+        self,
+        institucion_id: int,
+        data: InstitucionUpdate,
+        modified_by: Optional[str] = None,
+    ) -> InstitucionDTO:
         inst = self._get_or_404(institucion_id)
 
         # ⚠️ No descartar False: sólo ignorar None
@@ -143,11 +145,11 @@ class InstitucionService:
         self.db.refresh(inst)
         return InstitucionDTO.model_validate(inst)
 
-    # --------- service ---------
+    # --------- listado (con include_inactive) ---------
     def get_all(self, include_inactive: bool = False) -> List[InstitucionListDTO]:
         q = select(Institucion).order_by(Institucion.Nombre.asc())
         if not include_inactive:
-            q = q.where(Institucion.Active == True)  # noqa: E712
+            q = q.where(Institucion.Active.is_(True))
 
         rows = self.db.execute(q).scalars().all()
         return [InstitucionListDTO.model_validate(r) for r in rows]
