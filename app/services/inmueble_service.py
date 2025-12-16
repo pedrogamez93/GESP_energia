@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Tuple, List
 
-from sqlalchemy import text, bindparam, true
+from sqlalchemy import text, bindparam
 from sqlalchemy.orm import Session
 
 from app.db.models.division import Division
@@ -162,7 +162,7 @@ class InmuebleService:
     def get(self, inmueble_id: int) -> InmuebleDTO | None:
         root = (
             self.db.query(Division)
-            .filter(Division.Id == inmueble_id, Division.Active == true())
+            .filter(Division.Id == inmueble_id, Division.Active == True)  # noqa: E712
             .first()
         )
         if not root:
@@ -180,7 +180,7 @@ class InmuebleService:
     def _fetch_children_tree(self, parent_id: int) -> list[InmuebleDTO]:
         childs = (
             self.db.query(Division)
-            .filter(Division.ParentId == parent_id, Division.Active == true())
+            .filter(Division.ParentId == parent_id, Division.Active == True)  # noqa: E712
             .all()
         )
         result: list[InmuebleDTO] = []
@@ -390,7 +390,7 @@ class InmuebleService:
         if obj.TipoInmueble == 1:
             self.db.query(Division).filter(
                 Division.ParentId == inmueble_id,
-                Division.Active == true()
+                Division.Active == True  # noqa: E712
             ).update({Division.Active: False}, synchronize_session=False)
 
         self.db.commit()
@@ -407,7 +407,7 @@ class InmuebleService:
             return []
         inmuebles = self.db.query(Division).filter(
             Division.DireccionInmuebleId == dir_.Id,
-            Division.Active == true()
+            Division.Active == True  # noqa: E712
         ).all()
         return [self._to_list_dto_row({
             "Id": i.Id, "Nombre": i.Nombre, "TipoInmueble": i.TipoInmueble,
@@ -478,8 +478,8 @@ class InmuebleService:
                 FROM Candidatos
             ) x
             -- Preferimos el vínculo directo (prio baja) y TipoInmueble=2 (edificio) sobre otros
-            ORDER BY prio ASC, 
-                     CASE WHEN TipoInmueble = 2 THEN 0 ELSE 1 END, 
+            ORDER BY prio ASC,
+                     CASE WHEN TipoInmueble = 2 THEN 0 ELSE 1 END,
                      DivisionId ASC;
         """)
         row = self.db.execute(sql, {"uid": unidad_id}).fetchone()
