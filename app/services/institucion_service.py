@@ -49,9 +49,10 @@ class InstitucionService:
 
     # ---------- queries de lectura ----------
     def get_all_active(self) -> List[InstitucionListDTO]:
+        # SQL Server (BIT): usar == True para generar "Active = 1"
         q = (
             select(Institucion)
-            .where(Institucion.Active.is_(True))
+            .where(Institucion.Active == True)  # noqa: E712
             .order_by(Institucion.Nombre.asc())
         )
         rows = self.db.execute(q).scalars().all()
@@ -67,7 +68,7 @@ class InstitucionService:
             select(Institucion)
             .join(UsuarioInstitucion, UsuarioInstitucion.InstitucionId == Institucion.Id)
             .where(
-                Institucion.Active.is_(True),
+                Institucion.Active == True,  # noqa: E712
                 UsuarioInstitucion.UsuarioId == user_id,
             )
             .order_by(Institucion.Nombre.asc())
@@ -149,7 +150,8 @@ class InstitucionService:
     def get_all(self, include_inactive: bool = False) -> List[InstitucionListDTO]:
         q = select(Institucion).order_by(Institucion.Nombre.asc())
         if not include_inactive:
-            q = q.where(Institucion.Active.is_(True))
+            # SQL Server (BIT): usar == True para generar "Active = 1"
+            q = q.where(Institucion.Active == True)  # noqa: E712
 
         rows = self.db.execute(q).scalars().all()
         return [InstitucionListDTO.model_validate(r) for r in rows]
