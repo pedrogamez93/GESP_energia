@@ -1,3 +1,4 @@
+# app/api/v1/servicios.py
 from typing import List, Annotated
 from datetime import datetime
 import logging
@@ -77,12 +78,17 @@ def get_by_institucion_and_user(
     db: DbDep,
 ) -> List[ServicioDTO]:
     admin = _is_user_admin(db, user_id)
-    q = db.query(Servicio).filter(Servicio.Active == True, Servicio.InstitucionId == institucion_id)
+
+    q = db.query(Servicio).filter(
+        Servicio.Active == True,  # noqa: E712  (SQL Server BIT => "= 1")
+        Servicio.InstitucionId == institucion_id
+    )
     if not admin:
         q = (
             q.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id)
              .filter(UsuarioServicio.UsuarioId == user_id)
         )
+
     servicios = q.order_by(Servicio.Nombre).all()
     return [ServicioDTO.model_validate(x) for x in servicios]
 
@@ -107,16 +113,14 @@ def get_list_by_institucionid(
     db: DbDep,
     include_inactive: Annotated[
         bool,
-        Query(
-            description="Si es true, incluye también servicios inactivos (Active = false)",
-        ),
+        Query(description="Si es true, incluye también servicios inactivos (Active = false)"),
     ] = False,
 ) -> List[ServicioListDTO]:
     _soft_app_validate(request)
 
     q = db.query(Servicio).filter(Servicio.InstitucionId == institucion_id)
     if not include_inactive:
-        q = q.filter(Servicio.Active == True)
+        q = q.filter(Servicio.Active == True)  # noqa: E712
 
     servicios = q.order_by(Servicio.Nombre).all()
     return [ServicioListDTO.model_validate(x) for x in servicios]
@@ -137,12 +141,14 @@ def get_by_user_id(
     db: DbDep
 ) -> ServicioResponse:
     admin = _is_user_admin(db, user_id)
-    q = db.query(Servicio).filter(Servicio.Active == True)
+
+    q = db.query(Servicio).filter(Servicio.Active == True)  # noqa: E712
     if not admin:
         q = (
             q.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id)
              .filter(UsuarioServicio.UsuarioId == user_id)
         )
+
     servicios = q.order_by(Servicio.Nombre).all()
     return ServicioResponse(Ok=True, Servicios=[ServicioDTO.model_validate(s) for s in servicios])
 
@@ -170,7 +176,7 @@ def get_by_user_id_pagin(
     current_user_id = _current_user_id(request)
     admin = _is_user_admin(db, current_user_id)
 
-    base = db.query(Servicio).filter(Servicio.Active == True)
+    base = db.query(Servicio).filter(Servicio.Active == True)  # noqa: E712
     if not admin:
         base = (
             base.join(UsuarioServicio, UsuarioServicio.ServicioId == Servicio.Id)
@@ -180,7 +186,7 @@ def get_by_user_id_pagin(
     if InstitucionId is not None:
         base = base.filter(Servicio.InstitucionId == InstitucionId)
     if Pmg:
-        base = base.filter(Servicio.ReportaPMG == True)
+        base = base.filter(Servicio.ReportaPMG == True)  # noqa: E712
 
     id_query = base.with_entities(Servicio.Id).distinct()
     total = db.query(func.count()).select_from(id_query.subquery()).scalar()
@@ -397,8 +403,8 @@ def get_instituciones_by_servicio(
           .join(Servicio, Servicio.InstitucionId == Institucion.Id)
           .filter(
               Servicio.Id == servicio_id,
-              Servicio.Active == True,
-              Institucion.Active == True
+              Servicio.Active == True,      # noqa: E712
+              Institucion.Active == True,   # noqa: E712
           )
           .distinct()
           .order_by(Institucion.Nombre)
