@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from app.db.models.division import Division
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -397,3 +398,115 @@ class DivisionSistemasService:
             "equipos": equipos_out,
             "colectores": colectores_out,
         }
+
+    # ------------------------------------------------------------------ #
+    # GET/PUT por secciones (detalle)
+    # ------------------------------------------------------------------ #
+
+    # Campos por sección (deben coincidir con nombres en BD/modelo y con los DTOs)
+    _ILUMINACION_FIELDS = {
+        "TipoLuminariaId",
+    }
+
+    _CALEFACCION_FIELDS = {
+        "EquipoCalefaccionId",
+        "EnergeticoCalefaccionId",
+        "TempSeteoCalefaccionId",
+    }
+
+    _REFRIGERACION_FIELDS = {
+        "EquipoRefrigeracionId",
+        "EnergeticoRefrigeracionId",
+        "TempSeteoRefrigeracionId",
+    }
+
+    _ACS_FIELDS = {
+        "EquipoAcsId",
+        "EnergeticoAcsId",
+        "SistemaSolarTermico",
+        "ColectorId",
+        "SupColectores",
+        "FotoTecho",
+        "SupFotoTecho",
+        "MantColectores",
+    }
+
+    _FOTOVOLTAICO_FIELDS = {
+        "InstTerSisFv",
+        "SupInstTerSisFv",
+        "ImpSisFv",
+        "SupImptSisFv",
+        "PotIns",
+        "MantSfv",
+        # si en tu DTO FV también van estos, agrégalos acá:
+        # "SupFotoTecho", "FotoTecho", etc. (solo si aplica)
+    }
+
+    def _section_dict(self, d: Division, fields: set[str]) -> Dict[str, Any]:
+        """
+        Construye un dict para los DTOs de detalle.
+        Incluye DivisionId y Version para consistencia.
+        """
+        out: Dict[str, Any] = {
+            "DivisionId": getattr(d, "Id", None),
+            "Version": getattr(d, "Version", None),
+        }
+        for f in fields:
+            out[f] = getattr(d, f, None)
+        return out
+
+    # ---------- Iluminación ----------
+    def get_iluminacion(self, db: Session, division_id: int) -> Dict[str, Any]:
+        d = self.get(db, division_id)
+        return self._section_dict(d, self._ILUMINACION_FIELDS)
+
+    def update_iluminacion(
+        self, db: Session, division_id: int, payload: Dict[str, Any], user: Optional[str] = None
+    ) -> Dict[str, Any]:
+        # update() ya filtra por _SYSTEM_FIELDS, así que es seguro.
+        self.update(db, division_id, payload=payload, user=user)
+        return self.get_iluminacion(db, division_id)
+
+    # ---------- Calefacción ----------
+    def get_calefaccion(self, db: Session, division_id: int) -> Dict[str, Any]:
+        d = self.get(db, division_id)
+        return self._section_dict(d, self._CALEFACCION_FIELDS)
+
+    def update_calefaccion(
+        self, db: Session, division_id: int, payload: Dict[str, Any], user: Optional[str] = None
+    ) -> Dict[str, Any]:
+        self.update(db, division_id, payload=payload, user=user)
+        return self.get_calefaccion(db, division_id)
+
+    # ---------- Refrigeración ----------
+    def get_refrigeracion(self, db: Session, division_id: int) -> Dict[str, Any]:
+        d = self.get(db, division_id)
+        return self._section_dict(d, self._REFRIGERACION_FIELDS)
+
+    def update_refrigeracion(
+        self, db: Session, division_id: int, payload: Dict[str, Any], user: Optional[str] = None
+    ) -> Dict[str, Any]:
+        self.update(db, division_id, payload=payload, user=user)
+        return self.get_refrigeracion(db, division_id)
+
+    # ---------- ACS ----------
+    def get_acs(self, db: Session, division_id: int) -> Dict[str, Any]:
+        d = self.get(db, division_id)
+        return self._section_dict(d, self._ACS_FIELDS)
+
+    def update_acs(
+        self, db: Session, division_id: int, payload: Dict[str, Any], user: Optional[str] = None
+    ) -> Dict[str, Any]:
+        self.update(db, division_id, payload=payload, user=user)
+        return self.get_acs(db, division_id)
+
+    # ---------- Fotovoltaico ----------
+    def get_fotovoltaico(self, db: Session, division_id: int) -> Dict[str, Any]:
+        d = self.get(db, division_id)
+        return self._section_dict(d, self._FOTOVOLTAICO_FIELDS)
+
+    def update_fotovoltaico(
+        self, db: Session, division_id: int, payload: Dict[str, Any], user: Optional[str] = None
+    ) -> Dict[str, Any]:
+        self.update(db, division_id, payload=payload, user=user)
+        return self.get_fotovoltaico(db, division_id)
