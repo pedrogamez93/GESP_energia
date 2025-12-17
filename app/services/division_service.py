@@ -660,3 +660,32 @@ class DivisionService:
         db.commit()
         db.refresh(d)
         return d
+
+    def update_full(
+        self,
+        db: Session,
+        division_id: int,
+        payload: Dict[str, Any],
+        user_id: str | None = None,
+    ) -> Division:
+        d = self.get(db, division_id)
+
+        # Campos prohibidos explícitos
+        forbidden = {"CreatedAt", "UpdatedAt"}
+
+        for k, v in payload.items():
+            if k in forbidden:
+                continue
+            if hasattr(d, k):
+                setattr(d, k, v)
+            else:
+                log.debug("DIVISIONES.update_full: campo %r no existe", k)
+
+        d.UpdatedAt = datetime.utcnow()
+        d.Version = (d.Version or 0) + 1
+        if user_id:
+            d.ModifiedBy = user_id
+
+        db.commit()
+        db.refresh(d)
+        return d

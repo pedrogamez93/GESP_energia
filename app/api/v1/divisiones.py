@@ -4,7 +4,7 @@ from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from sqlalchemy.orm import Session
-
+from app.schemas.division_full_update import DivisionFullUpdate
 from app.core.security import require_roles
 from app.db.session import get_db
 from app.schemas.auth import UserPublic
@@ -242,3 +242,23 @@ def desactivar_division(
     request: Request,
 ):
     return svc.set_active_cascada(db, division_id, active=False, user_id=_current_user_id(request))
+
+
+@router.put(
+    "/{division_id}/full",
+    response_model=DivisionDTO,
+    summary="Actualización completa de División (excepto CreatedAt / UpdatedAt)",
+)
+def update_division_full(
+    division_id: Annotated[int, Path(..., ge=1)],
+    payload: DivisionFullUpdate,
+    db: DbDep,
+    request: Request,
+    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    return svc.update_full(
+        db,
+        division_id,
+        payload=payload.model_dump(exclude_unset=True),
+        user_id=_current_user_id(request),
+    )
