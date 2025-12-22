@@ -1,5 +1,5 @@
 # app/api/v1/servicios.py
-from typing import List, Annotated
+from typing import List, Annotated, Optional
 from datetime import datetime
 import logging
 
@@ -15,6 +15,8 @@ from app.schemas.servicios import (
     ServicioDTO, ServicioListDTO, ServicioResponse,
     ServicioPatchDTO, DiagnosticoDTO,
     ServicioCreate, ServicioUpdate, ServicioEstadoDTO,
+    # 👇 NUEVO (lo agregaremos en schemas)
+    InstitucionServiciosDTO, ServicioEstadoFiltro,
 )
 from app.schemas.auth import UserPublic
 from app.core.app_validation import is_app_validate
@@ -49,13 +51,51 @@ def _soft_app_validate(request: Request) -> bool:
     try:
         ok = is_app_validate(request)
         if not ok:
-            log.info("[SERVICIOS] AllowAnonymous: app header ausente/invalid. path=%s origin=%s",
-                     request.url.path, request.headers.get("origin"))
+            log.info(
+                "[SERVICIOS] AllowAnonymous: app header ausente/invalid. path=%s origin=%s",
+                request.url.path,
+                request.headers.get("origin"),
+            )
         return ok
     except Exception as e:
-        log.info("[SERVICIOS] AllowAnonymous: excepción en validación app (%s). path=%s",
-                 repr(e), request.url.path)
+        log.info(
+            "[SERVICIOS] AllowAnonymous: excepción en validación app (%s). path=%s",
+            repr(e),
+            request.url.path,
+        )
         return False
+
+
+# ---------------------------
+# NUEVO: Instituciones con servicios (AllowAnonymous)
+# ---------------------------
+
+@router.get(
+    "/lista/instituciones",
+    response_model=List[InstitucionServiciosDTO],
+    summary="Instituciones con sus servicios (activos/inactivos) (AllowAnonymous)",
+    description=(
+        "Por defecto devuelve **todas las instituciones** con **todos sus servicios** "
+        "(activos e inactivos).\n\n"
+        "Filtros:\n"
+        "- `institucion_id`: si se envía, devuelve solo esa institución.\n"
+        "- `estado`: `all` (default), `active` (solo activos), `inactive` (solo inactivos).\n\n"
+        "**No exige** encabezados de app ni Authorization."
+    ),
+)
+def lista_instituciones_con_servicios(
+    request: Request,
+    db: DbDep,
+    institucion_id: Annotated[Optional[int], Query(ge=1)] = None,
+    estado: Annotated[ServicioEstadoFiltro, Query()] = "all",
+) -> List[InstitucionServiciosDTO]:
+    _soft_app_validate(request)
+
+    from app.services.servicio_service import ServicioService
+    return ServicioService(db).list_instituciones_con_servicios(
+        institucion_id=institucion_id,
+        estado=estado,
+    )
 
 
 # ---------------------------
@@ -81,7 +121,7 @@ def get_by_institucion_and_user(
 
     q = db.query(Servicio).filter(
         Servicio.Active == True,  # noqa: E712  (SQL Server BIT => "= 1")
-        Servicio.InstitucionId == institucion_id
+        Servicio.InstitucionId == institucion_id,
     )
     if not admin:
         q = (
@@ -116,14 +156,25 @@ def get_list_by_institucionid(
         Query(description="Si es true, incluye también servicios inactivos (Active = false)"),
     ] = False,
 ) -> List[ServicioListDTO]:
+    """
+    Compatibilidad:
+    - Antes: por defecto solo activos, con include_inactive=true trae todos.
+    - Ahora: se implementa sobre la lógica nueva para mantener un solo origen de verdad.
+    """
     _soft_app_validate(request)
 
-    q = db.query(Servicio).filter(Servicio.InstitucionId == institucion_id)
-    if not include_inactive:
-        q = q.filter(Servicio.Active == True)  # noqa: E712
+    from app.services.servicio_service import ServicioService
 
-    servicios = q.order_by(Servicio.Nombre).all()
-    return [ServicioListDTO.model_validate(x) for x in servicios]
+    estado = "all" if include_inactive else "active"
+    insts = ServicioService(db).list_instituciones_con_servicios(
+        institucion_id=institucion_id,
+        estado=estado,
+    )
+    if not insts:
+        return []
+
+    # Retorna formato legacy: solo servicios
+    return insts[0].Servicios
 
 
 @router.get(

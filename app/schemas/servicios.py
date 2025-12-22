@@ -1,8 +1,11 @@
-from typing import List, Optional
+# app/schemas/servicios.py
+from typing import List, Optional, Literal
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
-# ------- Lecturas / respuestas -------
+# -------------------------------------------------------------------
+# Lecturas / respuestas
+# -------------------------------------------------------------------
 
 class ServicioDTO(BaseModel):
     Id: int
@@ -10,14 +13,14 @@ class ServicioDTO(BaseModel):
     Justificacion: Optional[str] = None
     RevisionRed: bool
     ComentarioRed: Optional[str] = None
-    Active: Optional[bool] = None          # 👈 NUEVO CAMPO
+    Active: Optional[bool] = None  # 👈 NUEVO CAMPO
     model_config = ConfigDict(from_attributes=True)
 
 
 class ServicioListDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
-    Active: Optional[bool] = None          # 👈 NUEVO CAMPO (el que usa tu endpoint lista)
+    Active: Optional[bool] = None  # 👈 NUEVO CAMPO (el que usa tu endpoint lista)
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -31,7 +34,36 @@ class DiagnosticoDTO(BaseModel):
     EtapaSEV: int
 
 
-# ------- Escrituras parciales (módulo original) -------
+# -------------------------------------------------------------------
+# NUEVO: Tipos/DTO para el endpoint Instituciones + Servicios
+# -------------------------------------------------------------------
+
+# Query param para filtrar servicios por estado
+# - all: activos + inactivos (default)
+# - active: solo activos
+# - inactive: solo inactivos
+ServicioEstadoFiltro = Literal["all", "active", "inactive"]
+
+
+class InstitucionServiciosDTO(BaseModel):
+    """
+    DTO para listar instituciones con sus servicios.
+
+    Se usa en:
+    GET /api/v1/servicios/lista/instituciones
+      - por defecto: todas las instituciones con todos sus servicios (activos + inactivos)
+      - filtros: institucion_id (opcional) y estado=all|active|inactive
+    """
+    Id: int
+    Nombre: Optional[str] = None
+    Active: Optional[bool] = None
+    Servicios: List[ServicioListDTO] = []
+    model_config = ConfigDict(from_attributes=True)
+
+
+# -------------------------------------------------------------------
+# Escrituras parciales (módulo original)
+# -------------------------------------------------------------------
 
 class ServicioPatchDTO(BaseModel):
     # banderas ambientales
@@ -59,7 +91,9 @@ class ServicioPatchDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ------- NUEVO: creación / actualización ADMIN -------
+# -------------------------------------------------------------------
+# NUEVO: creación / actualización ADMIN
+# -------------------------------------------------------------------
 
 class ServicioCreate(BaseModel):
     Nombre: Optional[str] = None
@@ -79,7 +113,9 @@ class ServicioUpdate(BaseModel):
     ValidacionConcientizacion: Optional[bool] = None
 
 
-# ------- NUEVO: set de estado (activar/desactivar) -------
+# -------------------------------------------------------------------
+# NUEVO: set de estado (activar/desactivar)
+# -------------------------------------------------------------------
 
 class ServicioEstadoDTO(BaseModel):
     Active: bool
