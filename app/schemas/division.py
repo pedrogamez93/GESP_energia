@@ -155,8 +155,8 @@ class DivisionListDTO(DivisionSelectDTO):
     TempSeteoCalefaccionId: Optional[int] = None
     TempSeteoRefrigeracionId: Optional[int] = None
     TipoLuminariaId: Optional[int] = None
-    MantColectores: Optional[bool] = None
-    MantSfv: Optional[bool] = None
+    MantColectores: Optional[int] = None
+    MantSfv: Optional[int] = None
     CargaPosteriorT: Optional[bool] = None
     IndicadorEnegia: Optional[float] = None
     ObsInexistenciaEyV: Optional[str] = None
