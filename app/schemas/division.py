@@ -304,3 +304,11 @@ class DivisionBusquedaEspecificaDTO(BaseModel):
     EdificioComunaId: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class DivisionBusquedaEspecificaPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[DivisionBusquedaEspecificaDTO]
+
+    model_config = ConfigDict(from_attributes=True)

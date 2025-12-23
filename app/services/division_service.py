@@ -714,16 +714,20 @@ class DivisionService:
         q: Optional[str] = None,
         servicio_id: Optional[int] = None,
         region_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        page: int = 1,
+        page_size: int = 50,
+    ) -> Dict[str, Any]:
         """
-        Búsqueda específica con reglas preferidas:
+        Búsqueda específica paginada:
         - Dirección: Direcciones → Divisiones → Edificios → Calle+Número
         - Región: Direcciones → Comuna Edificio → División
         - Active = 1
         - ORDER BY Division.Id DESC
         """
 
-        # Dirección preferida (igual al SQL)
+        size = max(1, min(200, page_size))
+        page = max(1, page)
+
         DireccionPref = func.coalesce(
             Direccion.DireccionCompleta,
             func.nullif(func.ltrim(func.rtrim(Division.Direccion)), ""),
@@ -731,43 +735,29 @@ class DivisionService:
             func.concat(Edificio.Calle, " ", Edificio.Numero),
         )
 
-        # Región preferida
         RegionPref = func.coalesce(
             Direccion.RegionId,
             Comuna.RegionId,
             Division.RegionId,
         )
 
-        qy = (
-            db.query(
-                Division.Id.label("Id"),
-                Division.Nombre.label("Nombre"),
-                DireccionPref.label("Direccion"),
-                RegionPref.label("RegionId"),
-                Division.ServicioId.label("ServicioId"),
-
-                # debug
-                Division.DireccionInmuebleId.label("DireccionInmuebleId"),
-                Direccion.ComunaId.label("DireccionComunaId"),
-                Edificio.ComunaId.label("EdificioComunaId"),
-            )
+        base = (
+            db.query(Division.Id)
             .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
             .outerjoin(Edificio, Edificio.Id == Division.EdificioId)
             .outerjoin(Comuna, Comuna.Id == Edificio.ComunaId)
             .filter(cast(Division.Active, Integer) == 1)
-            .order_by(Division.Id.desc())
         )
 
-        # filtros opcionales
         if servicio_id is not None:
-            qy = qy.filter(Division.ServicioId == servicio_id)
+            base = base.filter(Division.ServicioId == servicio_id)
 
         if region_id is not None:
-            qy = qy.filter(RegionPref == region_id)
+            base = base.filter(RegionPref == region_id)
 
         if q:
             like = f"%{q}%"
-            qy = qy.filter(
+            base = base.filter(
                 or_(
                     func.coalesce(Division.Nombre, "").like(like),
                     func.coalesce(Division.Direccion, "").like(like),
@@ -775,10 +765,41 @@ class DivisionService:
                 )
             )
 
-        rows = qy.all()
+        # total (COUNT) sin ORDER BY
+        total = db.query(func.count()).select_from(base.subquery()).scalar() or 0
 
-        # convertir a dict limpio
-        return [
-            {k: v for k, v in row._mapping.items()}
-            for row in rows
-        ]
+        # ids de la página (ORDER BY + OFFSET/LIMIT)
+        page_ids_rows = (
+            base.order_by(Division.Id.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+            .all()
+        )
+        ids = [r[0] for r in page_ids_rows]
+
+        items: List[Dict[str, Any]] = []
+        if ids:
+            rows = (
+                db.query(
+                    Division.Id.label("Id"),
+                    Division.Nombre.label("Nombre"),
+                    DireccionPref.label("Direccion"),
+                    RegionPref.label("RegionId"),
+                    Division.ServicioId.label("ServicioId"),
+                    # debug
+                    Division.DireccionInmuebleId.label("DireccionInmuebleId"),
+                    Direccion.ComunaId.label("DireccionComunaId"),
+                    Edificio.ComunaId.label("EdificioComunaId"),
+                )
+                .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+                .outerjoin(Edificio, Edificio.Id == Division.EdificioId)
+                .outerjoin(Comuna, Comuna.Id == Edificio.ComunaId)
+                .filter(Division.Id.in_(ids))
+                # re-orden global (Id DESC como el query)
+                .order_by(Division.Id.desc())
+                .all()
+            )
+
+            items = [{k: v for k, v in row._mapping.items()} for row in rows]
+
+        return {"total": total, "page": page, "page_size": size, "items": items}
