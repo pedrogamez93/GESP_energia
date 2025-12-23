@@ -706,3 +706,59 @@ class DivisionService:
         db.commit()
         db.refresh(d)
         return d
+    
+ # lista de busqueda especifica 
+    def list_busqueda_especifica(
+        self,
+        db: Session,
+        q: Optional[str] = None,
+        servicio_id: Optional[int] = None,
+        region_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Búsqueda específica:
+        - Direccion sale SOLO desde Division.Direccion (sin COALESCE)
+        - RegionId sale SOLO por join Division -> Edificio -> Comuna
+        - Filtra Active = 1
+        - Ordena por Division.Id ASC
+
+        Equivalente al SQL:
+        SELECT d.Id, d.Nombre, d.Direccion AS Direccion, c.RegionId, d.ServicioId
+        FROM dbo.Divisiones d
+        LEFT JOIN dbo.Edificios e ON e.Id = d.EdificioId
+        LEFT JOIN dbo.Comunas c ON c.Id = e.ComunaId
+        WHERE d.Active = 1
+        ORDER BY d.Id ASC;
+        """
+        qy = (
+            db.query(
+                Division.Id.label("Id"),
+                Division.Nombre.label("Nombre"),
+                Division.Direccion.label("Direccion"),
+                Comuna.RegionId.label("RegionId"),
+                Division.ServicioId.label("ServicioId"),
+            )
+            .outerjoin(Edificio, Edificio.Id == Division.EdificioId)
+            .outerjoin(Comuna, Comuna.Id == Edificio.ComunaId)
+            .filter(cast(Division.Active, Integer) == 1)
+            .order_by(Division.Id.asc())
+        )
+
+        # filtros opcionales (si no vienen, queda igual al SQL original)
+        if servicio_id is not None:
+            qy = qy.filter(Division.ServicioId == servicio_id)
+
+        if region_id is not None:
+            qy = qy.filter(Comuna.RegionId == region_id)
+
+        if q:
+            like = f"%{q}%"
+            qy = qy.filter(
+                or_(
+                    func.coalesce(Division.Nombre, "").like(like),
+                    func.coalesce(Division.Direccion, "").like(like),
+                )
+            )
+
+        rows = qy.all()
+        return [{k: getattr(r, k) for k in r._mapping.keys()} for r in rows]

@@ -9,6 +9,7 @@ from app.core.security import require_roles
 from app.db.session import get_db
 from app.schemas.auth import UserPublic
 from app.schemas.division import (
+    DivisionBusquedaEspecificaDTO,
     DivisionAniosDTO,
     DivisionDTO,
     DivisionListDTO,
@@ -67,6 +68,25 @@ def select_divisiones(
     rows = svc.list_select(db, q, ServicioId, RegionId)
     return [DivisionSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
+@router.get(
+    "/busqueda-especifica",
+    response_model=List[DivisionBusquedaEspecificaDTO],
+    summary="Búsqueda específica (SQL legacy: dirección directa + región por edificio/comuna)",
+    description="Endpoint alterno para no afectar el listado paginado existente. Replica el join exacto usado en SQL Server (Divisiones→Edificios→Comunas).",
+)
+def list_divisiones_busqueda_especifica(
+    db: DbDep,
+    q: Optional[str] = Query(None, description="Busca en Nombre o Dirección (Division.Direccion)"),
+    ServicioId: Optional[int] = Query(None),
+    RegionId: Optional[int] = Query(None),
+):
+    rows = svc.list_busqueda_especifica(
+        db=db,
+        q=q,
+        servicio_id=ServicioId,
+        region_id=RegionId,
+    )
+    return rows
 
 @router.get("/{division_id}", response_model=DivisionDTO, summary="Detalle")
 def get_division(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):

@@ -290,3 +290,12 @@ class DivisionPage(BaseModel):
     page_size: int
     items: List[DivisionListDTO]
     model_config = ConfigDict(from_attributes=True)
+
+class DivisionBusquedaEspecificaDTO(BaseModel):
+    Id: int
+    Nombre: Optional[str] = None
+    Direccion: Optional[str] = None
+    RegionId: Optional[int] = None
+    ServicioId: int
+
+    model_config = ConfigDict(from_attributes=True)
