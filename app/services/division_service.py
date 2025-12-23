@@ -716,40 +716,54 @@ class DivisionService:
         region_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Búsqueda específica:
-        - Direccion sale SOLO desde Division.Direccion (sin COALESCE)
-        - RegionId sale SOLO por join Division -> Edificio -> Comuna
-        - Filtra Active = 1
-        - Ordena por Division.Id ASC
-
-        Equivalente al SQL:
-        SELECT d.Id, d.Nombre, d.Direccion AS Direccion, c.RegionId, d.ServicioId
-        FROM dbo.Divisiones d
-        LEFT JOIN dbo.Edificios e ON e.Id = d.EdificioId
-        LEFT JOIN dbo.Comunas c ON c.Id = e.ComunaId
-        WHERE d.Active = 1
-        ORDER BY d.Id ASC;
+        Búsqueda específica con reglas preferidas:
+        - Dirección: Direcciones → Divisiones → Edificios → Calle+Número
+        - Región: Direcciones → Comuna Edificio → División
+        - Active = 1
+        - ORDER BY Division.Id DESC
         """
+
+        # Dirección preferida (igual al SQL)
+        DireccionPref = func.coalesce(
+            Direccion.DireccionCompleta,
+            func.nullif(func.ltrim(func.rtrim(Division.Direccion)), ""),
+            Edificio.Direccion,
+            func.concat(Edificio.Calle, " ", Edificio.Numero),
+        )
+
+        # Región preferida
+        RegionPref = func.coalesce(
+            Direccion.RegionId,
+            Comuna.RegionId,
+            Division.RegionId,
+        )
+
         qy = (
             db.query(
                 Division.Id.label("Id"),
                 Division.Nombre.label("Nombre"),
-                Division.Direccion.label("Direccion"),
-                Comuna.RegionId.label("RegionId"),
+                DireccionPref.label("Direccion"),
+                RegionPref.label("RegionId"),
                 Division.ServicioId.label("ServicioId"),
+
+                # debug
+                Division.DireccionInmuebleId.label("DireccionInmuebleId"),
+                Direccion.ComunaId.label("DireccionComunaId"),
+                Edificio.ComunaId.label("EdificioComunaId"),
             )
+            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
             .outerjoin(Edificio, Edificio.Id == Division.EdificioId)
             .outerjoin(Comuna, Comuna.Id == Edificio.ComunaId)
             .filter(cast(Division.Active, Integer) == 1)
-            .order_by(Division.Id.asc())
+            .order_by(Division.Id.desc())
         )
 
-        # filtros opcionales (si no vienen, queda igual al SQL original)
+        # filtros opcionales
         if servicio_id is not None:
             qy = qy.filter(Division.ServicioId == servicio_id)
 
         if region_id is not None:
-            qy = qy.filter(Comuna.RegionId == region_id)
+            qy = qy.filter(RegionPref == region_id)
 
         if q:
             like = f"%{q}%"
@@ -757,8 +771,14 @@ class DivisionService:
                 or_(
                     func.coalesce(Division.Nombre, "").like(like),
                     func.coalesce(Division.Direccion, "").like(like),
+                    func.coalesce(Direccion.DireccionCompleta, "").like(like),
                 )
             )
 
         rows = qy.all()
-        return [{k: getattr(r, k) for k in r._mapping.keys()} for r in rows]
+
+        # convertir a dict limpio
+        return [
+            {k: v for k, v in row._mapping.items()}
+            for row in rows
+        ]

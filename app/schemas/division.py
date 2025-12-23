@@ -298,4 +298,9 @@ class DivisionBusquedaEspecificaDTO(BaseModel):
     RegionId: Optional[int] = None
     ServicioId: int
 
+    # debug (opcional)
+    DireccionInmuebleId: Optional[int] = None
+    DireccionComunaId: Optional[int] = None
+    EdificioComunaId: Optional[int] = None
+
     model_config = ConfigDict(from_attributes=True)
