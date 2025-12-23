@@ -185,165 +185,182 @@ class DivisionService:
         - Slow-path: ROW_NUMBER() global por Dirección preferida + Id.
         Campos territoriales siempre con COALESCE(Division.x, Direccion.x).
         """
-        import time
+        try:
+            import time
 
-        t0 = time.perf_counter()
-        size = max(1, min(200, page_size))
-        page = max(1, page)
+            t0 = time.perf_counter()
+            size = max(1, min(200, page_size))
+            page = max(1, page)
 
-        # Dirección preferida (Division.Direccion o Direccion.DireccionCompleta)
-        DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
+            # Dirección preferida (Division.Direccion o Direccion.DireccionCompleta)
+            DirPref = func.coalesce(Division.Direccion, Direccion.DireccionCompleta)
 
-        log.debug(
-            "DIVISIONES.list → params q=%r page=%s size=%s active=%s srv=%s reg=%s prov=%s com=%s",
-            q, page, size, active, servicio_id, region_id, provincia_id, comuna_id
-        )
-
-        fast_path = (not q) and (region_id is None) and (provincia_id is None) and (comuna_id is None)
-        if fast_path:
-            t_total = time.perf_counter()
-            log.debug("DIVISIONES.list → FAST-PATH habilitado")
-
-            base_ids = db.query(Division.Id)
-            if active is not None:
-                base_ids = base_ids.filter(cast(Division.Active, Integer) == (1 if active else 0))
-            if servicio_id is not None:
-                base_ids = base_ids.filter(Division.ServicioId == servicio_id)
-
-            total = db.query(func.count()).select_from(base_ids.subquery()).scalar() or 0
-            log.debug("DIVISIONES.list[FAST] → total=%s (%.1f ms hasta total)",
-                      total, (time.perf_counter() - t_total) * 1000)
-
-            t_page = time.perf_counter()
-            page_ids = (
-                base_ids.order_by(Division.Id.asc())
-                .offset((page - 1) * size)
-                .limit(size)
-                .all()
+            log.debug(
+                "DIVISIONES.list → params q=%r page=%s size=%s active=%s srv=%s reg=%s prov=%s com=%s",
+                q, page, size, active, servicio_id, region_id, provincia_id, comuna_id
             )
-            ids = [r.Id for r in page_ids]
-            log.debug("DIVISIONES.list[FAST] → page=%s size=%s ids=%s (%.1f ms ids)",
-                      page, size, len(ids), (time.perf_counter() - t_page) * 1000)
 
-            rows = []
-            if ids:
-                rows = (
-                    db.query(*_select_columns(DirPref))
-                    .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
-                    .filter(Division.Id.in_(ids))
-                    .order_by(DirPref.asc(), Division.Id.asc())
+            fast_path = (not q) and (region_id is None) and (provincia_id is None) and (comuna_id is None)
+            if fast_path:
+                t_total = time.perf_counter()
+                log.debug("DIVISIONES.list → FAST-PATH habilitado")
+
+                base_ids = db.query(Division.Id)
+                if active is not None:
+                    base_ids = base_ids.filter(cast(Division.Active, Integer) == (1 if active else 0))
+                if servicio_id is not None:
+                    base_ids = base_ids.filter(Division.ServicioId == servicio_id)
+
+                total = db.query(func.count()).select_from(base_ids.subquery()).scalar() or 0
+                log.debug(
+                    "DIVISIONES.list[FAST] → total=%s (%.1f ms hasta total)",
+                    total, (time.perf_counter() - t_total) * 1000
+                )
+
+                t_page = time.perf_counter()
+                page_ids = (
+                    base_ids.order_by(Division.Id.asc())
+                    .offset((page - 1) * size)
+                    .limit(size)
                     .all()
                 )
 
-            items = [_row_to_item(r) for r in rows]
+                # ✅ FIX: base_ids devuelve tuplas (Id,), no objetos con .Id
+                ids = [r[0] for r in page_ids]
+
+                log.debug(
+                    "DIVISIONES.list[FAST] → page=%s size=%s ids=%s (%.1f ms ids)",
+                    page, size, len(ids), (time.perf_counter() - t_page) * 1000
+                )
+
+                rows = []
+                if ids:
+                    rows = (
+                        db.query(*_select_columns(DirPref))
+                        .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+                        .filter(Division.Id.in_(ids))
+                        .order_by(DirPref.asc(), Division.Id.asc())
+                        .all()
+                    )
+
+                items = [_row_to_item(r) for r in rows]
+
+                log.debug(
+                    "DIVISIONES.list[FAST] → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
+                    total, page, size, len(items), (time.perf_counter() - t0) * 1000
+                )
+                return {"total": total, "page": page, "page_size": size, "items": items}
+
+            # -------- Slow-path (orden global por Dirección preferida + Id) --------
+            t_build = time.perf_counter()
+            base = (
+                db.query(
+                    Division.Id.label("Id"),
+                    Division.Nombre.label("Nombre"),
+                    Division.Active.label("Active"),
+                    Division.ServicioId.label("ServicioId"),
+                    func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
+                    func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
+                    func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
+                    DirPref.label("DirPref"),
+                )
+                .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+            )
+
+            if active is not None:
+                base = base.filter(cast(Division.Active, Integer) == (1 if active else 0))
+            if servicio_id is not None:
+                base = base.filter(Division.ServicioId == servicio_id)
+            if region_id is not None:
+                base = base.filter(or_(Division.RegionId == region_id, Direccion.RegionId == region_id))
+            if provincia_id is not None:
+                base = base.filter(or_(Division.ProvinciaId == provincia_id, Direccion.ProvinciaId == provincia_id))
+            if comuna_id is not None:
+                base = base.filter(or_(Division.ComunaId == comuna_id, Direccion.ComunaId == comuna_id))
+
+            if q:
+                like = f"%{q}%"
+                base = base.filter(
+                    or_(
+                        func.coalesce(Division.Nombre, "").like(like),
+                        func.coalesce(Division.Direccion, "").like(like),
+                        func.coalesce(Direccion.DireccionCompleta, "").like(like),
+                    )
+                )
 
             log.debug(
-                "DIVISIONES.list[FAST] → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
+                "DIVISIONES.list[SLOW] → base listo (%.1f ms)",
+                (time.perf_counter() - t_build) * 1000
+            )
+
+            # Total
+            t_total = time.perf_counter()
+            total_subq = base.with_entities(Division.Id).subquery()
+            total = db.query(func.count()).select_from(total_subq).scalar() or 0
+            log.debug(
+                "DIVISIONES.list[SLOW] → total=%s (%.1f ms hasta total)",
+                total, (time.perf_counter() - t_total) * 1000
+            )
+
+            # ROW_NUMBER() con orden global por DirPref + Id
+            rn = func.row_number().over(
+                order_by=(func.coalesce(DirPref, "").asc(), Division.Id.asc())
+            ).label("rn")
+
+            ranked = (
+                base.with_entities(
+                    Division.Id.label("Id"),
+                    Division.Nombre.label("Nombre"),
+                    Division.Active.label("Active"),
+                    Division.ServicioId.label("ServicioId"),
+                    func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
+                    func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
+                    func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
+                    DirPref.label("Direccion"),
+                    rn,
+                )
+            ).subquery()
+
+            start = (page - 1) * size + 1
+            end = page * size
+
+            t_page = time.perf_counter()
+            rows = (
+                db.query(ranked, *_select_columns(DirPref)[4:])  # añadimos resto de columnas después de territoriales
+                .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
+                .join(Division, Division.Id == ranked.c.Id)
+                .filter(ranked.c.rn.between(start, end))
+                .order_by(ranked.c.rn.asc())
+                .all()
+            )
+
+            items: List[Dict[str, Any]] = []
+            for row in rows:
+                base_map = {
+                    "Id": row.ranked.Id,
+                    "Nombre": row.ranked.Nombre,
+                    "Active": row.ranked.Active,
+                    "ServicioId": row.ranked.ServicioId,
+                    "RegionId": row.ranked.RegionId,
+                    "ProvinciaId": row.ranked.ProvinciaId,
+                    "ComunaId": row.ranked.ComunaId,
+                    "Direccion": row.ranked.Direccion,
+                }
+                extra = {k: v for k, v in row._mapping.items() if k not in base_map and k not in ("rn", "ranked")}
+                base_map.update(extra)
+                items.append(base_map)
+
+            log.debug(
+                "DIVISIONES.list[SLOW] → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
                 total, page, size, len(items), (time.perf_counter() - t0) * 1000
             )
+
             return {"total": total, "page": page, "page_size": size, "items": items}
 
-        # -------- Slow-path (orden global por Dirección preferida + Id) --------
-        t_build = time.perf_counter()
-        base = (
-            db.query(
-                Division.Id.label("Id"),
-                Division.Nombre.label("Nombre"),
-                Division.Active.label("Active"),
-                Division.ServicioId.label("ServicioId"),
-                func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
-                func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
-                func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
-                DirPref.label("DirPref"),
-            )
-            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
-        )
+        except Exception:
+            log.exception("DIVISIONES.list → ERROR")
+            raise
 
-        if active is not None:
-            base = base.filter(cast(Division.Active, Integer) == (1 if active else 0))
-        if servicio_id is not None:
-            base = base.filter(Division.ServicioId == servicio_id)
-        if region_id is not None:
-            base = base.filter(or_(Division.RegionId == region_id, Direccion.RegionId == region_id))
-        if provincia_id is not None:
-            base = base.filter(or_(Division.ProvinciaId == provincia_id, Direccion.ProvinciaId == provincia_id))
-        if comuna_id is not None:
-            base = base.filter(or_(Division.ComunaId == comuna_id, Direccion.ComunaId == comuna_id))
-
-        if q:
-            like = f"%{q}%"
-            base = base.filter(
-                or_(
-                    func.coalesce(Division.Nombre, "").like(like),
-                    func.coalesce(Division.Direccion, "").like(like),
-                    func.coalesce(Direccion.DireccionCompleta, "").like(like),
-                )
-            )
-
-        log.debug("DIVISIONES.list[SLOW] → base listo (%.1f ms)", (time.perf_counter() - t_build) * 1000)
-
-        # Total
-        t_total = time.perf_counter()
-        total_subq = base.with_entities(Division.Id).subquery()
-        total = db.query(func.count()).select_from(total_subq).scalar() or 0
-        log.debug("DIVISIONES.list[SLOW] → total=%s (%.1f ms hasta total)",
-                  total, (time.perf_counter() - t_total) * 1000)
-
-        # ROW_NUMBER() con orden global por DirPref + Id
-        rn = func.row_number().over(
-            order_by=(func.coalesce(DirPref, "").asc(), Division.Id.asc())
-        ).label("rn")
-
-        ranked = (
-            base.with_entities(
-                Division.Id.label("Id"),
-                Division.Nombre.label("Nombre"),
-                Division.Active.label("Active"),
-                Division.ServicioId.label("ServicioId"),
-                func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
-                func.coalesce(Division.ProvinciaId, Direccion.ProvinciaId).label("ProvinciaId"),
-                func.coalesce(Division.ComunaId, Direccion.ComunaId).label("ComunaId"),
-                DirPref.label("Direccion"),
-                rn,
-            )
-        ).subquery()
-
-        start = (page - 1) * size + 1
-        end = page * size
-
-        t_page = time.perf_counter()
-        rows = (
-            db.query(ranked, *_select_columns(DirPref)[4:])  # añadimos el resto de columnas después de territoriales
-            .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
-            .join(Division, Division.Id == ranked.c.Id)
-            .filter(ranked.c.rn.between(start, end))
-            .order_by(ranked.c.rn.asc())
-            .all()
-        )
-
-        # Armar dict limpio:
-        items: List[Dict[str, Any]] = []
-        for row in rows:
-            base_map = {
-                "Id": row.ranked.Id,
-                "Nombre": row.ranked.Nombre,
-                "Active": row.ranked.Active,
-                "ServicioId": row.ranked.ServicioId,
-                "RegionId": row.ranked.RegionId,
-                "ProvinciaId": row.ranked.ProvinciaId,
-                "ComunaId": row.ranked.ComunaId,
-                "Direccion": row.ranked.Direccion,
-            }
-            extra = {k: v for k, v in row._mapping.items() if k not in base_map and k not in ("rn", "ranked")}
-            base_map.update(extra)
-            items.append(base_map)
-
-        log.debug(
-            "DIVISIONES.list[SLOW] → DONE total=%s page=%s size=%s items=%s (%.1f ms total)",
-            total, page, size, len(items), (time.perf_counter() - t0) * 1000
-        )
-
-        return {"total": total, "page": page, "page_size": size, "items": items}
 
     # --------- GET/SELECT y filtros simples ---------
     def get(self, db: Session, division_id: int) -> Division:
