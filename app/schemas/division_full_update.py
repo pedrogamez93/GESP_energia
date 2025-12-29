@@ -40,8 +40,8 @@ class DivisionFullUpdate(BaseModel):
 
     # Indicadores / flags generales
     IndicadorEE: Optional[bool] = None
-    IndicadorEnegia: Optional[bool] = None
-    NivelPaso3: Optional[bool] = None
+    IndicadorEnegia: Optional[float] = None   # ✅ FIX: en BD es numérico (38.62 etc.)
+    NivelPaso3: Optional[int] = None          # ✅ FIX: en payload viene 0/1
     PisosIguales: Optional[bool] = None
 
     # Rol / gestión
@@ -74,7 +74,7 @@ class DivisionFullUpdate(BaseModel):
     CalefaccionGas: Optional[bool] = None
     DisponeCalefaccion: Optional[bool] = None
 
-    # Sistemas (coherente con tu service de sistemas)
+    # Sistemas
     TipoLuminariaId: Optional[int] = None
     EquipoAcsId: Optional[int] = None
     EquipoCalefaccionId: Optional[int] = None
