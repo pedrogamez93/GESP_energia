@@ -43,6 +43,7 @@ def _select_columns(DirPref):
     return [
         Division.Id.label("Id"),
         Division.Nombre.label("Nombre"),
+        Division.Funcionarios.label("Funcionarios"),
         Division.Active.label("Active"),
         Division.ServicioId.label("ServicioId"),
 
@@ -257,6 +258,7 @@ class DivisionService:
                 db.query(
                     Division.Id.label("Id"),
                     Division.Nombre.label("Nombre"),
+                    Division.Funcionarios.label("Funcionarios"),
                     Division.Active.label("Active"),
                     Division.ServicioId.label("ServicioId"),
                     func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
@@ -311,6 +313,7 @@ class DivisionService:
                 base.with_entities(
                     Division.Id.label("Id"),
                     Division.Nombre.label("Nombre"),
+                    Division.Funcionarios.label("Funcionarios"),
                     Division.Active.label("Active"),
                     Division.ServicioId.label("ServicioId"),
                     func.coalesce(Division.RegionId, Direccion.RegionId).label("RegionId"),
@@ -324,9 +327,23 @@ class DivisionService:
             start = (page - 1) * size + 1
             end = page * size
 
+            # ✅ FIX REAL: NO uses slices [4:], porque el orden cambia y repites campos base.
+            base_keys = {
+                "Id",
+                "Nombre",
+                "Funcionarios",
+                "Active",
+                "ServicioId",
+                "RegionId",
+                "ProvinciaId",
+                "ComunaId",
+                "Direccion",
+            }
+            extras = [c for c in _select_columns(DirPref) if c.key not in base_keys]
+
             t_page = time.perf_counter()
             rows = (
-                db.query(ranked, *_select_columns(DirPref)[4:])  # añadimos resto de columnas después de territoriales
+                db.query(ranked, *extras)
                 .outerjoin(Direccion, Direccion.Id == Division.DireccionInmuebleId)
                 .join(Division, Division.Id == ranked.c.Id)
                 .filter(ranked.c.rn.between(start, end))
@@ -339,6 +356,7 @@ class DivisionService:
                 base_map = {
                     "Id": row.ranked.Id,
                     "Nombre": row.ranked.Nombre,
+                    "Funcionarios": row.ranked.Funcionarios,
                     "Active": row.ranked.Active,
                     "ServicioId": row.ranked.ServicioId,
                     "RegionId": row.ranked.RegionId,
@@ -346,7 +364,11 @@ class DivisionService:
                     "ComunaId": row.ranked.ComunaId,
                     "Direccion": row.ranked.Direccion,
                 }
-                extra = {k: v for k, v in row._mapping.items() if k not in base_map and k not in ("rn", "ranked")}
+                extra = {
+                    k: v
+                    for k, v in row._mapping.items()
+                    if k not in base_map and k not in ("rn", "ranked")
+                }
                 base_map.update(extra)
                 items.append(base_map)
 
@@ -360,7 +382,6 @@ class DivisionService:
         except Exception:
             log.exception("DIVISIONES.list → ERROR")
             raise
-
 
     # --------- GET/SELECT y filtros simples ---------
     def get(self, db: Session, division_id: int) -> Division:
@@ -458,13 +479,13 @@ class DivisionService:
         if region_id is not None:
             qy = (
                 qy.outerjoin(Edificio, Edificio.Id == Division.EdificioId)
-                  .outerjoin(Comuna, Comuna.Id == Edificio.ComunaId)
-                  .filter(
-                      or_(
-                          Division.RegionId == region_id,
-                          Comuna.RegionId == region_id,
-                      )
-                  )
+                .outerjoin(Comuna, Comuna.Id == Edificio.ComunaId)
+                .filter(
+                    or_(
+                        Division.RegionId == region_id,
+                        Comuna.RegionId == region_id,
+                    )
+                )
             )
 
         # 🔍 Búsqueda por texto: ahora Dirección **o Nombre**
@@ -706,8 +727,8 @@ class DivisionService:
         db.commit()
         db.refresh(d)
         return d
-    
- # lista de busqueda especifica 
+
+    # lista de busqueda especifica
     def list_busqueda_especifica(
         self,
         db: Session,

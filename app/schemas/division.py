@@ -74,6 +74,8 @@ class DivisionListDTO(DivisionSelectDTO):
     ComunaId: Optional[int] = None
     DireccionInmuebleId: Optional[int] = None
 
+    Funcionarios: Optional[int] = None   # ✅ AGREGAR
+
     # NUEVOS ya expuestos en list()
     IndicadorEE: Optional[int] = None
     AccesoFactura: Optional[int] = None
