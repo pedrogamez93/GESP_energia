@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import Column, Integer, String
-from app.db.base_class import Base  # ajusta si tu Base está en otro path
+from app.db.base import Base
 
 
 class TipoUso(Base):
