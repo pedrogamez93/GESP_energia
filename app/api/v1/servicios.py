@@ -450,7 +450,7 @@ def get_instituciones_by_servicio(
     db: DbDep
 ) -> List[InstitucionListDTO]:
     rows = (
-        db.query(Institucion.Id, Institucion.Nombre)
+        db.query(Institucion.Id, Institucion.Nombre, Institucion.Active)
           .join(Servicio, Servicio.InstitucionId == Institucion.Id)
           .filter(
               Servicio.Id == servicio_id,
@@ -461,4 +461,4 @@ def get_instituciones_by_servicio(
           .order_by(Institucion.Nombre)
           .all()
     )
-    return [InstitucionListDTO(Id=r[0], Nombre=r[1]) for r in rows]
+    return [InstitucionListDTO(Id=r[0], Nombre=r[1], Active=r[2]) for r in rows]
