@@ -14,16 +14,46 @@ from app.db.models.tipo_luminaria import TipoLuminaria
 from app.db.models.tipo_equipo_calefaccion import TipoEquipoCalefaccion
 from app.db.models.tipo_equipo_calefaccion_energetico import TipoEquipoCalefaccionEnergetico
 from app.db.models.energetico import Energetico
-from app.db.models.tipo_colector import TipoColector  
+from app.db.models.tipo_colector import TipoColector
 
 from app.schemas.division_sistemas import DivisionSistemasDTO, DivisionSistemasUpdate
 from app.services.division_service import DivisionService
 
 log = logging.getLogger("division_sistemas")
 
+
 def _now():
     return datetime.utcnow()
 
+
+def _as_bool(v: Any) -> Any:
+    """
+    SQL Server BIT acepta bool o 0/1.
+    Esto ayuda si llega int/float o string "0"/"1" desde swagger/front.
+    """
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(int(v))
+    s = str(v).strip().lower()
+    if s in ("1", "true", "t", "si", "sí", "yes", "y"):
+        return True
+    if s in ("0", "false", "f", "no", "n"):
+        return False
+    return v
+
+
+def _as_float(v: Any) -> Any:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip().replace(",", "."))
+    except Exception:
+        return v
 
 
 # Campos de sistemas que vamos a exponer/editar
@@ -119,6 +149,13 @@ class DivisionSistemasService:
         for k, v in payload.items():
             if k in _SYSTEM_FIELDS:
                 if hasattr(d, k):
+                    # ---- Normalizaciones suaves por tipo (BIT/float) ----
+                    if k in ("FotoTecho", "InstTerSisFv", "ImpSisFv", "SistemaSolarTermico"):
+                        v = _as_bool(v)
+
+                    if k in ("SupFotoTecho", "SupColectores", "SupInstTerSisFv", "SupImptSisFv", "PotIns"):
+                        v = _as_float(v)
+
                     setattr(d, k, v)
                 else:
                     log.debug(
@@ -432,14 +469,16 @@ class DivisionSistemasService:
     }
 
     _FOTOVOLTAICO_FIELDS = {
+        # ✅ FIX: estaban faltando, por eso NO volvían en el GET/PUT de FV
+        "FotoTecho",
+        "SupFotoTecho",
+
         "InstTerSisFv",
         "SupInstTerSisFv",
         "ImpSisFv",
         "SupImptSisFv",
         "PotIns",
         "MantSfv",
-        # si en tu DTO FV también van estos, agrégalos acá:
-        # "SupFotoTecho", "FotoTecho", etc. (solo si aplica)
     }
 
     def _section_dict(self, d: Division, fields: set[str]) -> Dict[str, Any]:
