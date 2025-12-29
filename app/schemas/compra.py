@@ -129,6 +129,9 @@ class CompraListDTO(BaseModel):
     Costo: float
     Active: bool = True
 
+    CreatedBy: Optional[str] = None
+    ModifiedBy: Optional[str] = None
+
     # Campos aplanados adicionales
     ServicioId: Optional[int] = None
     ServicioNombre: Optional[str] = None
@@ -409,6 +412,9 @@ class CompraListFullDTO(BaseModel):
     Consumo: float
     Costo: float
     Active: bool = True
+
+    CreatedBy: Optional[str] = None
+    ModifiedBy: Optional[str] = None
 
     # Enriquecidos
     ServicioId: Optional[int] = None

@@ -226,8 +226,13 @@ def replace_items_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     payload: CompraItemsPayload,
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     # Permite limpiar items si viene Items=[]
-    rows = svc.replace_items(db, compra_id, [x.model_dump() for x in (payload.Items or [])])
+    rows = svc.replace_items(
+        db,
+        compra_id,
+        [x.model_dump() for x in (payload.Items or [])],
+        modified_by=current_user.id,  # ✅ auditoría (quién modificó)
+    )
     return [CompraMedidorItemDTO.model_validate(x) for x in rows]
