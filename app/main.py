@@ -415,8 +415,8 @@ from app.api.v1 import division_sistemas_detalle
 from app.api.v1 import areas_unidades_router
 from app.api.v1.archivos import router as archivos_router
 from app.api.v1.auth_password_reset import router as auth_password_reset_router
-from app.api.v1.tipos_uso import router as tipos_uso_router
-from app.api.v1.tipos_propiedades import router as tipos_propiedades_router
+from app.api.v1.tipo_usos import router as tipo_usos_router
+from app.api.v1.tipo_propiedades import router as tipo_propiedades_router
 
 # Montaje
 app.include_router(debug.dbg)
@@ -472,5 +472,5 @@ app.include_router(areas_unidades_router.router)
 app.include_router(archivos_router)
 app.include_router(auth_password_reset_router)
 app.include_router(sistemas_mantenedores.router)
-app.include_router(tipos_uso_router)
-app.include_router(tipos_propiedades_router)
+app.include_router(tipo_usos_router)
+app.include_router(tipo_propiedades_router)
