@@ -39,7 +39,7 @@ def list_divisiones(
     db: DbDep,
     q: Optional[str] = Query(None, description="Busca en Dirección o Nombre (case-insensitive)"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(15, ge=1, le=200),   # default 15
+    page_size: int = Query(15, ge=1, le=500),   # default 15
     active: Optional[bool] = Query(True),
     ServicioId: Optional[int] = Query(None),
     RegionId: Optional[int] = Query(None),
@@ -81,7 +81,7 @@ def list_divisiones_busqueda_especifica(
     ServicioId: Optional[int] = Query(None),
     RegionId: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(50, ge=1, le=500),
 ):
     return svc.list_busqueda_especifica(
         db=db,

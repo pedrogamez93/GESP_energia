@@ -190,7 +190,7 @@ class DivisionService:
             import time
 
             t0 = time.perf_counter()
-            size = max(1, min(200, page_size))
+            size = max(1, min(500, page_size))
             page = max(1, page)
 
             # Dirección preferida (Division.Direccion o Direccion.DireccionCompleta)
@@ -746,7 +746,7 @@ class DivisionService:
         - ORDER BY Division.Id DESC
         """
 
-        size = max(1, min(200, page_size))
+        size = max(1, min(500, page_size))
         page = max(1, page)
 
         DireccionPref = func.coalesce(
