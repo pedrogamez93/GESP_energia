@@ -13,7 +13,7 @@ from app.schemas.medidor import (
     MedidorListDTO,
     MedidorCreate,
     MedidorUpdate,
-    MedidorPage,  # tipado de página
+    MedidorPage,
 )
 from app.services.medidor_service import MedidorService
 
@@ -32,14 +32,27 @@ def list_medidores(
     page_size: int = Query(50, ge=1, le=200),
     NumeroClienteId: int | None = Query(default=None),
     DivisionId: int | None = Query(default=None),
+
+    # ✅ NUEVOS filtros que tu UI necesita
+    institucion_id: int | None = Query(default=None),
+    servicio_id: int | None = Query(default=None),
+    active: bool | None = Query(default=None),
+
+    # ✅ filtro por ID en grilla (además del endpoint /{id}/detalle)
+    medidor_id: int | None = Query(default=None, ge=1),
 ):
-    """
-    Retorna una página tipada para documentación y validación.
-    El servicio debe devolver un dict con:
-      { total, page, page_size, items }
-    donde items es una lista de instancias ORM o dicts compatibles.
-    """
-    return svc.list(db, q, page, page_size, NumeroClienteId, DivisionId)
+    return svc.list(
+        db=db,
+        q=q,
+        page=page,
+        page_size=page_size,
+        numero_cliente_id=NumeroClienteId,
+        division_id=DivisionId,
+        institucion_id=institucion_id,
+        servicio_id=servicio_id,
+        active=active,
+        medidor_id=medidor_id,
+    )
 
 
 @router.get(
@@ -52,8 +65,6 @@ def list_by_division(
     division_id: Annotated[int, Path(..., ge=1)],
 ):
     items = svc.by_division(db, division_id)
-    # Pydantic v2 permite devolver ORM directamente, pero
-    # mantenemos la validación explícita para homogeneidad.
     return [MedidorListDTO.model_validate(x) for x in items]
 
 
@@ -75,14 +86,24 @@ def get_medidor(
     db: DbDep,
     medidor_id: Annotated[int, Path(..., ge=1)],
 ):
-    """
-    🔧 Arregla el 500: el schema ahora espera datetime (no str) en CreatedAt/UpdatedAt.
-    Con model_config.from_attributes=True, podemos retornar el objeto ORM directo.
-    """
     obj = svc.get(db, medidor_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Medidor no encontrado")
     return obj
+
+
+# ==========================================================
+# ✅ NUEVO ENDPOINT: Detalle COMPLETO (sin romper el anterior)
+# ==========================================================
+@router.get(
+    "/{medidor_id}/detalle",
+    summary="Detalle completo de medidor (institución, servicio, dirección)",
+)
+def get_medidor_detalle_completo(
+    db: DbDep,
+    medidor_id: Annotated[int, Path(..., ge=1)],
+):
+    return svc.get_detalle_completo(db, medidor_id)
 
 
 # --- Buscar por NumeroClienteId + NumMedidor (igual al .NET) ---
@@ -139,7 +160,6 @@ def check_exist_medidor(
     db: DbDep,
     payload: dict,
 ):
-    # Sanitizado básico
     try:
         numero_cliente_id = int(payload.get("NumeroClienteId"))
     except (TypeError, ValueError):
