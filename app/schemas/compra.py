@@ -124,7 +124,8 @@ class CompraListDTO(BaseModel):
     FechaCompra: DateLike = None
     InicioLectura: DateLike = None
     FinLectura: DateLike = None
-
+    CreatedAt: DateLike = None
+    UpdatedAt: DateLike = None
     Consumo: float
     Costo: float
     Active: bool = True
