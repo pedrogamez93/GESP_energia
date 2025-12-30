@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
@@ -40,6 +41,16 @@ def list_unidades_filter(
     institucionId: Optional[int] = Query(None),
     servicioId: Optional[int] = Query(None),
     regionId: Optional[int] = Query(None),
+
+    # ✅ NUEVO: filtro de estado
+    # - None (omitido) => ambos
+    # - 1 => solo activos
+    # - 0 => solo inactivos
+    active: Optional[int] = Query(
+        None,
+        description="1=solo activos, 0=solo inactivos, omitido/null=ambos",
+    ),
+
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -52,6 +63,7 @@ def list_unidades_filter(
         InstitucionId=institucionId,
         ServicioId=servicioId,
         RegionId=regionId,
+        Active=active,  # ✅ NUEVO
     )
     return svc.list_filter(f, page, page_size)
 
@@ -72,6 +84,13 @@ def get_by_filter(
     institucionId: Optional[int] = Query(None),
     servicioId: Optional[int] = Query(None),
     regionId: Optional[int] = Query(None),
+
+    # (opcional) si quieres igual filtrar aquí
+    active: Optional[int] = Query(
+        None,
+        description="1=solo activos, 0=solo inactivos, omitido/null=ambos",
+    ),
+
     db: Session = Depends(get_db),
     me: CurrentUser = Depends(get_current_user),
 ):
@@ -82,6 +101,7 @@ def get_by_filter(
         InstitucionId=institucionId,
         ServicioId=servicioId,
         RegionId=regionId,
+        Active=active,  # ✅ NUEVO (no rompe nada)
     )
     page = svc.list_filter(f, page=1, page_size=100000)
     return [UnidadListDTO.model_validate(x) for x in page.data]
@@ -93,6 +113,13 @@ def get_by_filter(
 @router.get("/por-servicio/{servicio_id}", response_model=List[UnidadListDTO])
 def list_unidades_by_servicio(
     servicio_id: int,
+
+    # (opcional) si quieres filtrar por activos/inactivos
+    active: Optional[int] = Query(
+        None,
+        description="1=solo activos, 0=solo inactivos, omitido/null=ambos",
+    ),
+
     db: Session = Depends(get_db),
     me: CurrentUser = Depends(get_current_user),
 ):
@@ -107,6 +134,7 @@ def list_unidades_by_servicio(
         InstitucionId=None,
         ServicioId=servicio_id,
         RegionId=None,
+        Active=active,  # ✅ NUEVO
     )
     page = svc.list_filter(f, page=1, page_size=100000)
     return [UnidadListDTO.model_validate(x) for x in page.data]

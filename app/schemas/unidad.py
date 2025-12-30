@@ -45,7 +45,8 @@ class UnidadFilterDTO(BaseModel):
     ServicioId: Optional[int] = None
     RegionId: Optional[int] = None
 
-
+    Active: Optional[int] = None
+    
 class UnidadPatchDTO(BaseModel):
     """
     Placeholder para compatibilidad de imports (router).

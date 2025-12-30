@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import List, Optional, Tuple
 from datetime import datetime
 
@@ -28,8 +29,10 @@ from app.services.inmueble_service import InmuebleService
 # ---------------------- Helpers ----------------------
 _ACTIVE_CANDIDATES = ("Active", "Activo", "IsActive", "Enabled")
 
+
 def _now() -> datetime:
     return datetime.now()
+
 
 def _find_active_column(model) -> Tuple[Optional[str], Optional[object]]:
     for name in _ACTIVE_CANDIDATES:
@@ -37,22 +40,27 @@ def _find_active_column(model) -> Tuple[Optional[str], Optional[object]]:
             return name, getattr(model, name)
     return None, None
 
+
 _ACTIVE_NAME, _ACTIVE_COL = _find_active_column(Unidad)
+
 
 def _get_instance_active(u: Unidad) -> Optional[bool]:
     if _ACTIVE_NAME:
         return getattr(u, _ACTIVE_NAME)
     return None
 
+
 def _set_instance_active(u: Unidad, value: bool) -> None:
     if _ACTIVE_NAME:
         setattr(u, _ACTIVE_NAME, value)
+
 
 def _q_only_actives(q):
     if _ACTIVE_COL is not None:
         # En MSSQL es mejor "col = 1" que "IS TRUE"
         return q.filter(_ACTIVE_COL == True)  # noqa: E712
     return q
+
 
 def _coerce_boolish_to_int(v) -> int | None:
     """Convierte 'Si/No', True/False, '1'/'0' → 1/0/None."""
@@ -69,6 +77,29 @@ def _coerce_boolish_to_int(v) -> int | None:
         return int(s)
     except Exception:
         return None
+
+
+# ✅ NUEVO: filtro opcional de Active
+def _q_filter_active(q, active: Optional[int]):
+    """
+    active:
+      - None => ambos (no filtra)
+      - 1    => solo activos
+      - 0    => solo inactivos
+    """
+    if _ACTIVE_COL is None:
+        return q  # si no existe columna, no filtramos
+
+    if active is None:
+        return q
+
+    a = _coerce_boolish_to_int(active)
+    if a == 1:
+        return q.filter(_ACTIVE_COL == True)  # noqa: E712
+    if a == 0:
+        return q.filter(_ACTIVE_COL == False)  # noqa: E712
+    return q
+
 
 def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
     active_val = _get_instance_active(u)
@@ -95,6 +126,7 @@ def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
         },
         from_attributes=False,
     )
+
 
 def _map_unidad_to_listdto(
     u: Unidad,
@@ -125,6 +157,7 @@ def _map_unidad_to_listdto(
         },
         from_attributes=False,
     )
+
 
 def _lazy_models():
     """
@@ -185,7 +218,6 @@ class UnidadService:
                 UpdatedAt=_now(),
                 CreatedBy=self.current_user_id,
                 Version=1,
-
                 Nombre=payload.get("Nombre"),
                 ServicioId=payload.get("ServicioId"),
                 ChkNombre=chk_nombre,
@@ -251,9 +283,15 @@ class UnidadService:
         elif u.ChkNombre is None:
             u.ChkNombre = 1
 
-        u.InstitucionResponsableId = payload.get("InstitucionResponsableId", getattr(u, "InstitucionResponsableId", None))
-        u.ServicioResponsableId = payload.get("ServicioResponsableId", getattr(u, "ServicioResponsableId", None))
-        u.OrganizacionResponsable = payload.get("OrganizacionResponsable", getattr(u, "OrganizacionResponsable", None))
+        u.InstitucionResponsableId = payload.get(
+            "InstitucionResponsableId", getattr(u, "InstitucionResponsableId", None)
+        )
+        u.ServicioResponsableId = payload.get(
+            "ServicioResponsableId", getattr(u, "ServicioResponsableId", None)
+        )
+        u.OrganizacionResponsable = payload.get(
+            "OrganizacionResponsable", getattr(u, "OrganizacionResponsable", None)
+        )
 
         u.UpdatedAt = _now()
         u.ModifiedBy = self.current_user_id
@@ -344,7 +382,11 @@ class UnidadService:
     # ---------- LIST (filter + pagination) ----------
     def list_filter(self, f: UnidadFilterDTO, page: int, page_size: int) -> Page[UnidadListDTO]:
         q = self.db.query(Unidad)
-        q = _q_only_actives(q)
+
+        # ✅ CAMBIO CLAVE:
+        # - Antes: siempre filtraba activos (solo Active=1)
+        # - Ahora: si f.Active es None -> trae ambos; si 1 o 0 -> filtra
+        q = _q_filter_active(q, getattr(f, "Active", None))
 
         if f.Unidad:
             like = f"%{f.Unidad}%"
@@ -374,14 +416,17 @@ class UnidadService:
         total: int = q.count()
         items: List[Unidad] = (
             q.order_by(Unidad.Nombre)
-             .offset((page - 1) * page_size)
-             .limit(page_size)
-             .all()
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
         )
 
         data = [_map_unidad_to_listdto(u) for u in items]
         pages = (total + page_size - 1) // page_size
-        return Page[UnidadListDTO](data=data, meta=PageMeta(total=total, page=page, page_size=page_size, pages=pages))
+        return Page[UnidadListDTO](
+            data=data,
+            meta=PageMeta(total=total, page=page, page_size=page_size, pages=pages),
+        )
 
     # ---------- Asociados por usuario ----------
     def list_asociados_by_user(self, user_id: str) -> List[UnidadListDTO]:
@@ -400,7 +445,9 @@ class UnidadService:
             else:
                 return []
 
+        # Mantengo comportamiento previo aquí: solo activos para “asociados”
         q = _q_only_actives(q)
+
         items = q.order_by(Unidad.Nombre).all()
         return [_map_unidad_to_listdto(u) for u in items]
 
@@ -484,9 +531,12 @@ class UnidadService:
 
         keep = existentes  # solo mantenemos los válidos
 
-        actuales = {r.InmuebleId for r in self.db.scalars(
-            select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
-        ).all()}
+        actuales = {
+            r.InmuebleId
+            for r in self.db.scalars(
+                select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
+            ).all()
+        }
 
         # Borrar los que sobren
         to_delete = actuales - keep
