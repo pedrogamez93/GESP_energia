@@ -27,7 +27,7 @@ def listar_inmuebles(
     db: DbDep,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
-    active: Annotated[bool | None, Query()] = True,
+    active: Annotated[bool | None, Query()] = None,
     servicio_id: Annotated[int | None, Query()] = None,
     region_id: Annotated[int | None, Query()] = None,
     comuna_id: Annotated[int | None, Query()] = None,
@@ -164,3 +164,34 @@ def get_inmueble_por_unidad(unidad_id: int, db: Session = Depends(get_db)):
 def list_inmuebles_por_unidad(unidad_id: int, db: Session = Depends(get_db)):
     svc = InmuebleService(db)
     return svc.list_by_unidad(unidad_id)
+
+@router.put(
+    "/{inmueble_id}/activar",
+    response_model=InmuebleDTO,
+    summary="(ADMIN) Activar inmueble"
+)
+def activar_inmueble(
+    inmueble_id: Annotated[int, Path(ge=1)],
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    obj = InmuebleService(db).set_active(inmueble_id, True, current_user.id)
+    if not obj:
+        raise HTTPException(404, "No encontrado")
+    return obj
+
+
+@router.put(
+    "/{inmueble_id}/desactivar",
+    response_model=InmuebleDTO,
+    summary="(ADMIN) Desactivar inmueble"
+)
+def desactivar_inmueble(
+    inmueble_id: Annotated[int, Path(ge=1)],
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    obj = InmuebleService(db).set_active(inmueble_id, False, current_user.id)
+    if not obj:
+        raise HTTPException(404, "No encontrado")
+    return obj

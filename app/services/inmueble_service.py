@@ -553,3 +553,25 @@ class InmuebleService:
                 })
             out.append(self._to_list_dto_row(r))
         return out
+
+    def set_active(self, inmueble_id: int, active: bool, modified_by: str) -> InmuebleDTO | None:
+        obj = self.db.query(Division).filter(Division.Id == inmueble_id).first()
+        if not obj:
+            return None
+
+        obj.Active = bool(active)
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
+        obj.Version = (obj.Version or 0) + 1
+
+        # Cascada si es edificio padre
+        if obj.TipoInmueble == 1:
+            self.db.query(Division).filter(
+                Division.ParentId == inmueble_id
+            ).update(
+                {Division.Active: bool(active)},
+                synchronize_session=False
+            )
+
+        self.db.commit()
+        return self.get(inmueble_id)
