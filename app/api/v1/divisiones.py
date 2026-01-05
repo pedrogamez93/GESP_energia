@@ -40,7 +40,7 @@ def list_divisiones(
     q: Optional[str] = Query(None, description="Busca en Dirección o Nombre (case-insensitive)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(15, ge=1, le=500),   # default 15
-    active: Optional[bool] = Query(True),
+    active: Optional[bool] = Query(None, description="Filtra por Active. Si se omite, devuelve activas e inactivas."),
     ServicioId: Optional[int] = Query(None),
     RegionId: Optional[int] = Query(None),
     ProvinciaId: Optional[int] = Query(None),

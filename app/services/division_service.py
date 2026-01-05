@@ -173,7 +173,7 @@ class DivisionService:
         q: Optional[str],
         page: int,
         page_size: int,
-        active: Optional[bool] = True,
+        active: Optional[bool] = None,
         servicio_id: Optional[int] = None,
         region_id: Optional[int] = None,
         provincia_id: Optional[int] = None,
