@@ -2,10 +2,15 @@ from __future__ import annotations
 from pydantic import BaseModel
 from typing import Optional, List
 
-# Para listados simples (Id, Nombre)
+# Para listados simples (grilla del mantenedor)
 class TipoEquipoCalefaccionSelectDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
+    Active: Optional[bool] = None
+    AC: bool
+    CA: bool
+    FR: bool
+
     class Config:
         from_attributes = True
 
@@ -47,9 +52,9 @@ class TipoEquipoCalefaccionCreate(BaseModel):
     Mant_HD_Maestro: float = 0
     Mant_HD_Ayte: float = 0
     Mant_HD_Jornal: float = 0
-    AC: bool = False
-    CA: bool = False
-    FR: bool = False
+    AC: bool = False   # ACS
+    CA: bool = False   # Calefacción
+    FR: bool = False   # Refrigeración
 
 class TipoEquipoCalefaccionUpdate(BaseModel):
     Nombre: Optional[str] = None
@@ -77,6 +82,7 @@ class TECEnergeticoDTO(BaseModel):
     Id: int
     TipoEquipoCalefaccionId: int
     EnergeticoId: int
+
     class Config:
         from_attributes = True
 
