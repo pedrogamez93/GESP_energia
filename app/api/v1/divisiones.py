@@ -173,6 +173,11 @@ def get_divisiones_by_region(
 
 # ------------------------------------------------------------
 # Por usuario (ADMIN + gestores, self-only)
+#  Roles reales (según token):
+#   - ADMINISTRADOR
+#   - GESTOR_SERVICIO
+#   - GESTOR_UNIDAD
+#   - GESTOR DE CONSULTA
 # ------------------------------------------------------------
 
 @router.get(
@@ -188,9 +193,9 @@ def get_divisiones_by_user(
         Depends(
             require_roles(
                 "ADMINISTRADOR",
-                "GESTOR_SERVICIOS",
+                "GESTOR_SERVICIO",
                 "GESTOR_UNIDAD",
-                "GESTOR_CONSULTA",
+                "GESTOR DE CONSULTA",
             )
         ),
     ],
