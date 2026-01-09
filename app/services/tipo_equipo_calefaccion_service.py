@@ -18,8 +18,8 @@ class TipoEquipoCalefaccionService:
     def list(self, db: Session, q: str | None, page: int, page_size: int) -> dict:
         page = max(1, int(page or 1))
         size = max(1, min(200, int(page_size or 50)))
-
         query = db.query(TipoEquipoCalefaccion)
+
         if q:
             like = f"%{q}%"
             query = query.filter(
@@ -84,38 +84,26 @@ class TipoEquipoCalefaccionService:
         db.refresh(obj)
         return obj
 
-    # PUT clásico
+    # PUT clásico (ahora también actualiza AC/CA/FR)
     def update(self, db: Session, id_: int, data, user: str | None = None):
-        """
-        PUT /api/v1/tipos-equipos-calefaccion/{id}
-
-        Ahora SÍ actualiza también las banderas AC / CA / FR
-        (clasificación para Calefacción, Refrigeración y ACS).
-        """
         obj = self.get(db, id_)
 
-        # Pydantic v2 -> usamos model_dump(exclude_unset=True) si existe
+        # Normalizamos payload (Pydantic v2 o dict)
         if hasattr(data, "model_dump"):
             p = data.model_dump(exclude_unset=True)
         else:
             p = {k: v for k, v in dict(data).items() if v is not None}
 
-        # Nombre
         if "Nombre" in p:
             obj.Nombre = (p["Nombre"] or "").strip() or None
 
-        # Activo (si la columna existe en el modelo)
-        if "Active" in p and hasattr(obj, "Active"):
-            if p["Active"] is not None:
-                obj.Active = bool(p["Active"])
-
-        # Clasificación: AC (ACS), CA (Calefacción), FR (Refrigeración)
-        for flag in ("AC", "CA", "FR"):
-            if flag in p and p[flag] is not None:
-                setattr(obj, flag, bool(p[flag]))
-
-        # Si quisieras permitir actualizar otros campos numéricos vía PUT,
-        # podrías añadirlos aquí de forma explícita.
+        # Flags de clasificación
+        if "AC" in p and p["AC"] is not None:
+            obj.AC = bool(p["AC"])
+        if "CA" in p and p["CA"] is not None:
+            obj.CA = bool(p["CA"])
+        if "FR" in p and p["FR"] is not None:
+            obj.FR = bool(p["FR"])
 
         db.commit()
         db.refresh(obj)
@@ -139,7 +127,7 @@ class TipoEquipoCalefaccionService:
                 continue
             if k == "Nombre":
                 v = (v or "").strip() or None
-            if k in bools and v is not None:
+            if k in bools:
                 v = bool(v)
             setattr(obj, k, v)
 
@@ -157,9 +145,7 @@ class TipoEquipoCalefaccionService:
         self.get(db, tipo_id)  # valida existencia
         return (
             db.query(TipoEquipoCalefaccionEnergetico)
-            .filter(
-                TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId == tipo_id
-            )
+            .filter(TipoEquipoCalefaccionEnergetico.TipoEquipoCalefaccionId == tipo_id)
             .order_by(TipoEquipoCalefaccionEnergetico.Id)
             .all()
         )
@@ -176,7 +162,6 @@ class TipoEquipoCalefaccionService:
         )
         if exists:
             return exists
-
         obj = TipoEquipoCalefaccionEnergetico(
             TipoEquipoCalefaccionId=tipo_id,
             EnergeticoId=energetico_id,
