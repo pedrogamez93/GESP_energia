@@ -14,7 +14,8 @@ from app.schemas.auth import UserPublic
 from app.schemas.compra import (
     CompraDTO, CompraCreate, CompraUpdate,
     CompraMedidorItemDTO, CompraItemsPayload,
-    CompraPage, CompraFullPage, CompraFullDetalleDTO
+    CompraPage, CompraFullPage, CompraFullDetalleDTO,
+    CompraFullDTO, CompraMedidorItemFullDTO
 )
 
 from app.services.compra_service import CompraService
@@ -70,11 +71,9 @@ def list_compras(
     NombreOpcional: str | None = Query(default=None, description="Match en c.NombreOpcional o d.Nombre"),
     full: bool = Query(default=True, description="Si true, retorna versión enriquecida"),
 ):
-    # Blindaje adicional (además de Query) por si se llama internamente o cambia el límite
     page = _clamp_page(page)
     page_size = _clamp_page_size(page_size)
 
-    # Normaliza strings (evita búsquedas con espacios vacíos)
     q = _nz_str(q)
     FechaDesde = _nz_str(FechaDesde)
     FechaHasta = _nz_str(FechaHasta)
@@ -82,7 +81,6 @@ def list_compras(
     NombreOpcional = _nz_str(NombreOpcional)
 
     if full:
-        # ===== Enriquecido: usa el batch del service y evita que Pydantic pode =====
         total, items = svc.list_full(
             db, q, page, page_size,
             division_id=DivisionId,
@@ -90,7 +88,7 @@ def list_compras(
             energetico_id=EnergeticoId,
             numero_cliente_id=NumeroClienteId,
             fecha_desde=FechaDesde,
-            fecha_hasta=FechaHasta,  # inclusiva dentro del service
+            fecha_hasta=FechaHasta,
             active=active,
             medidor_id=MedidorId,
             estado_validacion_id=EstadoValidacionId,
@@ -98,7 +96,6 @@ def list_compras(
             edificio_id=EdificioId,
             nombre_opcional=NombreOpcional,
         )
-        # JSONResponse bypass => entrega TODO tal cual (Servicio/Institución/MedidorIds/Items/Dirección/etc.)
         return JSONResponse(content={
             "total": total,
             "page": page,
@@ -106,7 +103,6 @@ def list_compras(
             "items": items
         })
 
-    # ===== Básico: el service ya retorna el dict con total/page/page_size/items =====
     result = svc.list(
         db, q, page, page_size,
         DivisionId=DivisionId, ServicioId=ServicioId, EnergeticoId=EnergeticoId, NumeroClienteId=NumeroClienteId,
@@ -119,8 +115,8 @@ def list_compras(
 
 @router.get(
     "/{compra_id}",
-    response_model=CompraDTO,
-    summary="Detalle (incluye items por medidor)",
+    response_model=CompraFullDTO,
+    summary="Detalle (incluye items por medidor + Medidor completo)",
     response_model_exclude_none=True,
 )
 def get_compra(
@@ -128,9 +124,12 @@ def get_compra(
     db: DbDep
 ):
     c = svc.get(db, compra_id)
-    items = svc._items_by_compra(db, compra_id)
-    dto = CompraDTO.model_validate(c)
-    dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
+
+    # 👇 trae items con Medidor FULL (todas las columnas de dbo.Medidores)
+    items = svc._items_by_compra_with_medidor_full(db, compra_id)
+
+    dto = CompraFullDTO.model_validate(c)
+    dto.Items = [CompraMedidorItemFullDTO.model_validate(x) for x in items]
     return dto
 
 
@@ -228,11 +227,10 @@ def replace_items_compra(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
-    # Permite limpiar items si viene Items=[]
     rows = svc.replace_items(
         db,
         compra_id,
         [x.model_dump() for x in (payload.Items or [])],
-        modified_by=current_user.id,  # ✅ auditoría (quién modificó)
+        modified_by=current_user.id,
     )
     return [CompraMedidorItemDTO.model_validate(x) for x in rows]

@@ -54,7 +54,13 @@ def _ser_date(v: Optional[datetime]) -> Optional[str]:
 # Items de CompraMedidor
 # ─────────────────────────────────────────────────────────────────────────────
 class MedidorDTO(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    """
+    DTO del Medidor:
+    - Mantiene tus 4 campos tipados (para que Swagger los muestre),
+    - pero permite EXTRA fields (todas las columnas reales de dbo.Medidores).
+    """
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
     Numero: Optional[str] = None
     DeviceId: Optional[int | str] = None
     TipoMedidorId: Optional[int] = None
@@ -64,6 +70,7 @@ class MedidorDTO(BaseModel):
 class CompraMedidorItemDTO(BaseModel):
     """Item “básico” (sin anidar el Medidor). Útil en listados y creaciones simples."""
     model_config = ConfigDict(from_attributes=True)
+
     Id: int
     Consumo: float
     MedidorId: Optional[int] = None
@@ -303,8 +310,10 @@ class CompraCreate(BaseModel):
             raise ValueError("Costo debe ser ≥ 0")
         return float(v)
 
-    @field_validator("DivisionId", "EnergeticoId", "CreatedByDivisionId", "FacturaId",
-                    "NumeroClienteId", "UnidadMedidaId", mode="before")
+    @field_validator(
+        "DivisionId", "EnergeticoId", "CreatedByDivisionId", "FacturaId",
+        "NumeroClienteId", "UnidadMedidaId", mode="before"
+    )
     @classmethod
     def _ints_ok(cls, v):
         if v is None or v == "":
