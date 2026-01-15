@@ -597,16 +597,49 @@ class UnidadService:
         return res
 
     def get_with_expand(self, unidad_id: int) -> UnidadWithInmueblesDTO:
-        """
-        Devuelve la UnidadDTO tradicional + InmueblesDetallados (árbol completo),
-        reutilizando InmuebleService.get() para cada Division vinculada.
-        """
-        base = self.get(unidad_id)  # mantiene compat total
-        ids = [i.Id for i in base.Inmuebles]
+        base = self.get(unidad_id)
+
+        rows = self.db.scalars(
+            select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
+        ).all()
+        inm_ids = [r.InmuebleId for r in rows] if rows else []
+
+        base.Inmuebles = [InmuebleTopDTO(Id=i, TipoInmueble=0) for i in inm_ids]
+
+        UnidadPiso, UnidadArea = _lazy_models()
+
+        if UnidadPiso is not None:
+            pisos_rows = self.db.scalars(
+                select(UnidadPiso).where(UnidadPiso.UnidadId == unidad_id)
+            ).all()
+            piso_ids = [r.PisoId for r in pisos_rows] if pisos_rows else []
+            base.Pisos = [pisoDTO(Id=p, NumeroPisoNombre=None, Checked=True) for p in piso_ids]
+        else:
+            base.Pisos = []
+
+        if UnidadArea is not None:
+            areas_rows = self.db.scalars(
+                select(UnidadArea).where(UnidadArea.UnidadId == unidad_id)
+            ).all()
+            area_ids = [r.AreaId for r in areas_rows] if areas_rows else []
+            base.Areas = [AreaDTO(Id=a, Nombre=None) for a in area_ids]
+        else:
+            base.Areas = []
+
         det: List[InmuebleDTO] = []
         isvc = InmuebleService(self.db)
-        for iid in ids:
-            d = isvc.get(iid)
-            if d:
-                det.append(d)
+
+        for iid in inm_ids:
+            try:
+                d = isvc.get(iid)
+                if d:
+                    det.append(d)
+            except Exception:
+                # no dejamos caer todo el expand por un inmueble malo
+                continue
+
+        return UnidadWithInmueblesDTO(
+            **base.model_dump(),
+            InmueblesDetallados=det,
+        )
         return UnidadWithInmueblesDTO(**base.model_dump(), InmueblesDetallados=det)
