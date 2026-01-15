@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import Optional, List, Any
 from datetime import datetime
 import re
@@ -9,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 # Helpers de normalización para Pydantic v2
 # ─────────────────────────────────────────────────────────────────────────────
 _INT_RE = re.compile(r"^\s*-?\d+\s*$")
+
 
 def _to_int_maybe(v: Any) -> Optional[int]:
     """
@@ -27,20 +29,22 @@ def _to_int_maybe(v: Any) -> Optional[int]:
         return v
 
     s = str(v).strip()
-    # si es entero puro
+
+    # entero puro
     if _INT_RE.match(s):
         try:
             return int(s)
         except Exception:
             return None
 
-    # si es flotante representando un entero exacto (7.0 → 7)
+    # flotante que representa entero exacto (7.0 → 7)
     try:
-        f = float(s.replace(",", "."))  # por si viniera con coma decimal
+        f = float(s.replace(",", "."))
         if f.is_integer():
             return int(f)
     except Exception:
         pass
+
     return None
 
 
@@ -60,7 +64,10 @@ def _blank_to_none(v: Any) -> Any:
     return None if isinstance(v, str) and v.strip() == "" else v
 
 
-# ---------- EXISTENTES (ajustados a Pydantic v2) ----------
+# ─────────────────────────────────────────────────────────────────────────────
+# DTOs
+# ─────────────────────────────────────────────────────────────────────────────
+
 class DivisionSelectDTO(BaseModel):
     Id: int
     Nombre: Optional[str] = None
@@ -68,16 +75,26 @@ class DivisionSelectDTO(BaseModel):
 
 
 class DivisionListDTO(DivisionSelectDTO):
+    """
+    DTO liviano para listados.
+
+    NOTA:
+    - Alineé tipos a tu modelo SQLAlchemy:
+      * IndicadorEE es bool en el modelo -> Optional[bool]
+      * DpSt1..DpSt4 son bool en el modelo -> Optional[bool]
+      * Compromiso2022 es bool|None -> Optional[bool]
+    - Mantengo el resto tal cual (para no romper front), pero con tipos coherentes.
+    """
     Active: Optional[bool] = True
     ServicioId: Optional[int] = None
     RegionId: Optional[int] = None
     ComunaId: Optional[int] = None
     DireccionInmuebleId: Optional[int] = None
 
-    Funcionarios: Optional[int] = None   # ✅ AGREGAR
+    Funcionarios: Optional[int] = None  # ✅ agregar
 
-    # NUEVOS ya expuestos en list()
-    IndicadorEE: Optional[int] = None
+    # ya expuestos en list()
+    IndicadorEE: Optional[bool] = None
     AccesoFactura: Optional[int] = None
     ComparteMedidorElectricidad: Optional[bool] = None
     ComparteMedidorGasCanieria: Optional[bool] = None
@@ -85,59 +102,80 @@ class DivisionListDTO(DivisionSelectDTO):
     # Campos adicionales que ahora también salen en list()
     ProvinciaId: Optional[int] = None
     Direccion: Optional[str] = None
+
     PisosIguales: Optional[bool] = None
     NivelPaso3: Optional[int] = None
+
     Calle: Optional[str] = None
     Numero: Optional[str] = None
+
     GeVersion: Optional[int] = None
     ParentId: Optional[int] = None
+
     TipoAdministracionId: Optional[int] = None
     TipoInmueble: Optional[int] = None
     AdministracionServicioId: Optional[int] = None
-    DpSt1: Optional[int] = None
-    DpSt2: Optional[int] = None
-    DpSt3: Optional[int] = None
-    DpSt4: Optional[int] = None
+
+    DpSt1: Optional[bool] = None
+    DpSt2: Optional[bool] = None
+    DpSt3: Optional[bool] = None
+    DpSt4: Optional[bool] = None
+
     OrganizacionResponsable: Optional[str] = None
     ServicioResponsableId: Optional[int] = None
     InstitucionResponsableId: Optional[int] = None
+
     JustificaRol: Optional[str] = None
     SinRol: Optional[bool] = None
-    Compromiso2022: Optional[int] = None
+
+    Compromiso2022: Optional[bool] = None
     Justificacion: Optional[str] = None
     ObservacionCompromiso2022: Optional[str] = None
     EstadoCompromiso2022: Optional[int] = None
+
     AnioInicioGestionEnergetica: Optional[int] = None
     AnioInicioRestoItems: Optional[int] = None
+
     DisponeVehiculo: Optional[bool] = None
     VehiculosIds: Optional[str] = None
+
     AireAcondicionadoElectricidad: Optional[bool] = None
     CalefaccionGas: Optional[bool] = None
     DisponeCalefaccion: Optional[bool] = None
+
     NroOtrosColaboradores: Optional[int] = None
+
     ObservacionPapel: Optional[str] = None
     ObservaPapel: Optional[bool] = None
+
     ObservacionResiduos: Optional[str] = None
     ObservaResiduos: Optional[bool] = None
+
     ObservacionAgua: Optional[str] = None
     ObservaAgua: Optional[bool] = None
+
     JustificaResiduos: Optional[bool] = None
     JustificacionResiduos: Optional[str] = None
+
     ReportaEV: Optional[bool] = None
     TieneMedidorElectricidad: Optional[bool] = None
     TieneMedidorGas: Optional[bool] = None
+
     AccesoFacturaAgua: Optional[int] = None
     InstitucionResponsableAguaId: Optional[int] = None
     OrganizacionResponsableAgua: Optional[str] = None
     ServicioResponsableAguaId: Optional[int] = None
     ComparteMedidorAgua: Optional[bool] = None
+
     NoDeclaraImpresora: Optional[bool] = None
     NoDeclaraArtefactos: Optional[bool] = None
     NoDeclaraContenedores: Optional[bool] = None
     GestionBienes: Optional[bool] = None
+
     UsaBidon: Optional[bool] = None
     JustificaResiduosNoReciclados: Optional[bool] = None
     JustificacionResiduosNoReciclados: Optional[str] = None
+
     ColectorId: Optional[int] = None
     EnergeticoAcsId: Optional[int] = None
     EnergeticoCalefaccionId: Optional[int] = None
@@ -145,20 +183,25 @@ class DivisionListDTO(DivisionSelectDTO):
     EquipoAcsId: Optional[int] = None
     EquipoCalefaccionId: Optional[int] = None
     EquipoRefrigeracionId: Optional[int] = None
+
     FotoTecho: Optional[bool] = None
     ImpSisFv: Optional[bool] = None
     InstTerSisFv: Optional[bool] = None
     PotIns: Optional[float] = None
     SistemaSolarTermico: Optional[bool] = None
+
     SupColectores: Optional[float] = None
     SupFotoTecho: Optional[float] = None
     SupImptSisFv: Optional[float] = None
     SupInstTerSisFv: Optional[float] = None
+
     TempSeteoCalefaccionId: Optional[int] = None
     TempSeteoRefrigeracionId: Optional[int] = None
     TipoLuminariaId: Optional[int] = None
+
     MantColectores: Optional[int] = None
     MantSfv: Optional[int] = None
+
     CargaPosteriorT: Optional[bool] = None
     IndicadorEnegia: Optional[float] = None
     ObsInexistenciaEyV: Optional[str] = None
@@ -172,6 +215,14 @@ class DivisionListDTO(DivisionSelectDTO):
         if isinstance(data, dict):
             data["GeVersion"] = _to_int_maybe(data.get("GeVersion"))
             data["IndicadorEnegia"] = _to_float_maybe(data.get("IndicadorEnegia"))
+
+            # booleans que suelen venir como 0/1/string
+            for bk in ("DpSt1", "DpSt2", "DpSt3", "DpSt4", "Compromiso2022"):
+                if bk in data and data.get(bk) is not None and not isinstance(data.get(bk), bool):
+                    iv = _to_int_maybe(data.get(bk))
+                    if iv is not None:
+                        data[bk] = bool(iv)
+
             # limpiamos strings vacíos frecuentes
             for k in ("Direccion", "Calle", "Numero", "OrganizacionResponsable"):
                 if k in data:
@@ -183,11 +234,14 @@ class DivisionDTO(DivisionListDTO):
     CreatedAt: Optional[datetime] = None
     UpdatedAt: Optional[datetime] = None
     Version: Optional[int] = None
+
     EdificioId: Optional[int] = None
     ReportaPMG: Optional[bool] = None
     AnyoConstruccion: Optional[int] = None
+
     Latitud: Optional[float] = None
     Longitud: Optional[float] = None
+
     TipoUnidadId: Optional[int] = None
     TipoPropiedadId: Optional[int] = None
     Superficie: Optional[float] = None
@@ -223,15 +277,27 @@ class DivisionDTO(DivisionListDTO):
         # Coherencia de otros campos que llegan como string
         data["GeVersion"] = _to_int_maybe(data.get("GeVersion"))
         data["IndicadorEnegia"] = _to_float_maybe(data.get("IndicadorEnegia"))
+
         data["AnyoConstruccion"] = _to_int_maybe(data.get("AnyoConstruccion"))
         data["Latitud"] = _to_float_maybe(data.get("Latitud"))
         data["Longitud"] = _to_float_maybe(data.get("Longitud"))
+
         data["NroRol"] = _blank_to_none(data.get("NroRol"))
+
+        # booleans típicos que llegan como 0/1/string
+        for bk in ("DpSt1", "DpSt2", "DpSt3", "DpSt4", "Compromiso2022"):
+            if bk in data and data.get(bk) is not None and not isinstance(data.get(bk), bool):
+                iv = _to_int_maybe(data.get(bk))
+                if iv is not None:
+                    data[bk] = bool(iv)
 
         return data
 
 
-# ---------- NUEVOS: equivalentes a DTOs .NET ----------
+# ─────────────────────────────────────────────────────────────────────────────
+# Nuevos equivalentes a DTOs .NET
+# ─────────────────────────────────────────────────────────────────────────────
+
 class ObservacionDTO(BaseModel):
     CheckObserva: bool
     Observacion: Optional[str] = None
@@ -255,20 +321,26 @@ class DivisionPatchDTO(BaseModel):
     NroRol: Optional[str] = None
     SinRol: bool = False
     JustificaRol: Optional[str] = None
+
     Funcionarios: int = 0
     NroOtrosColaboradores: int = 0
+
     DisponeVehiculo: Optional[bool] = None
     VehiculosIds: Optional[str] = None
+
     AccesoFacturaAgua: Optional[int] = None
     InstitucionResponsableAguaId: Optional[int] = None
     ServicioResponsableAguaId: Optional[int] = None
     OrganizacionResponsableAgua: Optional[str] = None
     ComparteMedidorAgua: Optional[bool] = None
+
     DisponeCalefaccion: bool = False
     AireAcondicionadoElectricidad: bool = False
     CalefaccionGas: bool = False
+
     GestionBienes: Optional[bool] = None
     UsaBidon: bool = False
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -285,13 +357,17 @@ class OkMessage(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ---------- NUEVO: page para listados ----------
+# ─────────────────────────────────────────────────────────────────────────────
+# Pages
+# ─────────────────────────────────────────────────────────────────────────────
+
 class DivisionPage(BaseModel):
     total: int
     page: int
     page_size: int
     items: List[DivisionListDTO]
     model_config = ConfigDict(from_attributes=True)
+
 
 class DivisionBusquedaEspecificaDTO(BaseModel):
     Id: int
@@ -307,10 +383,10 @@ class DivisionBusquedaEspecificaDTO(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class DivisionBusquedaEspecificaPage(BaseModel):
     total: int
     page: int
     page_size: int
     items: List[DivisionBusquedaEspecificaDTO]
-
     model_config = ConfigDict(from_attributes=True)

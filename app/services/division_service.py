@@ -824,3 +824,50 @@ class DivisionService:
             items = [{k: v for k, v in row._mapping.items()} for row in rows]
 
         return {"total": total, "page": page, "page_size": size, "items": items}
+    
+    def create_full(
+        self,
+        db: Session,
+        payload: Dict[str, Any],
+        user_id: str | None = None,
+    ) -> Division:
+        """
+        Crea una División con “todos los campos”.
+        Reglas:
+        - No se aceptan Id/CreatedAt/UpdatedAt/Version/CreatedBy/ModifiedBy desde el cliente.
+        - Version parte en 1.
+        - CreatedAt/UpdatedAt = utcnow.
+        - CreatedBy/ModifiedBy se setean con el user_id (si viene).
+        """
+        now = datetime.utcnow()
+
+        forbidden = {"Id", "CreatedAt", "UpdatedAt", "Version", "CreatedBy", "ModifiedBy"}
+        d = Division()
+
+        for k, v in payload.items():
+            if k in forbidden:
+                continue
+            if hasattr(d, k):
+                setattr(d, k, v)
+            else:
+                log.debug("DIVISIONES.create_full: campo %r no existe", k)
+
+        # Defaults / auditoría
+        d.CreatedAt = now
+        d.UpdatedAt = now
+        d.Version = 1
+
+        # Active por defecto (si el front no manda)
+        if getattr(d, "Active", None) is None:
+            d.Active = True
+
+        if user_id:
+            d.CreatedBy = user_id
+            d.ModifiedBy = user_id
+
+        db.add(d)
+        db.commit()
+        db.refresh(d)
+
+        # reutiliza tu normalización del detalle
+        return self.get(db, d.Id)

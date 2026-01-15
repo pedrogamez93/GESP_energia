@@ -32,7 +32,9 @@ from app.schemas.division import (
     ReportaResiduosDTO,
 )
 from app.schemas.division_full_update import DivisionFullUpdate
+from app.schemas.division_create import DivisionCreate
 from app.services.division_service import DivisionService
+
 
 router = APIRouter(prefix="/api/v1/divisiones", tags=["Divisiones"])
 svc = DivisionService()
@@ -106,6 +108,18 @@ def list_divisiones(
         comuna_id=ComunaId,
     )
 
+@router.post("", response_model=DivisionDTO, status_code=status.HTTP_201_CREATED, summary="Crear (FULL)")
+def create_division_full(
+    payload: DivisionCreate,
+    db: DbDep,
+    request: Request,
+    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    return svc.create_full(
+        db=db,
+        payload=payload.model_dump(exclude_unset=True),
+        user_id=_current_user_id(request),
+    )
 
 @router.get("/select", response_model=List[DivisionSelectDTO], summary="(picker) Id/Dirección")
 def select_divisiones(
