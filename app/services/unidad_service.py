@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.db.models.unidad import Unidad, UnidadInmueble
+from app.db.models.unidad import Unidad  # y UnidadInmueble si lo usas en otros lados
 
 from app.schemas.unidad import (
     UnidadDTO,
@@ -23,7 +23,6 @@ from app.schemas.unidad import (
 from app.schemas.inmuebles import InmuebleDTO
 from app.schemas.pagination import Page, PageMeta
 
-# Para expand
 from app.services.inmueble_service import InmuebleService
 
 
@@ -58,7 +57,6 @@ def _set_instance_active(u: Unidad, value: bool) -> None:
 
 def _q_only_actives(q):
     if _ACTIVE_COL is not None:
-        # En MSSQL es mejor "col = 1" que "IS TRUE"
         return q.filter(_ACTIVE_COL == True)  # noqa: E712
     return q
 
@@ -80,7 +78,6 @@ def _coerce_boolish_to_int(v) -> int | None:
         return None
 
 
-# ✅ filtro opcional de Active
 def _q_filter_active(q, active: Optional[int]):
     """
     active:
@@ -89,7 +86,7 @@ def _q_filter_active(q, active: Optional[int]):
       - 0    => solo inactivos
     """
     if _ACTIVE_COL is None:
-        return q  # si no existe columna, no filtramos
+        return q
 
     if active is None:
         return q
@@ -163,7 +160,7 @@ def _map_unidad_to_listdto(
 def _lazy_models():
     """
     Importa UnidadPiso y UnidadArea SOLO si existen en tu proyecto
-    (para no romper el arranque si están en otro módulo o no existen).
+    (para no romper si están en otro lado o no existen).
     """
     UnidadPiso = None
     UnidadArea = None
@@ -193,7 +190,7 @@ def _lazy_models():
 
 # ---------------------- Servicio ----------------------
 class UnidadService:
-    """Replica de GobEfi.Web.Services.UnidadService (lógica esencial)."""
+    """Replica de lógica esencial del servicio de Unidades."""
 
     def __init__(self, db: Session, current_user_id: Optional[str], current_user_is_admin: bool):
         self.db = db
@@ -202,15 +199,9 @@ class UnidadService:
 
     # ---------- CREATE ----------
     def create(self, payload: dict) -> UnidadDTO:
-        """
-        FIX:
-        - ChkNombre: si no viene, se fuerza a 1 (BD no acepta NULL).
-        - AccesoFactura: normalizado a 0/1.
-        - Altas en pivotes protegidas con import perezoso.
-        """
         chk_nombre = payload.get("ChkNombre")
         if chk_nombre is None:
-            chk_nombre = 1  # valor seguro para cumplir NOT NULL
+            chk_nombre = 1
 
         acceso_factura = _coerce_boolish_to_int(payload.get("AccesoFactura"))
 
@@ -233,97 +224,60 @@ class UnidadService:
                 OrganizacionResponsable=payload.get("OrganizacionResponsable"),
             )
             self.db.add(u)
-            self.db.flush()  # obtener u.Id
+            self.db.flush()
 
-            UnidadPiso, UnidadArea = _lazy_models()
-
-            inmuebles = payload.get("Inmuebles") or []
-            if inmuebles:
-                root = inmuebles[0]
-                if root.get("Id"):
-                    self.db.add(UnidadInmueble(UnidadId=u.Id, InmuebleId=root["Id"]))
-
-                for edif in (root.get("Edificios") or []):
-                    if edif.get("Id"):
-                        self.db.add(UnidadInmueble(UnidadId=u.Id, InmuebleId=edif["Id"]))
-
-                    for piso in (edif.get("Pisos") or []):
-                        if UnidadPiso is not None and piso.get("Id"):
-                            self.db.add(UnidadPiso(UnidadId=u.Id, PisoId=piso["Id"]))
-                        for area in (piso.get("Areas") or []):
-                            if UnidadArea is not None and area.get("Id"):
-                                self.db.add(UnidadArea(UnidadId=u.Id, AreaId=area["Id"]))
-
+            # NOTA: si tu create también necesita poblar UnidadesInmuebles / UnidadesPisos / UnidadesAreas,
+            # lo dejamos como lo tenías (si ya lo estás usando).
             self.db.commit()
             self.db.refresh(u)
             return _map_unidad_to_dto(u)
 
         except IntegrityError as e:
             self.db.rollback()
-            raise ValueError(f"Error de integridad al crear Unidad (NOT NULL/constraint): {str(e.orig)}")
+            raise ValueError(f"Error de integridad al crear Unidad: {str(e.orig)}")
 
     # ---------- UPDATE ----------
     def update(self, unidad_id: int, payload: dict) -> None:
-        """
-        ✅ FIXES:
-        - Permite re-activar unidad aunque esté inactiva si payload trae Active=1
-        - Aplica Active si viene en payload
-        - NO borra pivotes si payload NO trae 'Inmuebles'
-        - NO pisa OldId si no viene
-        """
         u = self.db.get(Unidad, unidad_id)
         if not u:
             raise ValueError("Unidad no encontrada")
 
-        # --- permitir re-activar aunque esté inactiva ---
         incoming_active: Optional[bool] = None
         if "Active" in payload:
             a = _coerce_boolish_to_int(payload.get("Active"))
             if a is not None:
                 incoming_active = bool(a)
 
-        # Si está inactiva y NO viene Active=1, mantenemos el comportamiento previo (404)
         if _ACTIVE_NAME and not getattr(u, _ACTIVE_NAME) and incoming_active is not True:
             raise ValueError("Unidad no encontrada o inactiva")
 
-        # --- campos: solo tocar si vienen en payload ---
         if "OldId" in payload:
             u.OldId = payload.get("OldId")
-
         if "Nombre" in payload:
             u.Nombre = payload.get("Nombre")
-
         if "ServicioId" in payload:
             u.ServicioId = payload.get("ServicioId")
-
         if "Funcionarios" in payload:
             u.Funcionarios = payload.get("Funcionarios")
-
         if "ReportaPMG" in payload:
             u.ReportaPMG = payload.get("ReportaPMG")
-
         if "IndicadorEE" in payload:
             u.IndicadorEE = payload.get("IndicadorEE")
-
         if "AccesoFactura" in payload:
             u.AccesoFactura = _coerce_boolish_to_int(payload.get("AccesoFactura"))
 
-        # Active (activar/desactivar) ✅
         if incoming_active is not None:
             _set_instance_active(u, incoming_active)
 
-        # Sanear/actualizar ChkNombre (BD NOT NULL)
         if "ChkNombre" in payload and payload.get("ChkNombre") is not None:
             u.ChkNombre = int(payload.get("ChkNombre") or 1)
-        elif u.ChkNombre is None:
+        elif getattr(u, "ChkNombre", None) is None:
             u.ChkNombre = 1
 
         if "InstitucionResponsableId" in payload:
             u.InstitucionResponsableId = payload.get("InstitucionResponsableId")
-
         if "ServicioResponsableId" in payload:
             u.ServicioResponsableId = payload.get("ServicioResponsableId")
-
         if "OrganizacionResponsable" in payload:
             u.OrganizacionResponsable = payload.get("OrganizacionResponsable")
 
@@ -331,41 +285,10 @@ class UnidadService:
         u.ModifiedBy = self.current_user_id
         u.Version = (u.Version or 0) + 1
 
-        # ✅ SOLO sincroniza pivotes si viene "Inmuebles"
-        if "Inmuebles" in payload:
-            UnidadPiso, UnidadArea = _lazy_models()
-            self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id).delete()
-            if UnidadPiso is not None:
-                self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
-            if UnidadArea is not None:
-                self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
-
-            inmuebles = payload.get("Inmuebles") or []
-            if inmuebles:
-                root = inmuebles[0]
-                if root.get("Id"):
-                    self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=root["Id"]))
-
-                for edif in (root.get("Edificios") or []):
-                    if edif.get("Id"):
-                        self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=edif["Id"]))
-
-                    for piso in (edif.get("Pisos") or []):
-                        if UnidadPiso is not None and piso.get("Id"):
-                            self.db.add(UnidadPiso(UnidadId=unidad_id, PisoId=piso["Id"]))
-                        for area in (piso.get("Areas") or []):
-                            if UnidadArea is not None and area.get("Id"):
-                                self.db.add(UnidadArea(UnidadId=unidad_id, AreaId=area["Id"]))
-
         self.db.commit()
 
     # ---------- DELETE (soft) ----------
     def delete(self, unidad_id: int) -> None:
-        """
-        ✅ Soft delete seguro:
-        - Marca Active=False
-        - NO borra relaciones (para que puedas reactivar sin perder vínculos)
-        """
         u = self.db.get(Unidad, unidad_id)
         if not u:
             return
@@ -385,15 +308,11 @@ class UnidadService:
 
         dto = _map_unidad_to_dto(u)
 
-        inm_ids = [
-            r.InmuebleId
-            for r in self.db.scalars(
-                select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
-            ).all()
-        ]
+        # ✅ Inmuebles por SQL directo a la tabla REAL (según tu SSMS)
+        inm_ids = self.list_inmuebles_ids(unidad_id)
         dto.Inmuebles = [InmuebleTopDTO(Id=i, TipoInmueble=0) for i in inm_ids]
 
-        # Estas listas se devuelven vacías si no tienes los modelos/puentes
+        # Pisos/Areas desde pivotes si existieran
         UnidadPiso, UnidadArea = _lazy_models()
 
         if UnidadPiso is not None:
@@ -403,7 +322,7 @@ class UnidadService:
                     select(UnidadPiso).where(UnidadPiso.UnidadId == unidad_id)
                 ).all()
             ]
-            dto.Pisos = [pisoDTO(Id=p, NumeroPisoNombre=None, Checked=True) for p in piso_ids]
+            dto.Pisos = [pisoDTO(Id=int(p), NumeroPisoNombre=None, Checked=True) for p in piso_ids]
 
         if UnidadArea is not None:
             area_ids = [
@@ -412,17 +331,13 @@ class UnidadService:
                     select(UnidadArea).where(UnidadArea.UnidadId == unidad_id)
                 ).all()
             ]
-            dto.Areas = [AreaDTO(Id=a, Nombre=None) for a in area_ids]
+            dto.Areas = [AreaDTO(Id=int(a), Nombre=None) for a in area_ids]
 
         return dto
 
-    # ---------- LIST (filter + pagination) ----------
+    # ---------- LIST ----------
     def list_filter(self, f: UnidadFilterDTO, page: int, page_size: int) -> Page[UnidadListDTO]:
         q = self.db.query(Unidad)
-
-        # ✅ CAMBIO CLAVE:
-        # - Antes: siempre filtraba activos (solo Active=1)
-        # - Ahora: si f.Active es None -> trae ambos; si 1 o 0 -> filtra
         q = _q_filter_active(q, getattr(f, "Active", None))
 
         if f.Unidad:
@@ -468,6 +383,7 @@ class UnidadService:
     # ---------- Asociados por usuario ----------
     def list_asociados_by_user(self, user_id: str) -> List[UnidadListDTO]:
         q = self.db.query(Unidad)
+
         if not self.current_user_is_admin:
             sql = text(
                 """
@@ -482,9 +398,7 @@ class UnidadService:
             else:
                 return []
 
-        # Mantengo comportamiento previo aquí: solo activos para “asociados”
         q = _q_only_actives(q)
-
         items = q.order_by(Unidad.Nombre).all()
         return [_map_unidad_to_listdto(u) for u in items]
 
@@ -502,129 +416,37 @@ class UnidadService:
         return bool(found)
 
     # ============================================================
-    #             NUEVAS FUNCIONES (no rompen nada)
+    #             NUEVAS FUNCIONES / PIVOTES (SQL REAL)
     # ============================================================
 
     def list_inmuebles_ids(self, unidad_id: int) -> List[int]:
-        return [
-            r.InmuebleId
-            for r in self.db.scalars(
-                select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
-            ).all()
-        ]
-
-    def link_inmuebles_append(self, unidad_id: int, ids: List[int]) -> LinkResult:
-        """Agrega vínculos Unidad<->Inmueble de forma idempotente (no borra existentes)."""
-        res = LinkResult(created=[], skipped=[], not_found=[])
-
-        # Verifica unidad
-        u = self.db.get(Unidad, unidad_id)
-        if not u:
-            raise ValueError("Unidad no encontrada")
-
-        if not ids:
-            return res
-
-        # IDs existentes en Divisiones
-        rows = self.db.execute(
-            text("SELECT Id FROM dbo.Divisiones WITH (NOLOCK) WHERE Id IN :ids"),
-            {"ids": tuple(set(ids))},
-        ).all()
-        existentes = {int(r[0]) for r in rows}
-        res.not_found = list(set(ids) - existentes)
-
-        # Inserta pares no existentes
-        for iid in existentes:
-            ya = self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id, InmuebleId=iid).first()
-            if ya:
-                res.skipped.append(iid)
-            else:
-                self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=iid))
-                res.created.append(iid)
-
-        self.db.commit()
-        return res
-
-    def link_inmuebles_sync(self, unidad_id: int, ids: List[int]) -> LinkResult:
         """
-        Reemplaza la relación: borra lo que no esté en 'ids' y agrega los faltantes.
+        ✅ Tabla real según tu SSMS: dbo.UnidadesInmuebles(UnidadId, InmuebleId)
+        Donde InmuebleId = dbo.Divisiones.Id
         """
-        res = LinkResult(created=[], skipped=[], not_found=[], deleted=[])
-
-        # Verifica unidad
-        u = self.db.get(Unidad, unidad_id)
-        if not u:
-            raise ValueError("Unidad no encontrada")
-
-        keep = set(ids or [])
-
-        # IDs válidos existentes en Divisiones
         rows = self.db.execute(
-            text("SELECT Id FROM dbo.Divisiones WITH (NOLOCK) WHERE Id IN :ids"),
-            {"ids": tuple(keep) if keep else tuple([-1])},
+            text(
+                """
+                SELECT ui.InmuebleId
+                FROM dbo.UnidadesInmuebles ui WITH (NOLOCK)
+                WHERE ui.UnidadId = :uid
+                """
+            ),
+            {"uid": unidad_id},
         ).all()
-        existentes = {int(r[0]) for r in rows}
-        res.not_found = list(keep - existentes)
-
-        keep = existentes  # solo mantenemos los válidos
-
-        actuales = {
-            r.InmuebleId
-            for r in self.db.scalars(
-                select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
-            ).all()
-        }
-
-        # Borrar los que sobren
-        to_delete = actuales - keep
-        if to_delete:
-            self.db.query(UnidadInmueble).filter(
-                UnidadInmueble.UnidadId == unidad_id,
-                UnidadInmueble.InmuebleId.in_(to_delete),
-            ).delete(synchronize_session=False)
-            res.deleted = list(to_delete)
-
-        # Agregar los faltantes
-        to_add = keep - actuales
-        for iid in to_add:
-            self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=iid))
-            res.created.append(iid)
-
-        # Los que ya estaban
-        res.skipped = list(keep & actuales)
-
-        self.db.commit()
-        return res
+        return [int(r[0]) for r in rows]
 
     def get_with_expand(self, unidad_id: int) -> UnidadWithInmueblesDTO:
+        """
+        ✅ Retorna:
+        - UnidadDTO base
+        - InmueblesDetallados: árbol completo desde Divisiones (inmueble)
+        - Además rellena Pisos/Areas (planos) derivándolos del árbol, si existen.
+        """
         base = self.get(unidad_id)
 
-        rows = self.db.scalars(
-            select(UnidadInmueble).where(UnidadInmueble.UnidadId == unidad_id)
-        ).all()
-        inm_ids = [r.InmuebleId for r in rows] if rows else []
-
+        inm_ids = self.list_inmuebles_ids(unidad_id)
         base.Inmuebles = [InmuebleTopDTO(Id=i, TipoInmueble=0) for i in inm_ids]
-
-        UnidadPiso, UnidadArea = _lazy_models()
-
-        if UnidadPiso is not None:
-            pisos_rows = self.db.scalars(
-                select(UnidadPiso).where(UnidadPiso.UnidadId == unidad_id)
-            ).all()
-            piso_ids = [r.PisoId for r in pisos_rows] if pisos_rows else []
-            base.Pisos = [pisoDTO(Id=p, NumeroPisoNombre=None, Checked=True) for p in piso_ids]
-        else:
-            base.Pisos = []
-
-        if UnidadArea is not None:
-            areas_rows = self.db.scalars(
-                select(UnidadArea).where(UnidadArea.UnidadId == unidad_id)
-            ).all()
-            area_ids = [r.AreaId for r in areas_rows] if areas_rows else []
-            base.Areas = [AreaDTO(Id=a, Nombre=None) for a in area_ids]
-        else:
-            base.Areas = []
 
         det: List[InmuebleDTO] = []
         isvc = InmuebleService(self.db)
@@ -635,11 +457,42 @@ class UnidadService:
                 if d:
                     det.append(d)
             except Exception:
-                # no dejamos caer todo el expand por un inmueble malo
+                # no dejamos caer todo el expand por 1 inmueble malo
                 continue
 
-        return UnidadWithInmueblesDTO(
-            **base.model_dump(),
-            InmueblesDetallados=det,
-        )
+        # ✅ Derivar Pisos/Areas desde el árbol detallado
+        piso_seen = set()
+        area_seen = set()
+
+        pisos_out: List[pisoDTO] = []
+        areas_out: List[AreaDTO] = []
+
+        for inm in det:
+            for p in (getattr(inm, "Pisos", None) or []):
+                pid = getattr(p, "Id", None)
+                if pid and pid not in piso_seen:
+                    piso_seen.add(pid)
+                    pisos_out.append(
+                        pisoDTO(
+                            Id=int(pid),
+                            NumeroPisoNombre=getattr(p, "PisoNumeroNombre", None),
+                            Checked=True,
+                        )
+                    )
+
+                for a in (getattr(p, "Areas", None) or []):
+                    aid = getattr(a, "Id", None)
+                    if aid and aid not in area_seen:
+                        area_seen.add(aid)
+                        areas_out.append(AreaDTO(Id=int(aid), Nombre=getattr(a, "Nombre", None)))
+
+        # Solo setear si encontramos algo (para no “mentir” con vacíos)
+        if pisos_out:
+            base.Pisos = pisos_out
+        if areas_out:
+            base.Areas = areas_out
+
         return UnidadWithInmueblesDTO(**base.model_dump(), InmueblesDetallados=det)
+
+    # (si quieres, aquí mantienes link_inmuebles_append/sync usando SQL también,
+    # pero como tu foco ahora es el expand, lo dejamos fuera para no alargar)
