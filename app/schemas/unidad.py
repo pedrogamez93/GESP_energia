@@ -46,7 +46,8 @@ class UnidadFilterDTO(BaseModel):
     RegionId: Optional[int] = None
 
     Active: Optional[int] = None
-    
+
+
 class UnidadPatchDTO(BaseModel):
     """
     Placeholder para compatibilidad de imports (router).
@@ -139,6 +140,70 @@ class UnidadWithInmueblesDTO(UnidadDTO):
     InmueblesDetallados: List[InmuebleDTO] = Field(default_factory=list)
 
 
+# =====================================================================
+# ✅ NUEVO: DTO DE UPDATE (para Swagger + edición de campos)
+# - Lo usamos en PUT /unidades/{id}
+# - Todos los campos opcionales para poder mandar solo lo que cambia.
+# - Tipamos Inmuebles según la estructura que tu service recorre.
+# =====================================================================
+
+Boolish = Union[int, bool, str]
+
+
+class UnidadUpdateAreaDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    Id: Optional[int] = None
+
+
+class UnidadUpdatePisoDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    Id: Optional[int] = None
+    Areas: List[UnidadUpdateAreaDTO] = Field(default_factory=list)
+
+
+class UnidadUpdateEdificioDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    Id: Optional[int] = None
+    Pisos: List[UnidadUpdatePisoDTO] = Field(default_factory=list)
+
+
+class UnidadUpdateInmuebleRootDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    Id: Optional[int] = None
+    Edificios: List[UnidadUpdateEdificioDTO] = Field(default_factory=list)
+
+
+class UnidadUpdateDTO(BaseModel):
+    """
+    Body de update. Swagger mostrará TODOS estos campos como editables.
+    OJO: no incluimos CreatedAt/UpdatedAt/Version/CreatedBy/ModifiedBy/Id.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    # Estado (activar/desactivar)
+    Active: Optional[Boolish] = None
+
+    # Datos base
+    OldId: Optional[int] = None
+    Nombre: Optional[str] = None
+    ServicioId: Optional[int] = None
+
+    # Configuración / flags
+    ChkNombre: Optional[int] = None
+    AccesoFactura: Optional[Boolish] = None
+    ReportaPMG: Optional[bool] = None
+    IndicadorEE: Optional[bool] = None
+    Funcionarios: Optional[int] = None
+
+    # Responsables
+    InstitucionResponsableId: Optional[int] = None
+    ServicioResponsableId: Optional[int] = None
+    OrganizacionResponsable: Optional[str] = None
+
+    # Relaciones (solo si quieres que el PUT pueda resync de relaciones)
+    Inmuebles: Optional[List[UnidadUpdateInmuebleRootDTO]] = None
+
+
 # Export explícito por claridad
 __all__ = [
     "InmuebleTopDTO",
@@ -151,4 +216,11 @@ __all__ = [
     "LinkInmueblesRequest",
     "LinkResult",
     "UnidadWithInmueblesDTO",
+
+    # ✅ nuevo
+    "UnidadUpdateDTO",
+    "UnidadUpdateInmuebleRootDTO",
+    "UnidadUpdateEdificioDTO",
+    "UnidadUpdatePisoDTO",
+    "UnidadUpdateAreaDTO",
 ]

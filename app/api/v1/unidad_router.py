@@ -15,6 +15,7 @@ from app.schemas.unidad import (
     LinkInmueblesRequest,
     LinkResult,
     UnidadWithInmueblesDTO,
+    UnidadUpdateDTO,   # ✅ NUEVO
 )
 from app.services.unidad_service import UnidadService
 
@@ -42,10 +43,7 @@ def list_unidades_filter(
     servicioId: Optional[int] = Query(None),
     regionId: Optional[int] = Query(None),
 
-    # ✅ NUEVO: filtro de estado
-    # - None (omitido) => ambos
-    # - 1 => solo activos
-    # - 0 => solo inactivos
+    # ✅ filtro de estado
     active: Optional[int] = Query(
         None,
         description="1=solo activos, 0=solo inactivos, omitido/null=ambos",
@@ -63,7 +61,7 @@ def list_unidades_filter(
         InstitucionId=institucionId,
         ServicioId=servicioId,
         RegionId=regionId,
-        Active=active,  # ✅ NUEVO
+        Active=active,
     )
     return svc.list_filter(f, page, page_size)
 
@@ -84,13 +82,10 @@ def get_by_filter(
     institucionId: Optional[int] = Query(None),
     servicioId: Optional[int] = Query(None),
     regionId: Optional[int] = Query(None),
-
-    # (opcional) si quieres igual filtrar aquí
     active: Optional[int] = Query(
         None,
         description="1=solo activos, 0=solo inactivos, omitido/null=ambos",
     ),
-
     db: Session = Depends(get_db),
     me: CurrentUser = Depends(get_current_user),
 ):
@@ -101,32 +96,22 @@ def get_by_filter(
         InstitucionId=institucionId,
         ServicioId=servicioId,
         RegionId=regionId,
-        Active=active,  # ✅ NUEVO (no rompe nada)
+        Active=active,
     )
     page = svc.list_filter(f, page=1, page_size=100000)
     return [UnidadListDTO.model_validate(x) for x in page.data]
 
 
-# ────────────────────────────────────────────────
-# NUEVO: Unidades por Servicio (id en la ruta)
-# ────────────────────────────────────────────────
 @router.get("/por-servicio/{servicio_id}", response_model=List[UnidadListDTO])
 def list_unidades_by_servicio(
     servicio_id: int,
-
-    # (opcional) si quieres filtrar por activos/inactivos
     active: Optional[int] = Query(
         None,
         description="1=solo activos, 0=solo inactivos, omitido/null=ambos",
     ),
-
     db: Session = Depends(get_db),
     me: CurrentUser = Depends(get_current_user),
 ):
-    """
-    Retorna todas las unidades asociadas a un ServicioId dado.
-    No hay paginación, se devuelven todas las coincidencias.
-    """
     svc = UnidadService(db, me.id, me.is_admin)
     f = UnidadFilterDTO(
         Unidad=None,
@@ -134,7 +119,7 @@ def list_unidades_by_servicio(
         InstitucionId=None,
         ServicioId=servicio_id,
         RegionId=None,
-        Active=active,  # ✅ NUEVO
+        Active=active,
     )
     page = svc.list_filter(f, page=1, page_size=100000)
     return [UnidadListDTO.model_validate(x) for x in page.data]
@@ -174,16 +159,17 @@ def create_unidad(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ✅ IMPORTANTE: ahora Swagger muestra los campos porque ya no es dict
 @router.put("/{unidad_id}", status_code=status.HTTP_204_NO_CONTENT)
 def update_unidad(
     unidad_id: int,
-    payload: dict,
+    payload: UnidadUpdateDTO,
     db: Session = Depends(get_db),
     me: CurrentUser = Depends(get_current_user),
 ):
     svc = UnidadService(db, me.id, me.is_admin)
     try:
-        svc.update(unidad_id, payload)
+        svc.update(unidad_id, payload.model_dump(exclude_unset=True))
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
     return None
