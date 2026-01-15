@@ -25,6 +25,15 @@ class SistemasMantenedoresService:
     # ------------------------------------------------------------------
     # Helpers internos
     # ------------------------------------------------------------------
+    @staticmethod
+    def _payload(data: Any) -> Dict[str, Any]:
+        """Helper para normalizar payloads (Pydantic o dict)"""
+        if hasattr(data, "model_dump"):
+            return data.model_dump(exclude_unset=True)
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if v is not None}
+        return {}
+
     def _get_tipo_equipo(self, tipo_equipo_id: int) -> TipoEquipoCalefaccion:
         obj = self.db.get(TipoEquipoCalefaccion, tipo_equipo_id)
         if not obj:
@@ -127,14 +136,25 @@ class SistemasMantenedoresService:
     # CRUD Equipos Refrigeración
     # ------------------------------------------------------------------
     def crear_equipo_refrigeracion(self, data: Dict[str, Any]) -> TipoEquipoCalefaccion:
+        p = self._payload(data)
+
         eq = TipoEquipoCalefaccion()
-        eq.Nombre = data["nombre"]
+        eq.Nombre = p["nombre"]
+
         if hasattr(eq, "Codigo"):
-            eq.Codigo = data.get("codigo")
+            eq.Codigo = p.get("codigo")
         if hasattr(eq, "Active"):
-            eq.Active = data.get("active", True)
+            eq.Active = p.get("active", True)
+
+        # Clasificación: este mantenedor es de Refrigeración
+        if hasattr(eq, "AC"):
+            eq.AC = bool(p.get("AC", False))
+        if hasattr(eq, "CA"):
+            eq.CA = bool(p.get("CA", False))
         if hasattr(eq, "FR"):
-            eq.FR = True  # marcamos como equipo de Refrigeración
+            # siempre debe quedar FR = True (aunque el front no lo mande)
+            eq.FR = bool(p.get("FR", True)) or True
+
         self.db.add(eq)
         self.db.commit()
         self.db.refresh(eq)
@@ -146,15 +166,25 @@ class SistemasMantenedoresService:
         data: Dict[str, Any],
     ) -> TipoEquipoCalefaccion:
         eq = self._get_tipo_equipo(tipo_equipo_id)
+        p = self._payload(data)
 
-        if "nombre" in data:
-            eq.Nombre = data["nombre"]
-        if "codigo" in data and hasattr(eq, "Codigo"):
-            eq.Codigo = data["codigo"]
-        if "active" in data and hasattr(eq, "Active"):
-            eq.Active = data["active"]
+        if "nombre" in p:
+            eq.Nombre = p["nombre"]
+        if "codigo" in p and hasattr(eq, "Codigo"):
+            eq.Codigo = p["codigo"]
+        if "active" in p and hasattr(eq, "Active"):
+            eq.Active = p["active"]
 
-        if hasattr(eq, "FR") and not getattr(eq, "FR", False):
+        # Actualizar clasificación si viene
+        if hasattr(eq, "AC") and "AC" in p:
+            eq.AC = bool(p["AC"])
+        if hasattr(eq, "CA") and "CA" in p:
+            eq.CA = bool(p["CA"])
+        if hasattr(eq, "FR") and "FR" in p:
+            # nunca permitimos desmarcar FR desde este mantenedor
+            eq.FR = bool(p["FR"]) or True
+        elif hasattr(eq, "FR"):
+            # si no vino, igual lo dejamos True
             eq.FR = True
 
         self.db.commit()
@@ -170,14 +200,24 @@ class SistemasMantenedoresService:
     # CRUD Equipos ACS
     # ------------------------------------------------------------------
     def crear_equipo_acs(self, data: Dict[str, Any]) -> TipoEquipoCalefaccion:
+        p = self._payload(data)
+
         eq = TipoEquipoCalefaccion()
-        eq.Nombre = data["nombre"]
+        eq.Nombre = p["nombre"]
+
         if hasattr(eq, "Codigo"):
-            eq.Codigo = data.get("codigo")
+            eq.Codigo = p.get("codigo")
         if hasattr(eq, "Active"):
-            eq.Active = data.get("active", True)
+            eq.Active = p.get("active", True)
+
+        # Clasificación: este mantenedor es de ACS
         if hasattr(eq, "AC"):
-            eq.AC = True  # marcamos como equipo de ACS
+            eq.AC = bool(p.get("AC", True)) or True
+        if hasattr(eq, "CA"):
+            eq.CA = bool(p.get("CA", False))
+        if hasattr(eq, "FR"):
+            eq.FR = bool(p.get("FR", False))
+
         self.db.add(eq)
         self.db.commit()
         self.db.refresh(eq)
@@ -189,16 +229,24 @@ class SistemasMantenedoresService:
         data: Dict[str, Any],
     ) -> TipoEquipoCalefaccion:
         eq = self._get_tipo_equipo(tipo_equipo_id)
+        p = self._payload(data)
 
-        if "nombre" in data:
-            eq.Nombre = data["nombre"]
-        if "codigo" in data and hasattr(eq, "Codigo"):
-            eq.Codigo = data["codigo"]
-        if "active" in data and hasattr(eq, "Active"):
-            eq.Active = data["active"]
+        if "nombre" in p:
+            eq.Nombre = p["nombre"]
+        if "codigo" in p and hasattr(eq, "Codigo"):
+            eq.Codigo = p["codigo"]
+        if "active" in p and hasattr(eq, "Active"):
+            eq.Active = p["active"]
 
-        if hasattr(eq, "AC") and not getattr(eq, "AC", False):
-            eq.AC = True
+        if hasattr(eq, "AC") and "AC" in p:
+            eq.AC = bool(p["AC"]) or True
+        elif hasattr(eq, "AC"):
+            eq.AC = True  # siempre ACS
+
+        if hasattr(eq, "CA") and "CA" in p:
+            eq.CA = bool(p["CA"])
+        if hasattr(eq, "FR") and "FR" in p:
+            eq.FR = bool(p["FR"])
 
         self.db.commit()
         self.db.refresh(eq)
