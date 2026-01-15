@@ -19,6 +19,7 @@ from app.schemas.unidad import (
     AreaDTO,
     LinkResult,
     UnidadWithInmueblesDTO,
+    UnidadDivisionDTO,
 )
 from app.schemas.inmuebles import InmuebleDTO
 from app.schemas.pagination import Page, PageMeta
@@ -29,6 +30,90 @@ from app.services.inmueble_service import InmuebleService
 # ---------------------- Helpers ----------------------
 _ACTIVE_CANDIDATES = ("Active", "Activo", "IsActive", "Enabled")
 
+def _sql_pisos_origen() -> str:
+    return """
+    DECLARE @uid INT = :uid;
+
+    ;WITH pisos AS (
+        -- A) Pisos directos
+        SELECT DISTINCT
+            p.Id        AS PisoId,
+            p.DivisionId,
+            'pisos'     AS origen,
+            1           AS prio
+        FROM dbo.UnidadesPisos up
+        JOIN dbo.Pisos p ON p.Id = up.PisoId
+        WHERE up.UnidadId = @uid
+
+        UNION ALL
+
+        -- B) Pisos indirectos por áreas
+        SELECT DISTINCT
+            p.Id        AS PisoId,
+            p.DivisionId,
+            'areas'     AS origen,
+            2           AS prio
+        FROM dbo.UnidadesAreas ua
+        JOIN dbo.Areas a ON a.Id = ua.AreaId
+        JOIN dbo.Pisos p ON p.Id = a.PisoId
+        WHERE ua.UnidadId = @uid
+    )
+    SELECT PisoId, DivisionId, origen, prio
+    FROM pisos
+    """
+
+def _sql_division_principal() -> str:
+    return """
+    DECLARE @uid INT = :uid;
+
+    ;WITH divs AS (
+      SELECT DISTINCT p.DivisionId, 'pisos' AS origen, 1 AS prio
+      FROM dbo.UnidadesPisos up
+      JOIN dbo.Pisos p ON p.Id = up.PisoId
+      WHERE up.UnidadId = @uid AND p.DivisionId IS NOT NULL
+
+      UNION ALL
+
+      SELECT DISTINCT p.DivisionId, 'areas' AS origen, 2 AS prio
+      FROM dbo.UnidadesAreas ua
+      JOIN dbo.Areas a ON a.Id = ua.AreaId
+      JOIN dbo.Pisos p ON p.Id = a.PisoId
+      WHERE ua.UnidadId = @uid AND p.DivisionId IS NOT NULL
+    )
+    SELECT TOP 1 DivisionId, origen
+    FROM divs
+    ORDER BY prio
+    """
+
+def _sql_areas_by_unidad() -> str:
+    return """
+    DECLARE @uid INT = :uid;
+
+    ;WITH pisos AS (
+        SELECT DISTINCT p.Id AS PisoId
+        FROM dbo.UnidadesPisos up
+        JOIN dbo.Pisos p ON p.Id = up.PisoId
+        WHERE up.UnidadId = @uid
+
+        UNION
+
+        SELECT DISTINCT a.PisoId
+        FROM dbo.UnidadesAreas ua
+        JOIN dbo.Areas a ON a.Id = ua.AreaId
+        WHERE ua.UnidadId = @uid
+    )
+    SELECT DISTINCT
+        a.Id     AS AreaId,
+        a.Nombre AS AreaNombre,
+        a.PisoId
+    FROM dbo.Areas a
+    JOIN pisos px ON px.PisoId = a.PisoId
+    WHERE EXISTS (
+        SELECT 1
+        FROM dbo.UnidadesAreas ua
+        WHERE ua.UnidadId = @uid AND ua.AreaId = a.Id
+    )
+    """
 
 def _now() -> datetime:
     return datetime.now()
@@ -438,61 +523,103 @@ class UnidadService:
 
     def get_with_expand(self, unidad_id: int) -> UnidadWithInmueblesDTO:
         """
-        ✅ Retorna:
-        - UnidadDTO base
-        - InmueblesDetallados: árbol completo desde Divisiones (inmueble)
-        - Además rellena Pisos/Areas (planos) derivándolos del árbol, si existen.
+        ✅ Expand REAL:
+        - Unidad base
+        - Division principal (DivisionId + origen)
+        - Pisos (directos o por áreas), con origen/prio/división
+        - Áreas ligadas a la unidad (con PisoId)
+        - InmueblesDetallados (si existen vínculos)
         """
-        base = self.get(unidad_id)
+        base = self.get(unidad_id)  # mantiene tu validación Active + mapping
 
+        # 1) Inmuebles IDs (si aplica)
         inm_ids = self.list_inmuebles_ids(unidad_id)
         base.Inmuebles = [InmuebleTopDTO(Id=i, TipoInmueble=0) for i in inm_ids]
 
+        # 2) Division principal
+        div_row = self.db.execute(text(_sql_division_principal()), {"uid": unidad_id}).first()
+        division = None
+        if div_row:
+            division = UnidadDivisionDTO(Id=int(div_row[0]), Origen=str(div_row[1]))
+        # NOTA: si no hay división, queda None
+
+        # 3) Pisos con origen/prio/división (incluye indirectos por áreas)
+        piso_rows = self.db.execute(text(_sql_pisos_origen()), {"uid": unidad_id}).all()
+
+        # Armamos dict por PisoId
+        pisos_map: dict[int, pisoDTO] = {}
+        for r in piso_rows:
+            pid = int(r[0])
+            div_id = int(r[1]) if r[1] is not None else None
+            origen = str(r[2]) if r[2] is not None else None
+            prio = int(r[3]) if r[3] is not None else None
+
+            # si viene repetido, nos quedamos con el de menor prio (pisos=1 gana)
+            if pid in pisos_map and pisos_map[pid].Prio is not None and prio is not None:
+                if prio >= (pisos_map[pid].Prio or 999):
+                    continue
+
+            pisos_map[pid] = pisoDTO(
+                Id=pid,
+                NumeroPisoNombre=None,  # si quieres, luego lo consultamos desde dbo.Pisos
+                Checked=True,
+                DivisionId=div_id,
+                Origen=origen,
+                Prio=prio,
+                Areas=[],
+            )
+
+        # 4) Áreas ligadas a la unidad (con PisoId) y asignarlas al piso
+        area_rows = self.db.execute(text(_sql_areas_by_unidad()), {"uid": unidad_id}).all()
+
+        for r in area_rows:
+            aid = int(r[0])         # AreaId
+            aname = r[1]            # AreaNombre
+            piso_id = int(r[2]) if r[2] is not None else None
+
+            a_dto = AreaDTO(Id=aid, Nombre=aname, PisoId=piso_id)
+
+            # asegura que el piso exista en el mapa (aunque viniera solo por áreas)
+            if piso_id is not None and piso_id not in pisos_map:
+                pisos_map[piso_id] = pisoDTO(
+                    Id=piso_id,
+                    NumeroPisoNombre=None,
+                    Checked=True,
+                    DivisionId=None,
+                    Origen="areas",
+                    Prio=2,
+                    Areas=[],
+                )
+
+            if piso_id is not None:
+                pisos_map[piso_id].Areas.append(a_dto)
+
+        # 5) Ordenar pisos por prio y por Id (estable)
+        pisos_out = sorted(
+            pisos_map.values(),
+            key=lambda x: ((x.Prio or 99), x.Id),
+        )
+
+        # 6) (Opcional) Detalle de inmuebles
         det: List[InmuebleDTO] = []
-        isvc = InmuebleService(self.db)
+        if inm_ids:
+            isvc = InmuebleService(self.db)
+            for iid in inm_ids:
+                try:
+                    d = isvc.get(iid)
+                    if d:
+                        det.append(d)
+                except Exception:
+                    continue
 
-        for iid in inm_ids:
-            try:
-                d = isvc.get(iid)
-                if d:
-                    det.append(d)
-            except Exception:
-                # no dejamos caer todo el expand por 1 inmueble malo
-                continue
+        # 7) Setear en base (sin “mentir” con vacíos)
+        base.Pisos = pisos_out
+        base.Areas = [a for p in pisos_out for a in (p.Areas or [])]  # plano, opcional
 
-        # ✅ Derivar Pisos/Areas desde el árbol detallado
-        piso_seen = set()
-        area_seen = set()
+        # 8) Devolver DTO expand
+        return UnidadWithInmueblesDTO(
+            **base.model_dump(),
+            InmueblesDetallados=det,
+            Division=division,
+        )
 
-        pisos_out: List[pisoDTO] = []
-        areas_out: List[AreaDTO] = []
-
-        for inm in det:
-            for p in (getattr(inm, "Pisos", None) or []):
-                pid = getattr(p, "Id", None)
-                if pid and pid not in piso_seen:
-                    piso_seen.add(pid)
-                    pisos_out.append(
-                        pisoDTO(
-                            Id=int(pid),
-                            NumeroPisoNombre=getattr(p, "PisoNumeroNombre", None),
-                            Checked=True,
-                        )
-                    )
-
-                for a in (getattr(p, "Areas", None) or []):
-                    aid = getattr(a, "Id", None)
-                    if aid and aid not in area_seen:
-                        area_seen.add(aid)
-                        areas_out.append(AreaDTO(Id=int(aid), Nombre=getattr(a, "Nombre", None)))
-
-        # Solo setear si encontramos algo (para no “mentir” con vacíos)
-        if pisos_out:
-            base.Pisos = pisos_out
-        if areas_out:
-            base.Areas = areas_out
-
-        return UnidadWithInmueblesDTO(**base.model_dump(), InmueblesDetallados=det)
-
-    # (si quieres, aquí mantienes link_inmuebles_append/sync usando SQL también,
-    # pero como tu foco ahora es el expand, lo dejamos fuera para no alargar)

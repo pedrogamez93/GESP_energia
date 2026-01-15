@@ -17,12 +17,19 @@ class InmuebleTopDTO(BaseModel):
 
 
 class pisoDTO(BaseModel):
-    """Proyección mínima de Piso asociada a una Unidad."""
+    """Proyección mínima de Piso asociada a una Unidad (para expand)."""
     model_config = ConfigDict(from_attributes=True)
 
     Id: int
     NumeroPisoNombre: Optional[str] = None
     Checked: Optional[bool] = None
+
+    # ✅ nuevos (para expand)
+    DivisionId: Optional[int] = None
+    Origen: Optional[str] = None  # 'pisos' | 'areas'
+    Prio: Optional[int] = None
+
+    Areas: List[AreaDTO] = Field(default_factory=list)
 
 
 class AreaDTO(BaseModel):
@@ -31,6 +38,7 @@ class AreaDTO(BaseModel):
 
     Id: int
     Nombre: Optional[str] = None
+    PisoId: Optional[int] = None
 
 
 # --------- Filtros / Patch ---------
@@ -139,7 +147,8 @@ class UnidadWithInmueblesDTO(UnidadDTO):
     """Unidad + inmuebles con árbol completo."""
     InmueblesDetallados: List[InmuebleDTO] = Field(default_factory=list)
 
-
+    # ✅ nuevo: división principal derivada
+    Division: Optional[UnidadDivisionDTO] = None
 # =====================================================================
 # ✅ NUEVO: DTO DE UPDATE (para Swagger + edición de campos)
 # - Lo usamos en PUT /unidades/{id}
@@ -172,6 +181,11 @@ class UnidadUpdateInmuebleRootDTO(BaseModel):
     Id: Optional[int] = None
     Edificios: List[UnidadUpdateEdificioDTO] = Field(default_factory=list)
 
+class UnidadDivisionDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    Id: Optional[int] = None
+    Origen: Optional[str] = None  # 'pisos' | 'areas'
 
 class UnidadUpdateDTO(BaseModel):
     """
@@ -223,4 +237,5 @@ __all__ = [
     "UnidadUpdateEdificioDTO",
     "UnidadUpdatePisoDTO",
     "UnidadUpdateAreaDTO",
+    "UnidadDivisionDTO",
 ]
