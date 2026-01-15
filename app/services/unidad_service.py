@@ -1,3 +1,4 @@
+# app/services/unidad_service.py
 from __future__ import annotations
 
 from typing import List, Optional, Tuple
@@ -79,7 +80,7 @@ def _coerce_boolish_to_int(v) -> int | None:
         return None
 
 
-# ✅ NUEVO: filtro opcional de Active
+# ✅ filtro opcional de Active
 def _q_filter_active(q, active: Optional[int]):
     """
     active:
@@ -166,16 +167,17 @@ def _lazy_models():
     """
     UnidadPiso = None
     UnidadArea = None
+
     try:
         from app.db.models.unidad_piso import UnidadPiso as _UP  # type: ignore
         UnidadPiso = _UP
     except Exception:
         try:
-            # por si los tienes en el mismo archivo 'unidad.py' (poco probable)
             from app.db.models.unidad import UnidadPiso as _UP  # type: ignore
             UnidadPiso = _UP
         except Exception:
             UnidadPiso = None
+
     try:
         from app.db.models.unidad_area import UnidadArea as _UA  # type: ignore
         UnidadArea = _UA
@@ -185,6 +187,7 @@ def _lazy_models():
             UnidadArea = _UA
         except Exception:
             UnidadArea = None
+
     return UnidadPiso, UnidadArea
 
 
@@ -261,82 +264,116 @@ class UnidadService:
 
     # ---------- UPDATE ----------
     def update(self, unidad_id: int, payload: dict) -> None:
+        """
+        ✅ FIXES:
+        - Permite re-activar unidad aunque esté inactiva si payload trae Active=1
+        - Aplica Active si viene en payload
+        - NO borra pivotes si payload NO trae 'Inmuebles'
+        - NO pisa OldId si no viene
+        """
         u = self.db.get(Unidad, unidad_id)
-        if not u or (_ACTIVE_NAME and not getattr(u, _ACTIVE_NAME)):
+        if not u:
+            raise ValueError("Unidad no encontrada")
+
+        # --- permitir re-activar aunque esté inactiva ---
+        incoming_active: Optional[bool] = None
+        if "Active" in payload:
+            a = _coerce_boolish_to_int(payload.get("Active"))
+            if a is not None:
+                incoming_active = bool(a)
+
+        # Si está inactiva y NO viene Active=1, mantenemos el comportamiento previo (404)
+        if _ACTIVE_NAME and not getattr(u, _ACTIVE_NAME) and incoming_active is not True:
             raise ValueError("Unidad no encontrada o inactiva")
 
-        u.OldId = payload.get("OldId")
-        u.Nombre = payload.get("Nombre", u.Nombre)
-        u.ServicioId = payload.get("ServicioId", u.ServicioId)
-        u.Funcionarios = payload.get("Funcionarios", u.Funcionarios)
+        # --- campos: solo tocar si vienen en payload ---
+        if "OldId" in payload:
+            u.OldId = payload.get("OldId")
+
+        if "Nombre" in payload:
+            u.Nombre = payload.get("Nombre")
+
+        if "ServicioId" in payload:
+            u.ServicioId = payload.get("ServicioId")
+
+        if "Funcionarios" in payload:
+            u.Funcionarios = payload.get("Funcionarios")
 
         if "ReportaPMG" in payload:
             u.ReportaPMG = payload.get("ReportaPMG")
+
         if "IndicadorEE" in payload:
             u.IndicadorEE = payload.get("IndicadorEE")
+
         if "AccesoFactura" in payload:
             u.AccesoFactura = _coerce_boolish_to_int(payload.get("AccesoFactura"))
 
-        # Sanear/actualizar ChkNombre
+        # Active (activar/desactivar) ✅
+        if incoming_active is not None:
+            _set_instance_active(u, incoming_active)
+
+        # Sanear/actualizar ChkNombre (BD NOT NULL)
         if "ChkNombre" in payload and payload.get("ChkNombre") is not None:
             u.ChkNombre = int(payload.get("ChkNombre") or 1)
         elif u.ChkNombre is None:
             u.ChkNombre = 1
 
-        u.InstitucionResponsableId = payload.get(
-            "InstitucionResponsableId", getattr(u, "InstitucionResponsableId", None)
-        )
-        u.ServicioResponsableId = payload.get(
-            "ServicioResponsableId", getattr(u, "ServicioResponsableId", None)
-        )
-        u.OrganizacionResponsable = payload.get(
-            "OrganizacionResponsable", getattr(u, "OrganizacionResponsable", None)
-        )
+        if "InstitucionResponsableId" in payload:
+            u.InstitucionResponsableId = payload.get("InstitucionResponsableId")
+
+        if "ServicioResponsableId" in payload:
+            u.ServicioResponsableId = payload.get("ServicioResponsableId")
+
+        if "OrganizacionResponsable" in payload:
+            u.OrganizacionResponsable = payload.get("OrganizacionResponsable")
 
         u.UpdatedAt = _now()
         u.ModifiedBy = self.current_user_id
         u.Version = (u.Version or 0) + 1
 
-        # Limpia puentes y vuelve a crear según payload (si existen los modelos)
-        UnidadPiso, UnidadArea = _lazy_models()
-        self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id).delete()
-        if UnidadPiso is not None:
-            self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
-        if UnidadArea is not None:
-            self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
+        # ✅ SOLO sincroniza pivotes si viene "Inmuebles"
+        if "Inmuebles" in payload:
+            UnidadPiso, UnidadArea = _lazy_models()
+            self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id).delete()
+            if UnidadPiso is not None:
+                self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
+            if UnidadArea is not None:
+                self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
 
-        inmuebles = payload.get("Inmuebles") or []
-        if inmuebles:
-            root = inmuebles[0]
-            if root.get("Id"):
-                self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=root["Id"]))
+            inmuebles = payload.get("Inmuebles") or []
+            if inmuebles:
+                root = inmuebles[0]
+                if root.get("Id"):
+                    self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=root["Id"]))
 
-            for edif in (root.get("Edificios") or []):
-                if edif.get("Id"):
-                    self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=edif["Id"]))
+                for edif in (root.get("Edificios") or []):
+                    if edif.get("Id"):
+                        self.db.add(UnidadInmueble(UnidadId=unidad_id, InmuebleId=edif["Id"]))
 
-                for piso in (edif.get("Pisos") or []):
-                    if UnidadPiso is not None and piso.get("Id"):
-                        self.db.add(UnidadPiso(UnidadId=unidad_id, PisoId=piso["Id"]))
-                    for area in (piso.get("Areas") or []):
-                        if UnidadArea is not None and area.get("Id"):
-                            self.db.add(UnidadArea(UnidadId=unidad_id, AreaId=area["Id"]))
+                    for piso in (edif.get("Pisos") or []):
+                        if UnidadPiso is not None and piso.get("Id"):
+                            self.db.add(UnidadPiso(UnidadId=unidad_id, PisoId=piso["Id"]))
+                        for area in (piso.get("Areas") or []):
+                            if UnidadArea is not None and area.get("Id"):
+                                self.db.add(UnidadArea(UnidadId=unidad_id, AreaId=area["Id"]))
 
         self.db.commit()
 
     # ---------- DELETE (soft) ----------
     def delete(self, unidad_id: int) -> None:
+        """
+        ✅ Soft delete seguro:
+        - Marca Active=False
+        - NO borra relaciones (para que puedas reactivar sin perder vínculos)
+        """
         u = self.db.get(Unidad, unidad_id)
         if not u:
             return
-        _set_instance_active(u, False)
 
-        UnidadPiso, UnidadArea = _lazy_models()
-        if UnidadArea is not None:
-            self.db.query(UnidadArea).filter_by(UnidadId=unidad_id).delete()
-        if UnidadPiso is not None:
-            self.db.query(UnidadPiso).filter_by(UnidadId=unidad_id).delete()
-        self.db.query(UnidadInmueble).filter_by(UnidadId=unidad_id).delete()
+        _set_instance_active(u, False)
+        u.UpdatedAt = _now()
+        u.ModifiedBy = self.current_user_id
+        u.Version = (u.Version or 0) + 1
 
         self.db.commit()
 
