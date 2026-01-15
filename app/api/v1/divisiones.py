@@ -32,7 +32,7 @@ from app.schemas.division import (
     ReportaResiduosDTO,
 )
 from app.schemas.division_full_update import DivisionFullUpdate
-from app.schemas.division_create import DivisionCreate
+from app.schemas.division import DivisionCreate
 from app.services.division_service import DivisionService
 
 

@@ -64,6 +64,25 @@ def _blank_to_none(v: Any) -> Any:
     return None if isinstance(v, str) and v.strip() == "" else v
 
 
+def _to_bool_maybe(v: Any) -> Optional[bool]:
+    """
+    Normaliza bools que vienen como 0/1, "0"/"1", "true"/"false", etc.
+    """
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return v
+    iv = _to_int_maybe(v)
+    if iv is not None:
+        return bool(iv)
+    s = str(v).strip().lower()
+    if s in ("true", "t", "yes", "y", "si", "sí"):
+        return True
+    if s in ("false", "f", "no", "n"):
+        return False
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DTOs
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,11 +98,10 @@ class DivisionListDTO(DivisionSelectDTO):
     DTO liviano para listados.
 
     NOTA:
-    - Alineé tipos a tu modelo SQLAlchemy:
-      * IndicadorEE es bool en el modelo -> Optional[bool]
-      * DpSt1..DpSt4 son bool en el modelo -> Optional[bool]
-      * Compromiso2022 es bool|None -> Optional[bool]
-    - Mantengo el resto tal cual (para no romper front), pero con tipos coherentes.
+    - Tipos alineados al modelo SQLAlchemy:
+      * IndicadorEE: bool
+      * DpSt1..DpSt4: bool
+      * Compromiso2022: bool|None
     """
     Active: Optional[bool] = True
     ServicioId: Optional[int] = None
@@ -91,15 +109,13 @@ class DivisionListDTO(DivisionSelectDTO):
     ComunaId: Optional[int] = None
     DireccionInmuebleId: Optional[int] = None
 
-    Funcionarios: Optional[int] = None  # ✅ agregar
+    Funcionarios: Optional[int] = None
 
-    # ya expuestos en list()
     IndicadorEE: Optional[bool] = None
     AccesoFactura: Optional[int] = None
     ComparteMedidorElectricidad: Optional[bool] = None
     ComparteMedidorGasCanieria: Optional[bool] = None
 
-    # Campos adicionales que ahora también salen en list()
     ProvinciaId: Optional[int] = None
     Direccion: Optional[str] = None
 
@@ -208,7 +224,6 @@ class DivisionListDTO(DivisionSelectDTO):
 
     model_config = ConfigDict(from_attributes=True)
 
-    # Normalización también para listados
     @model_validator(mode="before")
     @classmethod
     def _normalize_list(cls, data):
@@ -216,14 +231,99 @@ class DivisionListDTO(DivisionSelectDTO):
             data["GeVersion"] = _to_int_maybe(data.get("GeVersion"))
             data["IndicadorEnegia"] = _to_float_maybe(data.get("IndicadorEnegia"))
 
-            # booleans que suelen venir como 0/1/string
-            for bk in ("DpSt1", "DpSt2", "DpSt3", "DpSt4", "Compromiso2022"):
-                if bk in data and data.get(bk) is not None and not isinstance(data.get(bk), bool):
-                    iv = _to_int_maybe(data.get(bk))
-                    if iv is not None:
-                        data[bk] = bool(iv)
+            # booleans típicos
+            for bk in (
+                "DpSt1", "DpSt2", "DpSt3", "DpSt4",
+                "Compromiso2022",
+                "IndicadorEE",
+            ):
+                if bk in data:
+                    data[bk] = _to_bool_maybe(data.get(bk))
 
-            # limpiamos strings vacíos frecuentes
+            for bk in (
+                "ComparteMedidorElectricidad",
+                "ComparteMedidorGasCanieria",
+                "PisosIguales",
+                "SinRol",
+                "DisponeVehiculo",
+                "AireAcondicionadoElectricidad",
+                "CalefaccionGas",
+                "DisponeCalefaccion",
+                "ObservaPapel",
+                "ObservaResiduos",
+                "ObservaAgua",
+                "JustificaResiduos",
+                "ReportaEV",
+                "TieneMedidorElectricidad",
+                "TieneMedidorGas",
+                "ComparteMedidorAgua",
+                "NoDeclaraImpresora",
+                "NoDeclaraArtefactos",
+                "NoDeclaraContenedores",
+                "GestionBienes",
+                "UsaBidon",
+                "JustificaResiduosNoReciclados",
+                "FotoTecho",
+                "ImpSisFv",
+                "InstTerSisFv",
+                "SistemaSolarTermico",
+                "CargaPosteriorT",
+            ):
+                if bk in data:
+                    data[bk] = _to_bool_maybe(data.get(bk))
+
+            # ints típicos
+            for ik in (
+                "Funcionarios",
+                "AccesoFactura",
+                "NivelPaso3",
+                "AccesoFacturaAgua",
+                "ProvinciaId",
+                "RegionId",
+                "ComunaId",
+                "DireccionInmuebleId",
+                "ServicioId",
+                "ParentId",
+                "TipoAdministracionId",
+                "TipoInmueble",
+                "AdministracionServicioId",
+                "ServicioResponsableId",
+                "InstitucionResponsableId",
+                "EstadoCompromiso2022",
+                "AnioInicioGestionEnergetica",
+                "AnioInicioRestoItems",
+                "NroOtrosColaboradores",
+                "InstitucionResponsableAguaId",
+                "ServicioResponsableAguaId",
+                "ColectorId",
+                "EnergeticoAcsId",
+                "EnergeticoCalefaccionId",
+                "EnergeticoRefrigeracionId",
+                "EquipoAcsId",
+                "EquipoCalefaccionId",
+                "EquipoRefrigeracionId",
+                "TempSeteoCalefaccionId",
+                "TempSeteoRefrigeracionId",
+                "TipoLuminariaId",
+                "MantColectores",
+                "MantSfv",
+            ):
+                if ik in data:
+                    data[ik] = _to_int_maybe(data.get(ik))
+
+            # floats típicos
+            for fk in (
+                "PotIns",
+                "SupColectores",
+                "SupFotoTecho",
+                "SupImptSisFv",
+                "SupInstTerSisFv",
+                "IndicadorEnegia",
+            ):
+                if fk in data:
+                    data[fk] = _to_float_maybe(data.get(fk))
+
+            # limpiar strings vacíos frecuentes
             for k in ("Direccion", "Calle", "Numero", "OrganizacionResponsable"):
                 if k in data:
                     data[k] = _blank_to_none(data.get(k))
@@ -246,9 +346,8 @@ class DivisionDTO(DivisionListDTO):
     TipoPropiedadId: Optional[int] = None
     Superficie: Optional[float] = None
 
-    # ⬇️ Campo conflictivo (viene a veces como string mezclado):
+    # conflictivo
     Pisos: Optional[int] = None
-    # ⬇️ Guardamos el valor original cuando no era parseable:
     PisosTexto: Optional[str] = None
 
     TipoUsoId: Optional[int] = None
@@ -256,14 +355,12 @@ class DivisionDTO(DivisionListDTO):
 
     model_config = ConfigDict(from_attributes=True)
 
-    # Normaliza y evita ResponseValidationError
     @model_validator(mode="before")
     @classmethod
     def _normalize_detail(cls, data):
         if not isinstance(data, dict):
             return data
 
-        # Pisos: intenta a int; si no se puede, lo deja en PisosTexto y nulifica Pisos
         raw_pisos = data.get("Pisos")
         if raw_pisos is not None and not isinstance(raw_pisos, int):
             parsed = _to_int_maybe(raw_pisos)
@@ -274,7 +371,6 @@ class DivisionDTO(DivisionListDTO):
                 data["Pisos"] = parsed
                 data.setdefault("PisosTexto", None)
 
-        # Coherencia de otros campos que llegan como string
         data["GeVersion"] = _to_int_maybe(data.get("GeVersion"))
         data["IndicadorEnegia"] = _to_float_maybe(data.get("IndicadorEnegia"))
 
@@ -284,12 +380,238 @@ class DivisionDTO(DivisionListDTO):
 
         data["NroRol"] = _blank_to_none(data.get("NroRol"))
 
-        # booleans típicos que llegan como 0/1/string
-        for bk in ("DpSt1", "DpSt2", "DpSt3", "DpSt4", "Compromiso2022"):
-            if bk in data and data.get(bk) is not None and not isinstance(data.get(bk), bool):
-                iv = _to_int_maybe(data.get(bk))
-                if iv is not None:
-                    data[bk] = bool(iv)
+        # booleans típicos
+        for bk in (
+            "DpSt1", "DpSt2", "DpSt3", "DpSt4",
+            "Compromiso2022",
+            "IndicadorEE",
+            "ReportaPMG",
+        ):
+            if bk in data:
+                data[bk] = _to_bool_maybe(data.get(bk))
+
+        return data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ✅ NUEVO: DTO para CREATE (POST) - en el MISMO ARCHIVO
+# ─────────────────────────────────────────────────────────────────────────────
+class DivisionCreate(BaseModel):
+    """
+    DTO para crear Divisiones.
+    - No incluye Id (lo genera la BD)
+    - No incluye CreatedAt/UpdatedAt/Version (los maneja el service)
+    - Permite enviar todos los campos del modelo.
+    """
+
+    # estado / tracking
+    Active: Optional[bool] = True
+    ModifiedBy: Optional[str] = None
+    CreatedBy: Optional[str] = None
+
+    # base
+    Funcionarios: Optional[int] = 0
+    Nombre: Optional[str] = None
+    ReportaPMG: Optional[bool] = False
+    AnyoConstruccion: Optional[int] = None
+
+    Latitud: Optional[float] = None
+    Longitud: Optional[float] = None
+
+    # fks principales (en tu modelo son NOT NULL, pero igual permitimos None y el service decide)
+    EdificioId: Optional[int] = None
+    ServicioId: Optional[int] = None
+    TipoPropiedadId: Optional[int] = None
+
+    # resto de campos
+    TipoUnidadId: Optional[int] = None
+    Superficie: Optional[float] = None
+    Pisos: Optional[int] = None
+    PisosTexto: Optional[str] = None
+    TipoUsoId: Optional[int] = None
+    NroRol: Optional[str] = None
+    Direccion: Optional[str] = None
+
+    ComparteMedidorElectricidad: Optional[bool] = False
+    ComparteMedidorGasCanieria: Optional[bool] = False
+    PisosIguales: Optional[bool] = True
+    NivelPaso3: Optional[int] = 0
+
+    Calle: Optional[str] = None
+    ComunaId: Optional[int] = None
+    Numero: Optional[str] = None
+
+    GeVersion: Optional[int] = 0
+    ParentId: Optional[int] = None
+    ProvinciaId: Optional[int] = None
+    RegionId: Optional[int] = None
+    TipoAdministracionId: Optional[int] = None
+    TipoInmueble: Optional[int] = None
+    AdministracionServicioId: Optional[int] = None
+
+    DpSt1: Optional[bool] = False
+    DpSt2: Optional[bool] = False
+    DpSt3: Optional[bool] = False
+    DpSt4: Optional[bool] = False
+
+    DireccionInmuebleId: Optional[int] = None
+    AccesoFactura: Optional[int] = 0
+    OrganizacionResponsable: Optional[str] = None
+    ServicioResponsableId: Optional[int] = None
+    InstitucionResponsableId: Optional[int] = None
+    IndicadorEE: Optional[bool] = False
+    JustificaRol: Optional[str] = None
+    SinRol: Optional[bool] = False
+
+    Compromiso2022: Optional[bool] = None
+    Justificacion: Optional[str] = None
+    ObservacionCompromiso2022: Optional[str] = None
+    EstadoCompromiso2022: Optional[int] = None
+    AnioInicioGestionEnergetica: Optional[int] = None
+    AnioInicioRestoItems: Optional[int] = None
+
+    DisponeVehiculo: Optional[bool] = None
+    VehiculosIds: Optional[str] = None
+
+    AireAcondicionadoElectricidad: Optional[bool] = False
+    CalefaccionGas: Optional[bool] = False
+    DisponeCalefaccion: Optional[bool] = False
+
+    NroOtrosColaboradores: Optional[int] = 0
+    ObservacionPapel: Optional[str] = None
+    ObservaPapel: Optional[bool] = False
+    ObservacionResiduos: Optional[str] = None
+    ObservaResiduos: Optional[bool] = False
+    ObservacionAgua: Optional[str] = None
+    ObservaAgua: Optional[bool] = False
+    JustificaResiduos: Optional[bool] = False
+    JustificacionResiduos: Optional[str] = None
+
+    ReportaEV: Optional[bool] = False
+    TieneMedidorElectricidad: Optional[bool] = False
+    TieneMedidorGas: Optional[bool] = False
+    AccesoFacturaAgua: Optional[int] = None
+    InstitucionResponsableAguaId: Optional[int] = None
+    OrganizacionResponsableAgua: Optional[str] = None
+    ServicioResponsableAguaId: Optional[int] = None
+    ComparteMedidorAgua: Optional[bool] = False
+
+    NoDeclaraImpresora: Optional[bool] = None
+    NoDeclaraArtefactos: Optional[bool] = None
+    NoDeclaraContenedores: Optional[bool] = None
+    GestionBienes: Optional[bool] = None
+
+    UsaBidon: Optional[bool] = False
+    JustificaResiduosNoReciclados: Optional[bool] = False
+    JustificacionResiduosNoReciclados: Optional[str] = None
+
+    ColectorId: Optional[int] = None
+    EnergeticoAcsId: Optional[int] = None
+    EnergeticoCalefaccionId: Optional[int] = None
+    EnergeticoRefrigeracionId: Optional[int] = None
+    EquipoAcsId: Optional[int] = None
+    EquipoCalefaccionId: Optional[int] = None
+    EquipoRefrigeracionId: Optional[int] = None
+
+    FotoTecho: Optional[bool] = False
+    ImpSisFv: Optional[bool] = False
+    InstTerSisFv: Optional[bool] = False
+    PotIns: Optional[float] = None
+    SistemaSolarTermico: Optional[bool] = False
+
+    SupColectores: Optional[float] = None
+    SupFotoTecho: Optional[float] = None
+    SupImptSisFv: Optional[float] = None
+    SupInstTerSisFv: Optional[float] = None
+
+    TempSeteoCalefaccionId: Optional[int] = None
+    TempSeteoRefrigeracionId: Optional[int] = None
+    TipoLuminariaId: Optional[int] = None
+    MantColectores: Optional[int] = None
+    MantSfv: Optional[int] = None
+
+    CargaPosteriorT: Optional[bool] = False
+    IndicadorEnegia: Optional[float] = None
+    ObsInexistenciaEyV: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_create(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        # Pisos: si viene basura, lo guardamos en PisosTexto
+        raw_pisos = data.get("Pisos")
+        if raw_pisos is not None and not isinstance(raw_pisos, int):
+            parsed = _to_int_maybe(raw_pisos)
+            if parsed is None:
+                data["PisosTexto"] = str(raw_pisos)
+                data["Pisos"] = None
+            else:
+                data["Pisos"] = parsed
+
+        # ints comunes
+        for ik in (
+            "Funcionarios", "EdificioId", "ServicioId", "TipoPropiedadId",
+            "TipoUnidadId", "TipoUsoId", "ComunaId", "ProvinciaId", "RegionId",
+            "GeVersion", "ParentId", "TipoAdministracionId", "TipoInmueble",
+            "AdministracionServicioId", "DireccionInmuebleId",
+            "AccesoFactura", "ServicioResponsableId", "InstitucionResponsableId",
+            "EstadoCompromiso2022", "AnioInicioGestionEnergetica", "AnioInicioRestoItems",
+            "NroOtrosColaboradores", "AccesoFacturaAgua",
+            "InstitucionResponsableAguaId", "ServicioResponsableAguaId",
+            "ColectorId", "EnergeticoAcsId", "EnergeticoCalefaccionId", "EnergeticoRefrigeracionId",
+            "EquipoAcsId", "EquipoCalefaccionId", "EquipoRefrigeracionId",
+            "TempSeteoCalefaccionId", "TempSeteoRefrigeracionId", "TipoLuminariaId",
+            "MantColectores", "MantSfv",
+            "AnyoConstruccion",
+        ):
+            if ik in data:
+                data[ik] = _to_int_maybe(data.get(ik))
+
+        # floats
+        for fk in ("Latitud", "Longitud", "Superficie", "PotIns", "SupColectores", "SupFotoTecho", "SupImptSisFv", "SupInstTerSisFv", "IndicadorEnegia"):
+            if fk in data:
+                data[fk] = _to_float_maybe(data.get(fk))
+
+        # bools
+        for bk in (
+            "Active", "ReportaPMG",
+            "ComparteMedidorElectricidad", "ComparteMedidorGasCanieria",
+            "PisosIguales", "IndicadorEE", "SinRol",
+            "DpSt1", "DpSt2", "DpSt3", "DpSt4",
+            "Compromiso2022",
+            "DisponeVehiculo",
+            "AireAcondicionadoElectricidad", "CalefaccionGas", "DisponeCalefaccion",
+            "ObservaPapel", "ObservaResiduos", "ObservaAgua",
+            "JustificaResiduos",
+            "ReportaEV", "TieneMedidorElectricidad", "TieneMedidorGas",
+            "ComparteMedidorAgua",
+            "NoDeclaraImpresora", "NoDeclaraArtefactos", "NoDeclaraContenedores",
+            "GestionBienes",
+            "UsaBidon", "JustificaResiduosNoReciclados",
+            "FotoTecho", "ImpSisFv", "InstTerSisFv", "SistemaSolarTermico",
+            "CargaPosteriorT",
+        ):
+            if bk in data:
+                data[bk] = _to_bool_maybe(data.get(bk))
+
+        # limpiar strings vacíos
+        for sk in (
+            "Nombre", "ModifiedBy", "CreatedBy",
+            "NroRol", "Direccion", "Calle", "Numero",
+            "OrganizacionResponsable", "JustificaRol",
+            "Justificacion", "ObservacionCompromiso2022",
+            "VehiculosIds",
+            "ObservacionPapel", "ObservacionResiduos", "ObservacionAgua",
+            "JustificacionResiduos", "JustificacionResiduosNoReciclados",
+            "OrganizacionResponsableAgua",
+            "ObsInexistenciaEyV",
+        ):
+            if sk in data:
+                data[sk] = _blank_to_none(data.get(sk))
 
         return data
 
@@ -376,7 +698,6 @@ class DivisionBusquedaEspecificaDTO(BaseModel):
     RegionId: Optional[int] = None
     ServicioId: int
 
-    # debug (opcional)
     DireccionInmuebleId: Optional[int] = None
     DireccionComunaId: Optional[int] = None
     EdificioComunaId: Optional[int] = None
