@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from sqlalchemy import BigInteger, Integer, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
+from sqlalchemy import Numeric, SmallInteger
 from app.db.base import Base
 
 
@@ -37,6 +37,37 @@ class Unidad(Base):
     ReportaPMG:  Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     IndicadorEE: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     Funcionarios: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # =========================
+    # ✅ NUEVOS CAMPOS (dbo.Unidades)
+    # =========================
+    TipoUsoId: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # DECIMAL(10,2)
+    SuperficieM2: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+
+    TipoPropiedadId: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    NumeroRol: Mapped[str | None] = mapped_column(String(length=50), nullable=True)
+
+    # En BD es NOT NULL con DEFAULT(0) (tú ya lo creaste así)
+    NoPoseeRol: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+
+    AnioConstruccion: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+
+    OtrosColaboradores: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # NOT NULL DEFAULT(0)
+    AccesoFacturaAgua: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+
+    ConsumeElectricidad: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+    ComparteMedidorElectricidad: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+
+    ConsumeGas: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+    ComparteMedidorGas: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+
+    ConsumeAgua: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+    ComparteMedidorAgua: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
 
     # Relación con la pivote (requiere FKs válidos en UnidadInmueble)
     unidad_inmuebles: Mapped[list["UnidadInmueble"]] = relationship(

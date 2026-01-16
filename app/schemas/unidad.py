@@ -29,8 +29,7 @@ class pisoDTO(BaseModel):
     Origen: Optional[str] = None  # 'pisos' | 'areas'
     Prio: Optional[int] = None
 
-    Areas: List[AreaDTO] = Field(default_factory=list)
-
+    Areas: List["AreaDTO"] = Field(default_factory=list)
 
 class AreaDTO(BaseModel):
     """Proyección mínima de Área asociada a una Unidad."""
@@ -97,7 +96,22 @@ class UnidadDTO(BaseModel):
     Inmuebles: List[InmuebleTopDTO] = []
     Pisos: List[pisoDTO] = []
     Areas: List[AreaDTO] = []
+    TipoUsoId: Optional[int] = None
+    SuperficieM2: Optional[float] = None
+    TipoPropiedadId: Optional[int] = None
+    NumeroRol: Optional[str] = None
+    NoPoseeRol: bool = False
+    AnioConstruccion: Optional[int] = None
+    OtrosColaboradores: Optional[int] = None
 
+    AccesoFacturaAgua: bool = False
+
+    ConsumeElectricidad: bool = False
+    ComparteMedidorElectricidad: bool = False
+    ConsumeGas: bool = False
+    ComparteMedidorGas: bool = False
+    ConsumeAgua: bool = False
+    ComparteMedidorAgua: bool = False
 
 class UnidadListDTO(BaseModel):
     """
@@ -127,7 +141,22 @@ class UnidadListDTO(BaseModel):
     ServicioResponsableId: Optional[int] = None
     ServicioResponsableNombre: Optional[str] = None
     OrganizacionResponsable: Optional[str] = None
+    TipoUsoId: Optional[int] = None
+    SuperficieM2: Optional[float] = None
+    TipoPropiedadId: Optional[int] = None
+    NumeroRol: Optional[str] = None
+    NoPoseeRol: bool = False
+    AnioConstruccion: Optional[int] = None
+    OtrosColaboradores: Optional[int] = None
 
+    AccesoFacturaAgua: bool = False
+
+    ConsumeElectricidad: bool = False
+    ComparteMedidorElectricidad: bool = False
+    ConsumeGas: bool = False
+    ComparteMedidorGas: bool = False
+    ConsumeAgua: bool = False
+    ComparteMedidorAgua: bool = False
 
 # --------- NUEVOS DTOs: bulk-link / expand ---------
 
@@ -148,7 +177,7 @@ class UnidadWithInmueblesDTO(UnidadDTO):
     InmueblesDetallados: List[InmuebleDTO] = Field(default_factory=list)
 
     # ✅ nuevo: división principal derivada
-    Division: Optional[UnidadDivisionDTO] = None
+    Division: Optional["UnidadDivisionDTO"] = None
 # =====================================================================
 # ✅ NUEVO: DTO DE UPDATE (para Swagger + edición de campos)
 # - Lo usamos en PUT /unidades/{id}
@@ -216,7 +245,22 @@ class UnidadUpdateDTO(BaseModel):
 
     # Relaciones (solo si quieres que el PUT pueda resync de relaciones)
     Inmuebles: Optional[List[UnidadUpdateInmuebleRootDTO]] = None
+    TipoUsoId: Optional[int] = None
+    SuperficieM2: Optional[float] = None
+    TipoPropiedadId: Optional[int] = None
+    NumeroRol: Optional[str] = None
+    NoPoseeRol: bool = False
+    AnioConstruccion: Optional[int] = None
+    OtrosColaboradores: Optional[int] = None
 
+    AccesoFacturaAgua: bool = False
+
+    ConsumeElectricidad: bool = False
+    ComparteMedidorElectricidad: bool = False
+    ConsumeGas: bool = False
+    ComparteMedidorGas: bool = False
+    ConsumeAgua: bool = False
+    ComparteMedidorAgua: bool = False
 
 # Export explícito por claridad
 __all__ = [

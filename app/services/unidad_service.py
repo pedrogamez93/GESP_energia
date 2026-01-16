@@ -85,6 +85,22 @@ def _sql_division_principal() -> str:
     ORDER BY prio
     """
 
+def _coerce_boolish_to_bool(v) -> Optional[bool]:
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in {"1", "si", "sí", "true", "t", "y", "yes"}:
+        return True
+    if s in {"0", "no", "false", "f", "n"}:
+        return False
+    # fallback: intenta int
+    try:
+        return bool(int(s))
+    except Exception:
+        return None
+    
 def _sql_areas_by_unidad() -> str:
     return """
     DECLARE @uid INT = :uid;
@@ -202,6 +218,25 @@ def _map_unidad_to_dto(u: Unidad) -> UnidadDTO:
             "InstitucionResponsableId": getattr(u, "InstitucionResponsableId", None),
             "ServicioResponsableId": getattr(u, "ServicioResponsableId", None),
             "OrganizacionResponsable": getattr(u, "OrganizacionResponsable", None),
+
+            # ✅ nuevos
+            "TipoUsoId": getattr(u, "TipoUsoId", None),
+            "SuperficieM2": float(getattr(u, "SuperficieM2", None)) if getattr(u, "SuperficieM2", None) is not None else None,
+            "TipoPropiedadId": getattr(u, "TipoPropiedadId", None),
+            "NumeroRol": getattr(u, "NumeroRol", None),
+            "NoPoseeRol": bool(getattr(u, "NoPoseeRol", False)),
+            "AnioConstruccion": getattr(u, "AnioConstruccion", None),
+            "OtrosColaboradores": getattr(u, "OtrosColaboradores", None),
+
+            "AccesoFacturaAgua": bool(getattr(u, "AccesoFacturaAgua", False)),
+
+            "ConsumeElectricidad": bool(getattr(u, "ConsumeElectricidad", False)),
+            "ComparteMedidorElectricidad": bool(getattr(u, "ComparteMedidorElectricidad", False)),
+            "ConsumeGas": bool(getattr(u, "ConsumeGas", False)),
+            "ComparteMedidorGas": bool(getattr(u, "ComparteMedidorGas", False)),
+            "ConsumeAgua": bool(getattr(u, "ConsumeAgua", False)),
+            "ComparteMedidorAgua": bool(getattr(u, "ComparteMedidorAgua", False)),
+
             "Servicio": None,
             "Inmuebles": [],
             "Pisos": [],
@@ -232,11 +267,30 @@ def _map_unidad_to_listdto(
             "ReportaPMG": bool(getattr(u, "ReportaPMG", False)),
             "IndicadorEE": bool(getattr(u, "IndicadorEE", False)),
             "AccesoFactura": "1" if (getattr(u, "AccesoFactura", 0) or 0) > 0 else "0",
+
             "InstitucionResponsableId": getattr(u, "InstitucionResponsableId", None),
             "InstitucionResponsableNombre": institucion_nombre,
             "ServicioResponsableId": getattr(u, "ServicioResponsableId", None),
             "ServicioResponsableNombre": servicio_nombre,
             "OrganizacionResponsable": getattr(u, "OrganizacionResponsable", None),
+
+            # ✅ nuevos
+            "TipoUsoId": getattr(u, "TipoUsoId", None),
+            "SuperficieM2": float(getattr(u, "SuperficieM2", None)) if getattr(u, "SuperficieM2", None) is not None else None,
+            "TipoPropiedadId": getattr(u, "TipoPropiedadId", None),
+            "NumeroRol": getattr(u, "NumeroRol", None),
+            "NoPoseeRol": bool(getattr(u, "NoPoseeRol", False)),
+            "AnioConstruccion": getattr(u, "AnioConstruccion", None),
+            "OtrosColaboradores": getattr(u, "OtrosColaboradores", None),
+
+            "AccesoFacturaAgua": bool(getattr(u, "AccesoFacturaAgua", False)),
+
+            "ConsumeElectricidad": bool(getattr(u, "ConsumeElectricidad", False)),
+            "ComparteMedidorElectricidad": bool(getattr(u, "ComparteMedidorElectricidad", False)),
+            "ConsumeGas": bool(getattr(u, "ConsumeGas", False)),
+            "ComparteMedidorGas": bool(getattr(u, "ComparteMedidorGas", False)),
+            "ConsumeAgua": bool(getattr(u, "ConsumeAgua", False)),
+            "ComparteMedidorAgua": bool(getattr(u, "ComparteMedidorAgua", False)),
         },
         from_attributes=False,
     )
@@ -307,6 +361,22 @@ class UnidadService:
                 InstitucionResponsableId=payload.get("InstitucionResponsableId"),
                 ServicioResponsableId=payload.get("ServicioResponsableId"),
                 OrganizacionResponsable=payload.get("OrganizacionResponsable"),
+                # ✅ nuevos
+                TipoUsoId=payload.get("TipoUsoId"),
+                SuperficieM2=payload.get("SuperficieM2"),
+                TipoPropiedadId=payload.get("TipoPropiedadId"),
+                NumeroRol=payload.get("NumeroRol"),
+                NoPoseeRol=_coerce_boolish_to_bool(payload.get("NoPoseeRol")) or False,
+                AnioConstruccion=payload.get("AnioConstruccion"),
+                OtrosColaboradores=payload.get("OtrosColaboradores"),
+                AccesoFacturaAgua=_coerce_boolish_to_bool(payload.get("AccesoFacturaAgua")) or False,
+
+                ConsumeElectricidad=_coerce_boolish_to_bool(payload.get("ConsumeElectricidad")) or False,
+                ComparteMedidorElectricidad=_coerce_boolish_to_bool(payload.get("ComparteMedidorElectricidad")) or False,
+                ConsumeGas=_coerce_boolish_to_bool(payload.get("ConsumeGas")) or False,
+                ComparteMedidorGas=_coerce_boolish_to_bool(payload.get("ComparteMedidorGas")) or False,
+                ConsumeAgua=_coerce_boolish_to_bool(payload.get("ConsumeAgua")) or False,
+                ComparteMedidorAgua=_coerce_boolish_to_bool(payload.get("ComparteMedidorAgua")) or False,
             )
             self.db.add(u)
             self.db.flush()
@@ -365,6 +435,44 @@ class UnidadService:
             u.ServicioResponsableId = payload.get("ServicioResponsableId")
         if "OrganizacionResponsable" in payload:
             u.OrganizacionResponsable = payload.get("OrganizacionResponsable")
+
+        if "TipoUsoId" in payload:
+            u.TipoUsoId = payload.get("TipoUsoId")
+        if "SuperficieM2" in payload:
+            u.SuperficieM2 = payload.get("SuperficieM2")
+        if "TipoPropiedadId" in payload:
+            u.TipoPropiedadId = payload.get("TipoPropiedadId")
+
+        if "NumeroRol" in payload:
+            u.NumeroRol = payload.get("NumeroRol")
+
+        if "NoPoseeRol" in payload:
+            b = _coerce_boolish_to_bool(payload.get("NoPoseeRol"))
+            if b is not None:
+                u.NoPoseeRol = b
+
+        if "AnioConstruccion" in payload:
+            u.AnioConstruccion = payload.get("AnioConstruccion")
+        if "OtrosColaboradores" in payload:
+            u.OtrosColaboradores = payload.get("OtrosColaboradores")
+
+        if "AccesoFacturaAgua" in payload:
+            b = _coerce_boolish_to_bool(payload.get("AccesoFacturaAgua"))
+            if b is not None:
+                u.AccesoFacturaAgua = b
+
+        for k in [
+            "ConsumeElectricidad",
+            "ComparteMedidorElectricidad",
+            "ConsumeGas",
+            "ComparteMedidorGas",
+            "ConsumeAgua",
+            "ComparteMedidorAgua",
+        ]:
+            if k in payload:
+                b = _coerce_boolish_to_bool(payload.get(k))
+                if b is not None:
+                    setattr(u, k, b)
 
         u.UpdatedAt = _now()
         u.ModifiedBy = self.current_user_id
