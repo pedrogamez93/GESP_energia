@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, List
+from typing import Annotated, List, Tuple
 
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from sqlalchemy.orm import Session
@@ -20,6 +20,23 @@ from app.services.medidor_service import MedidorService
 router = APIRouter(prefix="/api/v1/medidores", tags=["Medidores"])
 svc = MedidorService()
 DbDep = Annotated[Session, Depends(get_db)]
+
+# ==========================================================
+# ✅ Roles con permiso de ESCRITURA en Medidores
+#    (Administrador + Gestores que deben poder gestionar)
+#    Ajusta aquí si tu JWT/DB usa otros nombres exactos.
+# ==========================================================
+MEDIDORES_WRITE_ROLES: Tuple[str, ...] = (
+    "ADMINISTRADOR",
+    "GESTOR_UNIDAD",
+    "GESTOR_FLOTA",
+    "GESTOR_SERVICIO",
+    # Si existe un rol combinado normalizado, agrega aquí:
+    # "GESTOR_UNIDAD_FLOTA",
+)
+
+# Dependency reutilizable (evita repetir require_roles)
+WriteUserDep = Annotated[UserPublic, Depends(require_roles(*MEDIDORES_WRITE_ROLES))]
 
 
 # ---------------- GET públicos ----------------
@@ -166,8 +183,12 @@ def check_exist_medidor(
         raise HTTPException(status_code=400, detail="NumeroClienteId inválido")
 
     numero = str(payload.get("Numero", "")).strip()
+
     division_val = payload.get("DivisionId")
-    division_id = int(division_val) if division_val is not None else None
+    try:
+        division_id = int(division_val) if division_val is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="DivisionId inválido")
 
     found = svc.check_exist(db, numero_cliente_id, numero, division_id)
     if not found:
@@ -175,18 +196,18 @@ def check_exist_medidor(
     return found
 
 
-# ---------------- Escrituras (ADMINISTRADOR) ----------------
+# ---------------- Escrituras (ADMINISTRADOR + GESTORES) ----------------
 
 @router.post(
     "",
     response_model=MedidorDTO,
     status_code=status.HTTP_201_CREATED,
-    summary="(ADMINISTRADOR) Crear medidor",
+    summary="(ADMINISTRADOR/GESTORES) Crear medidor",
 )
 def create_medidor(
     db: DbDep,
     payload: MedidorCreate,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: WriteUserDep,
 ):
     return svc.create(db, payload, created_by=current_user.id)
 
@@ -194,13 +215,13 @@ def create_medidor(
 @router.put(
     "/{medidor_id}",
     response_model=MedidorDTO,
-    summary="(ADMINISTRADOR) Actualizar medidor",
+    summary="(ADMINISTRADOR/GESTORES) Actualizar medidor",
 )
 def update_medidor(
     db: DbDep,
     medidor_id: Annotated[int, Path(..., ge=1)],
     payload: MedidorUpdate,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: WriteUserDep,
 ):
     return svc.update(db, medidor_id, payload, modified_by=current_user.id)
 
@@ -208,12 +229,12 @@ def update_medidor(
 @router.delete(
     "/{medidor_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="(ADMINISTRADOR) Eliminar medidor (hard delete)",
+    summary="(ADMINISTRADOR/GESTORES) Eliminar medidor (hard delete)",
 )
 def delete_medidor(
     db: DbDep,
     medidor_id: Annotated[int, Path(..., ge=1)],
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: WriteUserDep,
 ):
     svc.delete(db, medidor_id)
     return None
@@ -222,12 +243,12 @@ def delete_medidor(
 @router.put(
     "/{medidor_id}/divisiones",
     response_model=List[int],
-    summary="(ADMINISTRADOR) Reemplaza divisiones asociadas al medidor (tabla puente)",
+    summary="(ADMINISTRADOR/GESTORES) Reemplaza divisiones asociadas al medidor (tabla puente)",
 )
 def set_divisiones(
     db: DbDep,
     medidor_id: Annotated[int, Path(..., ge=1)],
     division_ids: List[int],
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: WriteUserDep,
 ):
     return svc.set_divisiones(db, medidor_id, division_ids, actor_id=current_user.id)
