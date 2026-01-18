@@ -11,6 +11,8 @@ from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 from app.schemas.usuario_vinculo import IdsPayload, UserDetailFullDTO
+from app.schemas.usuario_roles import RolesPayload
+
 from app.services.usuario_vinculo_service import UsuarioVinculoService
 from app.db.models.identity import AspNetUser
 from app.db.models.usuarios_unidades import UsuarioUnidad
@@ -71,6 +73,7 @@ def usuarios_index(
             "servicios": "/api/v1/usuarios/{user_id}/servicios",
             "divisiones": "/api/v1/usuarios/{user_id}/divisiones",
             "unidades": "/api/v1/usuarios/{user_id}/unidades",
+            "roles": "/api/v1/usuarios/{user_id}/roles",
             "activar": "/api/v1/usuarios/{user_id}/activar",
             "desactivar": "/api/v1/usuarios/{user_id}/desactivar",
         },
@@ -114,47 +117,55 @@ def get_user_detail(
     return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
 
 
-# ---------------- Reemplazar sets vinculados (ADMIN) ----------------
+# ---------------- Reemplazar sets vinculados ----------------
 @router.put(
     "/{user_id}/instituciones",
     response_model=List[int],
-    summary="(ADMIN) Reemplaza instituciones vinculadas",
+    summary="(ADMIN/GESTOR_SERVICIOS) Reemplaza instituciones vinculadas (scoped)",
 )
 def set_user_instituciones(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR", "GESTOR_SERVICIOS"))],
     payload: IdsPayload | None = Body(None),
 ):
     Log.info(
-        "PUT instituciones user_id=%s raw_payload=%s",
+        "PUT instituciones user_id=%s actor_id=%s actor_roles=%s raw_payload=%s",
         user_id,
+        current_user.id,
+        current_user.roles,
         payload.model_dump(mode="python") if payload else None,
     )
     ids = payload.Ids if payload else []
-    Log.info("PUT instituciones user_id=%s normalized_ids=%s", user_id, ids)
-    return svc.set_instituciones(db, user_id, ids)
+    Log.info("PUT instituciones user_id=%s requested_ids=%s", user_id, ids)
+
+    # ✅ scoped (ADMIN sin restricción; GESTOR limitado por servicios -> instituciones)
+    return svc.set_instituciones_scoped(db, user_id, ids, actor=current_user)
 
 
 @router.put(
     "/{user_id}/servicios",
     response_model=List[int],
-    summary="(ADMIN) Reemplaza servicios vinculados",
+    summary="(ADMIN/GESTOR_SERVICIOS) Reemplaza servicios vinculados (scoped)",
 )
 def set_user_servicios(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR", "GESTOR_SERVICIOS"))],
     payload: IdsPayload | None = Body(None),
 ):
     Log.info(
-        "PUT servicios user_id=%s raw_payload=%s",
+        "PUT servicios user_id=%s actor_id=%s actor_roles=%s raw_payload=%s",
         user_id,
+        current_user.id,
+        current_user.roles,
         payload.model_dump(mode="python") if payload else None,
     )
     ids = payload.Ids if payload else []
-    Log.info("PUT servicios user_id=%s normalized_ids=%s", user_id, ids)
-    return svc.set_servicios(db, user_id, ids)
+    Log.info("PUT servicios user_id=%s requested_ids=%s", user_id, ids)
+
+    # ✅ scoped
+    return svc.set_servicios_scoped(db, user_id, ids, actor=current_user)
 
 
 @router.put(
@@ -181,24 +192,29 @@ def set_user_divisiones(
 @router.put(
     "/{user_id}/unidades",
     response_model=List[int],
-    summary="(ADMIN) Reemplaza unidades vinculadas",
+    summary="(ADMIN/GESTOR_SERVICIOS) Reemplaza unidades vinculadas (scoped)",
 )
 def set_user_unidades(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR", "GESTOR_SERVICIOS"))],
     payload: IdsPayload | None = Body(None),
 ):
     Log.info(
-        "PUT unidades user_id=%s raw_payload=%s",
+        "PUT unidades user_id=%s actor_id=%s actor_roles=%s raw_payload=%s",
         user_id,
+        current_user.id,
+        current_user.roles,
         payload.model_dump(mode="python") if payload else None,
     )
     ids = payload.Ids if payload else []
-    Log.info("PUT unidades user_id=%s normalized_ids=%s", user_id, ids)
-    return svc.set_unidades(db, user_id, ids)
+    Log.info("PUT unidades user_id=%s requested_ids=%s", user_id, ids)
+
+    # ✅ scoped (ADMIN sin restricción; GESTOR limitado por servicios -> unidades)
+    return svc.set_unidades_scoped(db, user_id, ids, actor=current_user)
 
 
+# ---------------- Activar / desactivar ----------------
 @router.put(
     "/{user_id}/activar",
     response_model=UserDetailFullDTO,
@@ -231,3 +247,19 @@ def desactivar_usuario(
     user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
     Log.info("PUT desactivar usuario %s", user_id)
     return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
+
+
+# ---------------- Roles ----------------
+@router.put(
+    "/{user_id}/roles",
+    response_model=list[str],
+    summary="(ADMIN) Reemplaza roles del usuario",
+)
+def set_user_roles(
+    user_id: Annotated[str, Path(...)],
+    db: DbDep,
+    payload: RolesPayload,
+    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+):
+    Log.info("PUT roles user_id=%s roles=%s", user_id, getattr(payload, "roles", None))
+    return svc.set_roles(db, user_id, payload.roles)
