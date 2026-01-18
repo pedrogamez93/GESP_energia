@@ -20,9 +20,13 @@ from app.core.roles import ADMIN, ADMIN_VARIANTS
 # ✅ Compatibilidad con auth_service
 LOCKOUT_MAX_FAILED = 5
 LOCKOUT_WINDOW_MINUTES = 15
-# ─────────────────────────────────────────────────────────────
-ROLE_ADMIN = "ADMINISTRADOR"
+
+# Roles extra (admin ya está en app.core.roles.ADMIN)
 ROLE_GESTOR_UNIDAD = "GESTOR_UNIDAD"
+ROLE_GESTOR_SERVICIOS = "GESTOR_SERVICIOS"  # si lo usas
+# ─────────────────────────────────────────────────────────────
+
+
 # ─────────────────────────────────────────────────────────────
 # JWT helpers
 # ─────────────────────────────────────────────────────────────
@@ -43,8 +47,10 @@ def create_access_token(
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
+
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+
 
 # ─────────────────────────────────────────────────────────────
 # DB dep
@@ -56,7 +62,9 @@ def get_db():
     finally:
         db.close()
 
+
 DbDep = Annotated[Session, Depends(get_db)]
+
 
 # ─────────────────────────────────────────────────────────────
 # Roles helpers
@@ -68,6 +76,7 @@ def _normalize_role(name: str | None) -> str | None:
     if up in {r.upper() for r in ADMIN_VARIANTS}:
         return ADMIN  # "ADMINISTRADOR"
     return up
+
 
 def _merge_roles(*groups: Iterable[str]) -> list[str]:
     seen = set()
@@ -82,11 +91,12 @@ def _merge_roles(*groups: Iterable[str]) -> list[str]:
                 out.append(nr)
     return out
 
+
 # ─────────────────────────────────────────────────────────────
 # Bearer extractor con errores detallados
 # ─────────────────────────────────────────────────────────────
 def _raise_401(msg: str, err: str | None = None, desc: str | None = None) -> None:
-    hdr = 'Bearer'
+    hdr = "Bearer"
     if err:
         hdr = f'Bearer error="{err}"' if not desc else f'Bearer error="{err}", error_description="{desc}"'
     raise HTTPException(
@@ -94,6 +104,7 @@ def _raise_401(msg: str, err: str | None = None, desc: str | None = None) -> Non
         detail=msg,
         headers={"WWW-Authenticate": hdr},
     )
+
 
 def bearer_token_required(request: Request) -> str:
     authorization: str | None = request.headers.get("authorization")
@@ -106,10 +117,14 @@ def bearer_token_required(request: Request) -> str:
         )
     return param.strip()
 
+
 # ─────────────────────────────────────────────────────────────
 # Current user / Roles
 # ─────────────────────────────────────────────────────────────
-def get_current_user(token: Annotated[str, Depends(bearer_token_required)], db: DbDep) -> UserPublic:
+def get_current_user(
+    token: Annotated[str, Depends(bearer_token_required)],
+    db: DbDep,
+) -> UserPublic:
     try:
         payload = decode_token(token)
     except ExpiredSignatureError:
@@ -126,11 +141,17 @@ def get_current_user(token: Annotated[str, Depends(bearer_token_required)], db: 
     if not user:
         _raise_401("Usuario no encontrado", "invalid_token", "El 'sub' del token no corresponde a un usuario válido")
 
+    # ✅ Roles desde BD (join AspNetUserRoles -> AspNetRoles)
     roles_db_raw = [
         (getattr(r, "NormalizedName", None) or getattr(r, "Name", None) or "")
         for r in (user.roles or [])
     ]
-    roles_final = _merge_roles(roles_from_token, roles_db_raw)
+    roles_db = _merge_roles(roles_db_raw)
+
+    # ✅ Política recomendada:
+    # - si BD trae roles, usamos BD como fuente de verdad
+    # - si por alguna razón BD no trae roles (caso raro), caemos al token
+    roles_final = roles_db if roles_db else _merge_roles(roles_from_token)
 
     return UserPublic(
         id=str(user.Id),
@@ -141,7 +162,9 @@ def get_current_user(token: Annotated[str, Depends(bearer_token_required)], db: 
         roles=roles_final,
     )
 
+
 def require_roles(*required: str):
+    # '*' = cualquier usuario autenticado
     if len(required) == 1 and required[0] == "*":
         def _dep_any(user: Annotated[UserPublic, Depends(get_current_user)]):
             return user
@@ -166,10 +189,20 @@ def require_roles(*required: str):
 
     return _dep
 
+
+def require_admin_or_gestor_unidad():
+    """
+    Permite acciones operativas a ADMINISTRADOR o GESTOR_UNIDAD.
+    Útil para endpoints donde ambos deben poder hacer lo mismo.
+    """
+    return require_roles(ADMIN, ROLE_GESTOR_UNIDAD)
+
+
 # ─────────────────────────────────────────────────────────────
 # Password helpers
 # ─────────────────────────────────────────────────────────────
 _pwd_ctx = None  # CryptContext perezoso
+
 
 def _ctx():
     global _pwd_ctx
@@ -177,6 +210,7 @@ def _ctx():
         from passlib.context import CryptContext
         _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
     return _pwd_ctx
+
 
 def verify_password_any(plain_password: str, stored_hash: str | None) -> bool:
     if not stored_hash:
@@ -188,12 +222,6 @@ def verify_password_any(plain_password: str, stored_hash: str | None) -> bool:
             pass
     return verify_aspnet_password(stored_hash, plain_password)
 
+
 def hash_password(plain_password: str) -> str:
     return _ctx().hash(plain_password)
-
-def require_admin_or_gestor_unidad():
-    """
-    Permite acciones operativas a ADMINISTRADOR o GESTOR_UNIDAD.
-    Útil para endpoints donde ambos deben poder hacer lo mismo.
-    """
-    return require_roles(ROLE_ADMIN, ROLE_GESTOR_UNIDAD)
