@@ -137,3 +137,39 @@ def unassign_energetico_unidad(
         numero_cliente_id=numero_cliente_id,
     )
     return None
+
+# =========================
+# GET: listado por DIVISION
+# =========================
+@router.get(
+    "/division/{division_id}",
+    response_model=List[EnergeticoDivisionDTO],
+    summary="Listado por división",
+)
+def list_por_division(
+    division_id: Annotated[int, Path(..., ge=1)],
+    db: DbDep,
+    user: CurrentUser,
+):
+    # si quieres, aquí también podrías validar acceso (si tienes mapping user->division)
+    return svc.list_by_division(db, int(division_id))
+
+
+@router.post(
+    "/division/{division_id}/assign",
+    response_model=EnergeticoDivisionDTO,
+    summary="(ADMIN/GESTOR_UNIDAD) Asignar un energético a la división",
+    status_code=status.HTTP_201_CREATED,
+)
+def assign_energetico_division(
+    division_id: Annotated[int, Path(..., ge=1)],
+    payload: EnergeticoDivisionCreateItem,
+    db: DbDep,
+    user: CurrentUser,
+):
+    return svc.assign_to_division(
+        db=db,
+        division_id=int(division_id),
+        energetico_id=payload.EnergeticoId,
+        numero_cliente_id=payload.NumeroClienteId,
+    )

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.db.models.identity import AspNetUser
+from app.db.models.identity import AspNetUser, AspNetRole  # 👈 asegúrate que exista AspNetRole
 from app.schemas.auth import UserPublic
 from app.utils.identity_password import verify_aspnet_password
 from app.core.roles import ADMIN, ADMIN_VARIANTS
@@ -20,11 +20,10 @@ from app.core.roles import ADMIN, ADMIN_VARIANTS
 # ✅ Compatibilidad con auth_service
 LOCKOUT_MAX_FAILED = 5
 LOCKOUT_WINDOW_MINUTES = 15
-
-# Roles extra (admin ya está en app.core.roles.ADMIN)
-ROLE_GESTOR_UNIDAD = "GESTOR_UNIDAD"
-ROLE_GESTOR_SERVICIOS = "GESTOR_SERVICIOS"  # si lo usas
 # ─────────────────────────────────────────────────────────────
+
+ROLE_ADMIN = "ADMINISTRADOR"
+ROLE_GESTOR_UNIDAD = "GESTOR_UNIDAD"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -69,12 +68,32 @@ DbDep = Annotated[Session, Depends(get_db)]
 # ─────────────────────────────────────────────────────────────
 # Roles helpers
 # ─────────────────────────────────────────────────────────────
+def _is_guid(s: str) -> bool:
+    # GUID típico: 8-4-4-4-12
+    if not s:
+        return False
+    t = s.strip()
+    if len(t) != 36:
+        return False
+    parts = t.split("-")
+    if len(parts) != 5:
+        return False
+    return [len(p) for p in parts] == [8, 4, 4, 4, 12]
+
+
 def _normalize_role(name: str | None) -> str | None:
     if not name:
         return None
     up = name.strip().upper()
+
+    # admin variants -> ADMINISTRADOR
     if up in {r.upper() for r in ADMIN_VARIANTS}:
         return ADMIN  # "ADMINISTRADOR"
+
+    # normalización extra (por si viene raro)
+    if up in {"GESTOR UNIDAD", "GESTOR-DE-UNIDAD", "GESTOR_UNIDAD"}:
+        return ROLE_GESTOR_UNIDAD
+
     return up
 
 
@@ -90,6 +109,28 @@ def _merge_roles(*groups: Iterable[str]) -> list[str]:
                 seen.add(nr)
                 out.append(nr)
     return out
+
+
+def _role_ids_to_names(db: Session, role_ids: list[str]) -> list[str]:
+    """
+    Convierte RoleId GUID -> NormalizedName/Name consultando AspNetRoles.
+    """
+    ids = [x.strip() for x in (role_ids or []) if x and _is_guid(x)]
+    if not ids:
+        return []
+
+    rows = (
+        db.query(AspNetRole)
+        .filter(AspNetRole.Id.in_(ids))
+        .all()
+    )
+    names: list[str] = []
+    for r in rows:
+        nm = getattr(r, "NormalizedName", None) or getattr(r, "Name", None) or ""
+        nm = nm.strip()
+        if nm:
+            names.append(nm)
+    return names
 
 
 # ─────────────────────────────────────────────────────────────
@@ -121,10 +162,7 @@ def bearer_token_required(request: Request) -> str:
 # ─────────────────────────────────────────────────────────────
 # Current user / Roles
 # ─────────────────────────────────────────────────────────────
-def get_current_user(
-    token: Annotated[str, Depends(bearer_token_required)],
-    db: DbDep,
-) -> UserPublic:
+def get_current_user(token: Annotated[str, Depends(bearer_token_required)], db: DbDep) -> UserPublic:
     try:
         payload = decode_token(token)
     except ExpiredSignatureError:
@@ -134,6 +172,7 @@ def get_current_user(
 
     sub: str | None = payload.get("sub")
     roles_from_token = payload.get("roles") or []
+
     if not sub:
         _raise_401("Token inválido: falta 'sub'", "invalid_token", "El token no contiene el subject (sub)")
 
@@ -141,17 +180,18 @@ def get_current_user(
     if not user:
         _raise_401("Usuario no encontrado", "invalid_token", "El 'sub' del token no corresponde a un usuario válido")
 
-    # ✅ Roles desde BD (join AspNetUserRoles -> AspNetRoles)
+    # 1) Roles desde token: pueden venir como NOMBRES o como RoleId GUID
+    token_role_names = [r for r in roles_from_token if r and not _is_guid(str(r))]
+    token_role_ids = [str(r) for r in roles_from_token if r and _is_guid(str(r))]
+    token_role_names_from_ids = _role_ids_to_names(db, token_role_ids)
+
+    # 2) Roles desde DB: si tu relationship user.roles está bien, esto ya trae names
     roles_db_raw = [
         (getattr(r, "NormalizedName", None) or getattr(r, "Name", None) or "")
-        for r in (user.roles or [])
+        for r in (getattr(user, "roles", None) or [])
     ]
-    roles_db = _merge_roles(roles_db_raw)
 
-    # ✅ Política recomendada:
-    # - si BD trae roles, usamos BD como fuente de verdad
-    # - si por alguna razón BD no trae roles (caso raro), caemos al token
-    roles_final = roles_db if roles_db else _merge_roles(roles_from_token)
+    roles_final = _merge_roles(token_role_names, token_role_names_from_ids, roles_db_raw)
 
     return UserPublic(
         id=str(user.Id),
@@ -164,7 +204,7 @@ def get_current_user(
 
 
 def require_roles(*required: str):
-    # '*' = cualquier usuario autenticado
+    # "*" = cualquier usuario autenticado
     if len(required) == 1 and required[0] == "*":
         def _dep_any(user: Annotated[UserPublic, Depends(get_current_user)]):
             return user
@@ -193,9 +233,8 @@ def require_roles(*required: str):
 def require_admin_or_gestor_unidad():
     """
     Permite acciones operativas a ADMINISTRADOR o GESTOR_UNIDAD.
-    Útil para endpoints donde ambos deben poder hacer lo mismo.
     """
-    return require_roles(ADMIN, ROLE_GESTOR_UNIDAD)
+    return require_roles(ROLE_ADMIN, ROLE_GESTOR_UNIDAD)
 
 
 # ─────────────────────────────────────────────────────────────
