@@ -41,7 +41,7 @@ class UsuarioVinculoService:
 
     # --------- detail ---------
     def get_detail(self, db: Session, user_id: str):
-        self._ensure_user(db, user_id)
+        user = self._ensure_user(db, user_id)
 
         inst_ids = [r[0] for r in db.execute(
             select(UsuarioInstitucion.InstitucionId).where(UsuarioInstitucion.UsuarioId == user_id)
@@ -66,7 +66,6 @@ class UsuarioVinculoService:
             user_id, inst_ids, srv_ids, div_ids, uni_ids,
         )
 
-        user = db.get(AspNetUser, user_id)
         return user, roles, inst_ids, srv_ids, div_ids, uni_ids
 
     # --------- helpers para normalizar ids ---------

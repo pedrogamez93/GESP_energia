@@ -264,19 +264,7 @@ async def attach_request_meta(request: Request, call_next):
         "status_code": 200,
     }
 
-    # Log Authorization (redactado) solo para /api/v1/inmuebles
-    if request.url.path.startswith("/api/v1/inmuebles"):
-        auth = request.headers.get("authorization")
-
-        def redact(a: str | None):
-            if not a:
-                return None
-            return a[:10] + "***" + a[-2:] if len(a) > 12 else "***"
-
-        log.info("[AUTH-CHK] path=%s auth=%s", request.url.path, redact(auth))
-
-    # Captura body para auditoría en métodos de escritura,
-    # evitando romper uploads multipart/form-data.
+    # Captura body para auditoría en métodos de escritura (igual que tienes)
     capture_body = (
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
         and request.url.path not in EXCLUDED_PATHS
@@ -288,18 +276,15 @@ async def attach_request_meta(request: Request, call_next):
         ctype_full = (request.headers.get("content-type") or "").lower()
         ctype = ctype_full.split(";")[0].strip()
 
-        # ⛔️ NO leer cuerpo si es multipart (subidas de archivo) para no agotar el stream
         if ctype.startswith("multipart/"):
-            body_json_str = None  # explícito: no capturamos
+            body_json_str = None
         else:
-            # Solo leer para JSON o x-www-form-urlencoded
             if ctype in ("application/json", "application/x-www-form-urlencoded"):
                 body_bytes = await request.body()
 
                 async def _receive():
                     return {"type": "http.request", "body": body_bytes, "more_body": False}
 
-                # reinyecta el body al endpoint
                 request._receive = _receive
 
                 if body_bytes:
@@ -310,7 +295,7 @@ async def attach_request_meta(request: Request, call_next):
                             from json import loads, dumps
                             parsed = loads(sample.decode("utf-8"))
                             body_json_str = dumps(parsed, ensure_ascii=False)
-                        else:  # application/x-www-form-urlencoded
+                        else:
                             parsed_raw = parse_qs(sample.decode("utf-8"))
                             parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_raw.items()}
                             from json import dumps
@@ -320,25 +305,36 @@ async def attach_request_meta(request: Request, call_next):
                             {"_raw_preview": sample.decode("utf-8", errors="ignore")},
                             ensure_ascii=False,
                         )
-            else:
-                # Otros tipos (text/plain, etc.) → no capturamos contenido para evitar ruido
-                body_json_str = None
 
     meta["request_body_json"] = body_json_str
     meta["request_body_sha256"] = body_hash
 
     request.state.audit_meta = meta
-    current_request_meta.set(meta)
+
+    # 🔥 IMPORTANTE: guarda token para resetear contextvar al final
+    token = current_request_meta.set(meta)
 
     try:
         resp = await call_next(request)
         meta["status_code"] = resp.status_code
-        # 👉 agrega request-id a la respuesta para que el front pueda leerlo
         resp.headers["X-Request-Id"] = meta["request_id"]
         return resp
+
     except asyncio.CancelledError:
         meta["status_code"] = 499
-        return Response(status_code=499, content=b"Client Closed Request")
+        # igual agrega request-id para debug
+        return Response(
+            status_code=499,
+            content=b"Client Closed Request",
+            headers={"X-Request-Id": meta["request_id"]},
+        )
+
+    finally:
+        # ✅ evita fuga de context entre requests
+        try:
+            current_request_meta.reset(token)
+        except Exception:
+            pass
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Health

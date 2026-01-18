@@ -12,13 +12,24 @@ from app.audit.context import current_request_meta  # contextvar con metadatos d
 
 # Flags por variables de entorno (opcionales)
 READ_UNCOMMITTED = os.getenv("DB_READ_UNCOMMITTED", "1") == "1"
-LOCK_TIMEOUT_MS  = int(os.getenv("DB_LOCK_TIMEOUT_MS", "5000"))
+LOCK_TIMEOUT_MS = int(os.getenv("DB_LOCK_TIMEOUT_MS", "5000"))
+
+# -------------------------
+# Pool tuning (IMPORTANTE)
+# -------------------------
+POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))          # antes: default (5)
+MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "40"))    # antes: default (10)
+POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))    # segundos
+POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "1800"))  # segundos (30 min)
 
 engine = create_engine(
     settings.DATABASE_URL,
-    pool_pre_ping=True,        # detecta conexiones muertas
-    fast_executemany=True,     # mejora inserts masivos
-    pool_recycle=1800,         # recicla conexiones viejas
+    pool_pre_ping=True,           # detecta conexiones muertas antes de usarlas
+    pool_recycle=POOL_RECYCLE,    # recicla conexiones viejas
+    pool_size=POOL_SIZE,
+    max_overflow=MAX_OVERFLOW,
+    pool_timeout=POOL_TIMEOUT,
+    fast_executemany=True,        # pyodbc: mejora inserts masivos
     future=True,
 )
 
@@ -33,6 +44,7 @@ def _set_session_pragmas(dbapi_connection, connection_record):
             cursor.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;")
         cursor.close()
     except Exception:
+        # No mates la conexión por fallas de compatibilidad
         pass
 
 class RequestAwareSession(SASession):
@@ -51,15 +63,23 @@ SessionLocal = sessionmaker(
     bind=engine,
     autocommit=False,
     autoflush=False,
-    class_=RequestAwareSession,  # <-- clave: cualquier Session ve request_meta
+    class_=RequestAwareSession,
 )
 
-# --- SHIM DE COMPATIBILIDAD ---
-# Muchos módulos importan: from app.db.session import get_db
-# Volvemos a exponerlo aquí para no tocar todos los routers.
 def get_db() -> Generator[Session, None, None]:
+    """
+    Dependency de FastAPI.
+    - Siempre cierra la sesión
+    - Si hubo excepción, hace rollback para devolver la conexión limpia al pool
+    """
     db: Session = SessionLocal()
     try:
         yield db
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
