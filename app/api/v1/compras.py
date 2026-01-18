@@ -1,8 +1,9 @@
 # app/api/routes/compras.py
 from __future__ import annotations
+
 from typing import Annotated, List, Union, Optional
 
-from fastapi import APIRouter, Depends, Query, Path, status
+from fastapi import APIRouter, Body, Depends, Query, Path, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -10,13 +11,21 @@ from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 
-# 👇 Import corregido (plural)
 from app.schemas.compra import (
-    CompraDTO, CompraCreate, CompraUpdate,
-    CompraMedidorItemDTO, CompraItemsPayload,
-    CompraPage, CompraFullPage, CompraFullDetalleDTO,
-    CompraFullDTO, CompraMedidorItemFullDTO
+    CompraDTO,
+    CompraCreate,
+    CompraUpdate,
+    CompraMedidorItemDTO,
+    CompraItemsPayload,
+    CompraPage,
+    CompraFullPage,
+    CompraFullDetalleDTO,
+    CompraFullDTO,
+    CompraMedidorItemFullDTO,
 )
+
+# ✅ Resolver UnidadId -> DivisionId (UnidadesInmuebles.InmuebleId)
+from app.services.unidad_scope import division_id_from_unidad
 
 from app.services.compra_service import CompraService
 
@@ -49,7 +58,7 @@ def _nz_str(s: Optional[str]) -> Optional[str]:
 @router.get(
     "",
     summary="Listado paginado de compras/consumos (básico o enriquecido)",
-    response_model=Union[CompraFullPage, CompraPage]
+    response_model=Union[CompraFullPage, CompraPage],
 )
 def list_compras(
     db: DbDep,
@@ -68,6 +77,10 @@ def list_compras(
     EstadoValidacionId: str | None = Query(default=None),
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
+
+    # ✅ NUEVO: filtro por unidad (alias)
+    UnidadId: int | None = Query(default=None, description="Alias: resuelve a DivisionId vía UnidadesInmuebles"),
+
     NombreOpcional: str | None = Query(default=None, description="Match en c.NombreOpcional o d.Nombre"),
     full: bool = Query(default=True, description="Si true, retorna versión enriquecida"),
 ):
@@ -80,9 +93,31 @@ def list_compras(
     EstadoValidacionId = _nz_str(EstadoValidacionId)
     NombreOpcional = _nz_str(NombreOpcional)
 
+    # ✅ Alias por unidad: UnidadId -> DivisionId (InmuebleId)
+    if UnidadId is not None:
+        resolved_div = division_id_from_unidad(db, int(UnidadId))
+
+        # si el caller además mandó DivisionId distinto, lo frenamos
+        if DivisionId is not None and int(DivisionId) != int(resolved_div):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "code": "division_mismatch",
+                    "msg": "DivisionId no coincide con el inmueble de la unidad",
+                    "UnidadId": int(UnidadId),
+                    "DivisionId_given": int(DivisionId),
+                    "DivisionId_from_unidad": int(resolved_div),
+                },
+            )
+
+        DivisionId = int(resolved_div)
+
     if full:
         total, items = svc.list_full(
-            db, q, page, page_size,
+            db,
+            q,
+            page,
+            page_size,
             division_id=DivisionId,
             servicio_id=ServicioId,
             energetico_id=EnergeticoId,
@@ -96,19 +131,33 @@ def list_compras(
             edificio_id=EdificioId,
             nombre_opcional=NombreOpcional,
         )
-        return JSONResponse(content={
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "items": items
-        })
+        return JSONResponse(
+            content={
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "items": items,
+            }
+        )
 
     result = svc.list(
-        db, q, page, page_size,
-        DivisionId=DivisionId, ServicioId=ServicioId, EnergeticoId=EnergeticoId, NumeroClienteId=NumeroClienteId,
-        FechaDesde=FechaDesde, FechaHasta=FechaHasta, active=active,
-        MedidorId=MedidorId, EstadoValidacionId=EstadoValidacionId, RegionId=RegionId, EdificioId=EdificioId,
-        NombreOpcional=NombreOpcional, full=False
+        db,
+        q,
+        page,
+        page_size,
+        DivisionId=DivisionId,
+        ServicioId=ServicioId,
+        EnergeticoId=EnergeticoId,
+        NumeroClienteId=NumeroClienteId,
+        FechaDesde=FechaDesde,
+        FechaHasta=FechaHasta,
+        active=active,
+        MedidorId=MedidorId,
+        EstadoValidacionId=EstadoValidacionId,
+        RegionId=RegionId,
+        EdificioId=EdificioId,
+        NombreOpcional=NombreOpcional,
+        full=False,
     )
     return result
 
@@ -121,7 +170,7 @@ def list_compras(
 )
 def get_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
-    db: DbDep
+    db: DbDep,
 ):
     c = svc.get(db, compra_id)
 
@@ -141,7 +190,7 @@ def get_compra(
 )
 def get_compra_detalle(
     compra_id: Annotated[int, Path(..., ge=1)],
-    db: DbDep
+    db: DbDep,
 ):
     data = svc.get_full(db, compra_id)
     return CompraFullDetalleDTO(**data)
@@ -157,7 +206,7 @@ def get_compra_detalle(
 def create_compra(
     payload: CompraCreate,
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     c, items = svc.create(db, payload, created_by=current_user.id)
     dto = CompraDTO.model_validate(c)
@@ -175,7 +224,7 @@ def update_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     payload: CompraUpdate,
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     c, items = svc.update(db, compra_id, payload, modified_by=current_user.id)
     dto = CompraDTO.model_validate(c)
@@ -191,7 +240,7 @@ def update_compra(
 def delete_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     svc.soft_delete(db, compra_id, modified_by=current_user.id)
     return None
@@ -206,7 +255,7 @@ def delete_compra(
 def reactivate_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))]
+    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
     c = svc.reactivate(db, compra_id, modified_by=current_user.id)
     items = svc._items_by_compra(db, compra_id)

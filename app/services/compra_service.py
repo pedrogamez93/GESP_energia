@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models.compra import Compra
 from app.db.models.compra_medidor import CompraMedidor
+from app.services.unidad_scope import division_id_from_unidad
 
 Log = logging.getLogger(__name__)
 CM_TBL = CompraMedidor.__table__
@@ -518,10 +519,60 @@ class CompraService:
             .order_by(CompraMedidor.Id)
             .all()
         )
+    
+    def _apply_unidad_alias_or_raise(
+        self,
+        db: Session,
+        *,
+        unidad_id: int | None,
+        division_id: int | None,
+    ) -> int | None:
+        """
+        Si viene UnidadId, resuelve DivisionId vía UnidadesInmuebles.InmuebleId.
+        Si además viene DivisionId y no coincide, levanta 400.
+        Retorna DivisionId (resuelto o el mismo original).
+        """
+        if unidad_id is None:
+            return division_id
 
-    def create(self, db: Session, data, created_by: Optional[str] = None) -> Tuple[Compra, List[CompraMedidor]]:
+        resolved_div = int(division_id_from_unidad(db, int(unidad_id)))
+
+        if division_id is not None and int(division_id) != resolved_div:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "division_mismatch",
+                    "msg": "DivisionId no coincide con el inmueble de la unidad",
+                    "UnidadId": int(unidad_id),
+                    "DivisionId_given": int(division_id),
+                    "DivisionId_from_unidad": int(resolved_div),
+                },
+            )
+
+        return resolved_div
+    
+    def create(
+        self,
+        db: Session,
+        data,
+        created_by: Optional[str] = None
+    ) -> Tuple[Compra, List[CompraMedidor]]:
+
         now = datetime.utcnow()
-        created_by_div = getattr(data, "CreatedByDivisionId", None) or data.DivisionId
+
+        unidad_id = getattr(data, "UnidadId", None)
+        division_id = getattr(data, "DivisionId", None)
+
+        division_id = self._apply_unidad_alias_or_raise(
+            db,
+            unidad_id=int(unidad_id) if unidad_id is not None else None,
+            division_id=int(division_id) if division_id is not None else None,
+        )
+
+        if division_id is None:
+            raise HTTPException(status_code=400, detail={"code": "missing_division", "msg": "Debe venir DivisionId o UnidadId"})
+
+        created_by_div = getattr(data, "CreatedByDivisionId", None) or division_id
 
         obj = Compra(
             CreatedAt=now,
@@ -533,7 +584,7 @@ class CompraService:
             Consumo=data.Consumo,
             InicioLectura=_to_dt(data.InicioLectura),
             FinLectura=_to_dt(data.FinLectura),
-            DivisionId=data.DivisionId,
+            DivisionId=int(division_id),
             EnergeticoId=data.EnergeticoId,
             FechaCompra=_to_dt(data.FechaCompra),
             Costo=data.Costo,
@@ -554,7 +605,7 @@ class CompraService:
             payload.append(
                 {
                     "Consumo": float(it.Consumo),
-                    "MedidorId": int(it.MedidorId),
+                    "MedidorId": int(it.MedidorId) if it.MedidorId is not None else None,
                     "CompraId": int(obj.Id),
                     "ParametroMedicionId": int(it.ParametroMedicionId) if it.ParametroMedicionId is not None else None,
                     "UnidadMedidaId": int(it.UnidadMedidaId) if it.UnidadMedidaId is not None else None,
@@ -568,9 +619,28 @@ class CompraService:
         db.refresh(obj)
         return obj, self._items_by_compra(db, obj.Id)
 
-    def update(self, db: Session, compra_id: int, data, modified_by: Optional[str] = None) -> Tuple[Compra, List[CompraMedidor]]:
+    def update(
+        self,
+        db: Session,
+        compra_id: int,
+        data,
+        modified_by: Optional[str] = None
+    ) -> Tuple[Compra, List[CompraMedidor]]:
+
         obj = self.get(db, compra_id)
         payload = data.model_dump(exclude_unset=True)
+
+        # ✅ Alias UnidadId -> DivisionId si viene
+        unidad_id = payload.pop("UnidadId", None)  # no existe en tabla, solo alias
+        division_given = payload.get("DivisionId", None)
+
+        if unidad_id is not None:
+            resolved_div = self._apply_unidad_alias_or_raise(
+                db,
+                unidad_id=int(unidad_id),
+                division_id=int(division_given) if division_given is not None else None,
+            )
+            payload["DivisionId"] = int(resolved_div)
 
         # Normaliza fechas que puedan venir como string
         for k in ("InicioLectura", "FinLectura", "FechaCompra", "ReviewedAt"):

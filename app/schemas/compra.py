@@ -1,4 +1,4 @@
-# app/schemas/compras.py
+# app/schemas/compra.py
 from __future__ import annotations
 
 from typing import Optional, List, Union
@@ -223,6 +223,7 @@ class CompraContextoDTO(BaseModel):
 
 class DireccionDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     Calle: Optional[str] = None
     Numero: Optional[str] = None
     DireccionLibre: Optional[str] = None
@@ -264,14 +265,23 @@ class CompraCreate(BaseModel):
       - Si SinMedidor=true  → no debe venir MedidorId en Items.
       - Suma de Consumo de Items == Consumo total (si hay Items).
       - 🔴 FacturaId es OBLIGATORIO (>0).  ← evita IntegrityError en SQL Server
+
+    ✅ NUEVO:
+      - UnidadId (alias opcional): si viene, el backend resolverá DivisionId
+        vía UnidadesInmuebles (InmuebleId) en el router/service.
     """
     Consumo: float
     InicioLectura: DateLike
     FinLectura: DateLike
+
+    # ✅ NUEVO (alias opcional)
+    UnidadId: Optional[int] = None
+
     DivisionId: int
     EnergeticoId: int
     FechaCompra: DateLike
     Costo: float
+
     # mantenemos Optional para no romper firmas previas, pero validamos que sea requerido
     FacturaId: Optional[int] = None
     NumeroClienteId: Optional[int] = None
@@ -311,6 +321,7 @@ class CompraCreate(BaseModel):
         return float(v)
 
     @field_validator(
+        "UnidadId",
         "DivisionId", "EnergeticoId", "CreatedByDivisionId", "FacturaId",
         "NumeroClienteId", "UnidadMedidaId", mode="before"
     )
@@ -327,6 +338,8 @@ class CompraCreate(BaseModel):
     @model_validator(mode="after")
     def _cross_checks(self):
         # 1) CreatedByDivisionId por defecto = DivisionId
+        # (nota: si usas UnidadId, el router/service puede sobreescribir DivisionId
+        #  antes de persistir; aquí mantenemos tu contrato sin romper)
         if self.CreatedByDivisionId is None:
             object.__setattr__(self, "CreatedByDivisionId", self.DivisionId)
 
@@ -366,10 +379,18 @@ class CompraCreate(BaseModel):
 class CompraUpdate(BaseModel):
     """
     Patch/put: mismos criterios; no rompemos llamados existentes.
+
+    ✅ NUEVO:
+      - UnidadId (alias opcional): si viene, el backend resolverá DivisionId
+        (y puede setear DivisionId internamente).
     """
     Consumo: Optional[float] = None
     InicioLectura: Optional[DateLike] = None
     FinLectura: Optional[DateLike] = None
+
+    # ✅ NUEVO (alias opcional)
+    UnidadId: Optional[int] = None
+
     DivisionId: Optional[int] = None
     EnergeticoId: Optional[int] = None
     FechaCompra: Optional[DateLike] = None
@@ -393,6 +414,16 @@ class CompraUpdate(BaseModel):
     @field_serializer("FechaCompra", "InicioLectura", "FinLectura", "ReviewedAt", when_used="json")
     def _ser_dates(self, v: Optional[datetime], _info):
         return _ser_date(v)
+
+    @field_validator("UnidadId", mode="before")
+    @classmethod
+    def _unidad_int_ok(cls, v):
+        if v is None or v == "":
+            return None
+        iv = int(v)
+        if iv <= 0:
+            raise ValueError("UnidadId debe ser entero positivo")
+        return iv
 
 
 class CompraItemsPayload(BaseModel):
