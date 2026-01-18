@@ -21,7 +21,8 @@ from app.core.roles import ADMIN, ADMIN_VARIANTS
 LOCKOUT_MAX_FAILED = 5
 LOCKOUT_WINDOW_MINUTES = 15
 # ─────────────────────────────────────────────────────────────
-
+ROLE_ADMIN = "ADMINISTRADOR"
+ROLE_GESTOR_UNIDAD = "GESTOR_UNIDAD"
 # ─────────────────────────────────────────────────────────────
 # JWT helpers
 # ─────────────────────────────────────────────────────────────
@@ -189,3 +190,10 @@ def verify_password_any(plain_password: str, stored_hash: str | None) -> bool:
 
 def hash_password(plain_password: str) -> str:
     return _ctx().hash(plain_password)
+
+def require_admin_or_gestor_unidad():
+    """
+    Permite acciones operativas a ADMINISTRADOR o GESTOR_UNIDAD.
+    Útil para endpoints donde ambos deben poder hacer lo mismo.
+    """
+    return require_roles(ROLE_ADMIN, ROLE_GESTOR_UNIDAD)
