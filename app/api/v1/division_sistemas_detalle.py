@@ -21,8 +21,7 @@ from app.schemas.division_sistemas_detalle import (
 from app.services.division_sistemas_service import DivisionSistemasService
 
 router = APIRouter(prefix="/api/v1/divisiones", tags=["Sistemas por División (detalle)"])
-svc = DivisionSistemas
-Service()
+svc = DivisionSistemasService()
 
 Log = logging.getLogger(__name__)
 
@@ -45,10 +44,7 @@ except Exception:
 def _ensure_actor_can_edit_division(db: Session, actor: UserPublic, division_id: int) -> None:
     """
     ADMIN: puede editar cualquier división.
-    Gestores: solo pueden editar divisiones dentro de su alcance.
-
-    Alcance mínimo implementado:
-      - UsuarioDivision (UsuarioId, DivisionId)
+    Gestores: solo pueden editar divisiones dentro de su alcance (tabla puente UsuarioDivision).
 
     Si no tienes ese modelo/tabla, deja 403 para gestores (por seguridad).
     """
@@ -58,6 +54,12 @@ def _ensure_actor_can_edit_division(db: Session, actor: UserPublic, division_id:
         return
 
     if UsuarioDivision is None:
+        Log.warning(
+            "forbidden_scope (no UsuarioDivision) actor=%s roles=%s division_id=%s",
+            getattr(actor, "id", None),
+            roles,
+            division_id,
+        )
         raise HTTPException(
             status_code=403,
             detail={
@@ -75,6 +77,12 @@ def _ensure_actor_can_edit_division(db: Session, actor: UserPublic, division_id:
     ).first()
 
     if not ok:
+        Log.warning(
+            "forbidden_scope actor=%s roles=%s division_id=%s",
+            getattr(actor, "id", None),
+            roles,
+            division_id,
+        )
         raise HTTPException(
             status_code=403,
             detail={
