@@ -61,7 +61,7 @@ class UserMiniDTO(BaseModel):
     Nombres: str | None = None
     Apellidos: str | None = None
     Active: bool | None = None
-
+    ServicioIds: List[int] = Field(default_factory=list)
     model_config = {"from_attributes": True}
 
 class UserDetailFullDTO(BaseModel):

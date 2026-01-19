@@ -314,14 +314,52 @@ def get_usuarios_vinculados_por_servicio(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
+    """
+    Retorna usuarios que comparten al menos un servicio con `user_id`.
+    Además, incluye `ServicioIds` = lista de servicios en común con el usuario base.
+
+    El scoping (qué puede ver un GESTOR) lo impone el service:
+      - ADMIN: sin restricción
+      - GESTOR_SERVICIO / GESTOR DE CONSULTA: limitado a su alcance
+    """
     try:
         items = svc.usuarios_vinculados_por_servicio_scoped(db, user_id, actor=current_user)
-        return [UserMiniDTO.model_validate(u) for u in items]
+
+        # Soporta 2 formatos de retorno desde el service:
+        #  1) [{'user': <AspNetUser o dict>, 'ServicioIds': [..]}, ...]
+        #  2) [<AspNetUser>, ...]  (en ese caso el DTO saldrá sin ServicioIds)
+        out: list[UserMiniDTO] = []
+        for it in (items or []):
+            # Caso A: viene como dict con user + ServicioIds
+            if isinstance(it, dict):
+                u = it.get("user") or it.get("User") or it.get("usuario") or it
+                dto = UserMiniDTO.model_validate(u)
+                dto.ServicioIds = list(it.get("ServicioIds") or it.get("servicio_ids") or [])
+                out.append(dto)
+                continue
+
+            # Caso B: viene como tupla (user, ServicioIds)
+            if isinstance(it, (list, tuple)) and len(it) >= 2:
+                u = it[0]
+                svc_ids = it[1] or []
+                dto = UserMiniDTO.model_validate(u)
+                dto.ServicioIds = list(svc_ids)
+                out.append(dto)
+                continue
+
+            # Caso C: viene el modelo directo (AspNetUser)
+            dto = UserMiniDTO.model_validate(it)
+            out.append(dto)
+
+        return out
+
     except HTTPException:
         raise
     except Exception as e:
         Log.exception(
             "Error vinculados-por-servicio target=%s actor=%s roles=%s",
-            user_id, getattr(current_user, "id", None), getattr(current_user, "roles", None),
+            user_id,
+            getattr(current_user, "id", None),
+            getattr(current_user, "roles", None),
         )
         raise HTTPException(status_code=500, detail="Error interno obteniendo usuarios vinculados") from e

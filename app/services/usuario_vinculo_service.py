@@ -346,37 +346,42 @@ class UsuarioVinculoService:
     ):
         """
         Retorna usuarios que comparten al menos un Servicio con target_user_id.
+        Además, incluye ServicioIds = servicios EN COMÚN entre cada usuario y el target.
 
         Scoped:
-        - ADMIN: sin restricción
+        - ADMIN: sin restricción (usa todos los servicios del target)
         - Gestores: solo ve usuarios dentro de servicios que el actor tiene asignados.
-                  Además, el target debe estar en el scope del actor (si no, 403).
+                Además, el target debe estar en el scope del actor (si no, 403).
         """
 
         actor_roles = actor.roles or []
         is_admin = ROLE_ADMIN in actor_roles
 
-        # Servicios del target
+        # -----------------------------
+        # 1) Servicios del target
+        # -----------------------------
         target_srv_sq = (
             select(UsuarioServicio.ServicioId)
             .where(UsuarioServicio.UsuarioId == target_user_id)
         )
 
+        # -----------------------------
+        # 2) Scope para no-admin
+        # -----------------------------
         if not is_admin:
-            # Servicios del actor
             actor_srv_sq = (
                 select(UsuarioServicio.ServicioId)
                 .where(UsuarioServicio.UsuarioId == actor.id)
             )
 
-            # Intersección: solo servicios que ambos comparten (scope real)
+            # Intersección: servicios que comparten actor y target
             allowed_srv_sq = (
                 select(distinct(UsuarioServicio.ServicioId))
                 .where(UsuarioServicio.ServicioId.in_(target_srv_sq))
                 .where(UsuarioServicio.ServicioId.in_(actor_srv_sq))
             )
 
-            # Si no comparten ningún servicio => actor no puede consultar ese target
+            # Si no comparten servicios => fuera de alcance
             any_allowed = db.execute(select(allowed_srv_sq.exists())).scalar()
             if not any_allowed:
                 raise HTTPException(
@@ -390,10 +395,14 @@ class UsuarioVinculoService:
 
             srv_filter_sq = allowed_srv_sq
         else:
+            # admin: puede usar todos los servicios del target
             srv_filter_sq = target_srv_sq
 
-        # Usuarios vinculados: todos los que tengan alguno de esos servicios
-        q = (
+        # -----------------------------
+        # 3) Usuarios vinculados (candidatos):
+        #    usuarios que están en algún servicio permitido
+        # -----------------------------
+        candidates_q = (
             select(distinct(AspNetUser.Id), AspNetUser)
             .join(UsuarioServicio, UsuarioServicio.UsuarioId == AspNetUser.Id)
             .where(UsuarioServicio.ServicioId.in_(srv_filter_sq))
@@ -401,9 +410,60 @@ class UsuarioVinculoService:
             .order_by(AspNetUser.Apellidos, AspNetUser.Nombres)
         )
 
-        rows = db.execute(q).all()
-        # rows: [(id, AspNetUser), ...]
-        return [r[1] for r in rows]
+        rows = db.execute(candidates_q).all()
+        users = [r[1] for r in rows]
+        user_ids = [u.Id for u in users]
+        if not user_ids:
+            return []
+
+        # -----------------------------
+        # 4) Servicios EN COMÚN entre cada usuario y el target:
+        #    Para cada user_id:
+        #      common = (servicios de user) ∩ (servicios del target)
+        #    *y además filtrado por srv_filter_sq cuando no-admin (scope real)
+        # -----------------------------
+        # Creamos un set "filtrable" de target services:
+        # - Admin: target_srv_sq
+        # - No-admin: igual target_srv_sq, pero también restringimos al srv_filter_sq
+        common_services_q = (
+            select(
+                UsuarioServicio.UsuarioId.label("UsuarioId"),
+                UsuarioServicio.ServicioId.label("ServicioId"),
+            )
+            .where(UsuarioServicio.UsuarioId.in_(user_ids))
+            .where(UsuarioServicio.ServicioId.in_(target_srv_sq))
+        )
+
+        # Si no-admin, aseguramos que esos comunes estén dentro del scope permitido
+        # (si admin, srv_filter_sq == target_srv_sq así que no afecta)
+        common_services_q = common_services_q.where(UsuarioServicio.ServicioId.in_(srv_filter_sq))
+
+        common_rows = db.execute(common_services_q).all()
+
+        # Mapa: user_id -> [servicio_ids]
+        common_map: dict[str, list[int]] = {}
+        for r in common_rows:
+            uid = r.UsuarioId
+            sid = int(r.ServicioId)
+            common_map.setdefault(uid, []).append(sid)
+
+        # Normaliza (orden + unique por si acaso)
+        for uid, sids in common_map.items():
+            common_map[uid] = sorted(set(sids))
+
+        # -----------------------------
+        # 5) Return: lista de dicts
+        # -----------------------------
+        out = []
+        for u in users:
+            out.append(
+                {
+                    "user": u,
+                    "ServicioIds": common_map.get(u.Id, []),
+                }
+            )
+
+        return out
     
     def set_unidades_scoped(self, db: Session, user_id: str, ids: list[int], actor: UserPublic) -> list[int]:
         """
