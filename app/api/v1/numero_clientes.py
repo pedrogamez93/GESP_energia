@@ -207,7 +207,7 @@ def _ensure_actor_can_access_numero_cliente(db: Session, actor: UserPublic, num_
 @router.get(
     "",
     response_model=NumeroClientePage,
-    summary="Listado paginado de número de clientes",
+    summary="Listado paginado de número de clientes (global)",
 )
 def list_numero_clientes(
     db: DbDep,
@@ -217,17 +217,23 @@ def list_numero_clientes(
     page_size: int = Query(50, ge=1, le=200),
     EmpresaDistribuidoraId: int | None = Query(default=None),
     TipoTarifaId: int | None = Query(default=None),
-    DivisionId: int | None = Query(default=None),
     active: bool | None = Query(default=True),
 ):
-    # 🔒 No-admin: exige DivisionId + scope
-    div_id = _require_division_for_non_admin(u, DivisionId)
-    _ensure_actor_can_access_division(db, u, div_id)
-    DivisionId = div_id
-
+    """
+    🔓 LISTADO GLOBAL
+    - No exige DivisionId
+    - No aplica scope
+    - El uso/control queda en el frontend
+    """
     return svc.list(
-        db, q, page, page_size,
-        EmpresaDistribuidoraId, TipoTarifaId, DivisionId, active
+        db=db,
+        q=q,
+        page=page,
+        page_size=page_size,
+        EmpresaDistribuidoraId=EmpresaDistribuidoraId,
+        TipoTarifaId=TipoTarifaId,
+        DivisionId=None,  # explícito
+        active=active,
     )
 
 
