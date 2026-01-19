@@ -1,19 +1,17 @@
 # app/api/routes/compras.py
 from __future__ import annotations
 
+import logging
 from typing import Annotated, List, Union, Optional
 
-from fastapi import APIRouter, Depends, Query, Path, status
+from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 
-# ✅ Roles
 from app.core.security import require_roles
-# si agregaste el helper:
-# from app.core.security import require_admin_or_gestor_unidad
-
 from app.schemas.auth import UserPublic
 from app.schemas.compra import (
     CompraDTO,
@@ -28,7 +26,6 @@ from app.schemas.compra import (
     CompraMedidorItemFullDTO,
 )
 
-# ✅ Resolver UnidadId -> DivisionId (UnidadesInmuebles.InmuebleId)
 from app.services.unidad_scope import division_id_from_unidad
 from app.services.compra_service import CompraService
 
@@ -36,7 +33,23 @@ router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
 DbDep = Annotated[Session, Depends(get_db)]
 svc = CompraService()
 
+Log = logging.getLogger(__name__)
+
 _MAX_PAGE_SIZE = 200
+
+# ✅ Roles que pueden ESCRIBIR (CRUD) compras/consumos
+COMPRAS_WRITE_ROLES = (
+    "ADMINISTRADOR",
+    "GESTOR_UNIDAD",
+    "GESTOR_SERVICIO",
+    "GESTOR_FLOTA",
+)
+
+# Tabla puente para scope por división (si existe)
+try:
+    from app.db.models.usuarios_divisiones import UsuarioDivision  # type: ignore
+except Exception:
+    UsuarioDivision = None  # type: ignore
 
 
 def _clamp_page(n: int) -> int:
@@ -58,6 +71,63 @@ def _nz_str(s: Optional[str]) -> Optional[str]:
     return s2 if s2 else None
 
 
+def _ensure_actor_can_access_division(db: Session, actor: UserPublic, division_id: int) -> None:
+    """
+    ADMINISTRADOR: ok a todo.
+    Gestores: deben tener la DivisionId dentro de su alcance.
+    Alcance mínimo: UsuarioDivision(UsuarioId, DivisionId)
+
+    Si no existe UsuarioDivision, por seguridad NO abrimos.
+    """
+    roles = actor.roles or []
+
+    if "ADMINISTRADOR" in roles:
+        return
+
+    if UsuarioDivision is None:
+        Log.warning(
+            "forbidden_scope (no UsuarioDivision) actor=%s roles=%s division_id=%s",
+            getattr(actor, "id", None),
+            roles,
+            division_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "forbidden_scope",
+                "msg": "No se puede verificar alcance del gestor (UsuarioDivision no disponible).",
+                "division_id": division_id,
+            },
+        )
+
+    ok = db.execute(
+        select(UsuarioDivision.DivisionId).where(
+            UsuarioDivision.UsuarioId == actor.id,
+            UsuarioDivision.DivisionId == division_id,
+        )
+    ).first()
+
+    if not ok:
+        Log.warning(
+            "forbidden_scope actor=%s roles=%s division_id=%s",
+            getattr(actor, "id", None),
+            roles,
+            division_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "forbidden_scope",
+                "msg": "No puedes operar compras en esta división (fuera de tu alcance).",
+                "division_id": division_id,
+            },
+        )
+
+
+def _op_roles():
+    return Depends(require_roles(*COMPRAS_WRITE_ROLES))
+
+
 # ==========================================================
 # LISTADO (con token de cualquier rol, no público)
 # ==========================================================
@@ -65,7 +135,6 @@ def _nz_str(s: Optional[str]) -> Optional[str]:
     "",
     summary="Listado paginado de compras/consumos (básico o enriquecido)",
     response_model=Union[CompraFullPage, CompraPage],
-    # si quieres que NO sea público:
     dependencies=[Depends(require_roles("*"))],
 )
 def list_compras(
@@ -85,9 +154,7 @@ def list_compras(
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
 
-    # ✅ NUEVO: filtro por unidad (alias)
     UnidadId: int | None = Query(default=None, description="Alias: resuelve a DivisionId vía UnidadesInmuebles"),
-
     NombreOpcional: str | None = Query(default=None, description="Match en c.NombreOpcional o d.Nombre"),
     full: bool = Query(default=True, description="Si true, retorna versión enriquecida"),
 ):
@@ -100,7 +167,7 @@ def list_compras(
     EstadoValidacionId = _nz_str(EstadoValidacionId)
     NombreOpcional = _nz_str(NombreOpcional)
 
-    # ✅ Alias por unidad: UnidadId -> DivisionId (InmuebleId)
+    # Alias por unidad: UnidadId -> DivisionId (InmuebleId)
     if UnidadId is not None:
         resolved_div = division_id_from_unidad(db, int(UnidadId))
 
@@ -206,19 +273,13 @@ def get_compra_detalle(
 
 
 # ==========================================================
-# ✅ OPERACIONES: ADMINISTRADOR O GESTOR_UNIDAD
+# ✅ OPERACIONES: ADMINISTRADOR + gestores (con scope)
 # ==========================================================
-def _op_roles():
-    # si agregaste helper en security.py:
-    # return Depends(require_admin_or_gestor_unidad())
-    return Depends(require_roles("ADMINISTRADOR", "GESTOR_UNIDAD"))
-
-
 @router.post(
     "",
     response_model=CompraDTO,
     status_code=status.HTTP_201_CREATED,
-    summary="Crear compra/consumo (ADMINISTRADOR | GESTOR_UNIDAD)",
+    summary="Crear compra/consumo (ADMINISTRADOR | GESTOR_*)",
     response_model_exclude_none=True,
 )
 def create_compra(
@@ -226,6 +287,10 @@ def create_compra(
     db: DbDep,
     current_user: Annotated[UserPublic, _op_roles()],
 ):
+    # ✅ si viene DivisionId, validamos scope
+    if getattr(payload, "DivisionId", None) is not None:
+        _ensure_actor_can_access_division(db, current_user, int(payload.DivisionId))
+
     c, items = svc.create(db, payload, created_by=current_user.id)
     dto = CompraDTO.model_validate(c)
     dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
@@ -235,7 +300,7 @@ def create_compra(
 @router.put(
     "/{compra_id}",
     response_model=CompraDTO,
-    summary="Actualizar compra/consumo (ADMINISTRADOR | GESTOR_UNIDAD)",
+    summary="Actualizar compra/consumo (ADMINISTRADOR | GESTOR_*)",
     response_model_exclude_none=True,
 )
 def update_compra(
@@ -244,6 +309,12 @@ def update_compra(
     db: DbDep,
     current_user: Annotated[UserPublic, _op_roles()],
 ):
+    # ✅ determinamos división desde la compra existente (más robusto)
+    existing = svc.get(db, compra_id)
+    div_id = getattr(existing, "DivisionId", None)
+    if div_id is not None:
+        _ensure_actor_can_access_division(db, current_user, int(div_id))
+
     c, items = svc.update(db, compra_id, payload, modified_by=current_user.id)
     dto = CompraDTO.model_validate(c)
     dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
@@ -253,13 +324,18 @@ def update_compra(
 @router.delete(
     "/{compra_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Eliminar compra/consumo (soft-delete) (ADMINISTRADOR | GESTOR_UNIDAD)",
+    summary="Eliminar compra/consumo (soft-delete) (ADMINISTRADOR | GESTOR_*)",
 )
 def delete_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
     current_user: Annotated[UserPublic, _op_roles()],
 ):
+    existing = svc.get(db, compra_id)
+    div_id = getattr(existing, "DivisionId", None)
+    if div_id is not None:
+        _ensure_actor_can_access_division(db, current_user, int(div_id))
+
     svc.soft_delete(db, compra_id, modified_by=current_user.id)
     return None
 
@@ -267,7 +343,7 @@ def delete_compra(
 @router.patch(
     "/{compra_id}/reactivar",
     response_model=CompraDTO,
-    summary="Reactivar compra/consumo (ADMINISTRADOR | GESTOR_UNIDAD)",
+    summary="Reactivar compra/consumo (ADMINISTRADOR | GESTOR_*)",
     response_model_exclude_none=True,
 )
 def reactivate_compra(
@@ -275,6 +351,11 @@ def reactivate_compra(
     db: DbDep,
     current_user: Annotated[UserPublic, _op_roles()],
 ):
+    existing = svc.get(db, compra_id)
+    div_id = getattr(existing, "DivisionId", None)
+    if div_id is not None:
+        _ensure_actor_can_access_division(db, current_user, int(div_id))
+
     c = svc.reactivate(db, compra_id, modified_by=current_user.id)
     items = svc._items_by_compra(db, compra_id)
     dto = CompraDTO.model_validate(c)
@@ -285,7 +366,7 @@ def reactivate_compra(
 @router.put(
     "/{compra_id}/medidores",
     response_model=List[CompraMedidorItemDTO],
-    summary="Reemplaza items de medidor (ADMINISTRADOR | GESTOR_UNIDAD)",
+    summary="Reemplaza items de medidor (ADMINISTRADOR | GESTOR_*)",
     response_model_exclude_none=True,
 )
 def replace_items_compra(
@@ -294,6 +375,11 @@ def replace_items_compra(
     db: DbDep,
     current_user: Annotated[UserPublic, _op_roles()],
 ):
+    existing = svc.get(db, compra_id)
+    div_id = getattr(existing, "DivisionId", None)
+    if div_id is not None:
+        _ensure_actor_can_access_division(db, current_user, int(div_id))
+
     rows = svc.replace_items(
         db,
         compra_id,
