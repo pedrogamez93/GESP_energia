@@ -113,6 +113,16 @@ class UnidadDTO(BaseModel):
     ConsumeAgua: bool = False
     ComparteMedidorAgua: bool = False
 
+class UnidadSelectDTO(BaseModel):
+    Id: int
+    Nombre: str
+    ServicioId: int | None = None
+    Active: bool
+
+    model_config = {
+        "from_attributes": True  # clave si vienes desde SQLAlchemy
+    }
+
 class UnidadListDTO(BaseModel):
     """
     DTO de listado de Unidades. Coincide con _map_unidad_to_listdto.
