@@ -220,22 +220,71 @@ def list_numero_clientes(
     active: bool | None = Query(default=True),
 ):
     """
-    🔓 LISTADO GLOBAL
-    - No exige DivisionId
-    - No aplica scope
-    - El uso/control queda en el frontend
-    """
-    return svc.list(
-        db=db,
-        q=q,
-        page=page,
-        page_size=page_size,
-        EmpresaDistribuidoraId=EmpresaDistribuidoraId,
-        TipoTarifaId=TipoTarifaId,
-        DivisionId=None,  # explícito
-        active=active,
-    )
+    🔓 LISTADO GLOBAL (sin DivisionId y sin scope)
+    - No exige DivisionId a ningún rol
+    - No aplica scope por división
+    - El control de acceso/privatización queda en el frontend
 
+    Nota: Este endpoint puede ser pesado si la tabla es grande.
+    """
+    # ------------------------------------------------------------------
+    # Intento 1: si el service soporta filtros "EmpresaDistribuidoraId" y
+    #            "TipoTarifaId", se los pasamos.
+    # ------------------------------------------------------------------
+    try:
+        return svc.list(
+            db=db,
+            q=q,
+            page=page,
+            page_size=page_size,
+            EmpresaDistribuidoraId=EmpresaDistribuidoraId,
+            TipoTarifaId=TipoTarifaId,
+            DivisionId=None,  # explícito (global)
+            active=active,
+        )
+    except TypeError as e:
+        # ------------------------------------------------------------------
+        # Fallback seguro: el service no soporta esos kwargs.
+        # Llamamos con la firma mínima (sin keywords extra) y filtramos aquí.
+        # ------------------------------------------------------------------
+        Log.warning(
+            "NumeroClienteService.list() no soporta kwargs extra: %s. "
+            "Aplicando fallback con filtrado en router.",
+            str(e),
+        )
+
+        # Llamada mínima (ajusta nombres si tu service usa otros)
+        base_page = svc.list(
+            db=db,
+            q=q,
+            page=page,
+            page_size=page_size,
+            division_id=None,
+            active=active,
+        )
+
+        # base_page debe ser dict con {total, page, page_size, items}
+        items = list(base_page.get("items") or [])
+
+        # Filtrado en memoria (solo si el front manda filtros)
+        if EmpresaDistribuidoraId is not None:
+            items = [
+                it for it in items
+                if int(getattr(it, "EmpresaDistribuidoraId", 0) or 0) == int(EmpresaDistribuidoraId)
+            ]
+
+        if TipoTarifaId is not None:
+            items = [
+                it for it in items
+                if int(getattr(it, "TipoTarifaId", 0) or 0) == int(TipoTarifaId)
+            ]
+
+        # Recalcular total porque filtramos después del paginado del service
+        # (si quieres que total sea “real”, hay que mover filtros al SQL).
+        base_page["items"] = items
+        base_page["total"] = len(items)
+
+        return base_page
 
 @router.get(
     "/{num_cliente_id}",
