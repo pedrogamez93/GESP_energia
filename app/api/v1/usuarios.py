@@ -10,7 +10,11 @@ from sqlalchemy import select
 from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
-from app.schemas.usuario_vinculo import IdsPayload, UserDetailFullDTO
+from app.schemas.usuario_vinculo import (
+    IdsPayload,
+    UserDetailFullDTO,
+    UserMiniDTO,  # 👈 necesario para response_model=List[UserMiniDTO]
+)
 from app.schemas.usuario_roles import RolesPayload
 
 from app.services.usuario_vinculo_service import UsuarioVinculoService
