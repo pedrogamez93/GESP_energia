@@ -368,13 +368,13 @@ def get_usuarios_vinculados_por_servicio(
 
 @router.get(
     "/{user_id}/unidades",
-    response_model=list[UnidadSelectDTO],
+    response_model=List[UnidadSelectDTO],
     summary="Unidades vinculadas al usuario (scoped)",
 )
 def get_unidades_vinculadas_usuario(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    current_user: CurrentUser,
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
     return svc.unidades_vinculadas_scoped(db, user_id, actor=current_user)
     
