@@ -546,3 +546,70 @@ class UsuarioVinculoService:
             target_user_id, getattr(actor, "id", None), is_admin, len(out),
         )
         return out
+    
+    def unidades_vinculadas_scoped(
+        self,
+        db: Session,
+        target_user_id: str,
+        actor: UserPublic,
+    ) -> list[Unidad]:
+        """
+        Unidades vinculadas al target user.
+        Scoped:
+        - ADMIN: ve todas las unidades del target
+        - Gestores: solo unidades cuyo ServicioId esté dentro de los servicios del actor.
+                Además, el target debe compartir servicios con actor (si no, 403).
+        """
+
+        # 0) valida target existe
+        self._ensure_user(db, target_user_id)
+
+        is_admin = ADMIN in (actor.roles or [])
+
+        # 1) unidades del target (base query)
+        base_q = (
+            select(Unidad)
+            .join(UsuarioUnidad, UsuarioUnidad.UnidadId == Unidad.Id)
+            .where(UsuarioUnidad.UsuarioId == target_user_id)
+            .distinct()
+            .order_by(Unidad.Id)
+        )
+
+        if is_admin:
+            # ✅ admin: sin filtros extra
+            return db.scalars(base_q).unique().all()
+
+        # 2) gestor: servicios permitidos del actor
+        allowed_servicios = self._allowed_servicios_for_actor(db, actor.id)
+        if not allowed_servicios:
+            # si el gestor no tiene servicios, no puede ver nada
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "forbidden_scope",
+                    "msg": "Gestor sin servicios asignados",
+                },
+            )
+
+        # 3) Validación scope: target comparte al menos 1 servicio con actor (MSSQL-safe sin EXISTS)
+        any_shared = db.execute(
+            select(UsuarioServicio.ServicioId)
+            .where(UsuarioServicio.UsuarioId == target_user_id)
+            .where(UsuarioServicio.ServicioId.in_(sorted(allowed_servicios)))
+            .limit(1)
+        ).first() is not None
+
+        if not any_shared:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "forbidden_scope",
+                    "msg": "No puedes consultar las unidades de este usuario (fuera de tu alcance por servicios).",
+                    "target_user_id": target_user_id,
+                },
+            )
+
+        # 4) filtra unidades del target por servicios permitidos del actor
+        scoped_q = base_q.where(Unidad.ServicioId.in_(sorted(allowed_servicios)))
+
+        return db.scalars(scoped_q).unique().all()

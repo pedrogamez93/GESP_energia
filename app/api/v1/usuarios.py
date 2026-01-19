@@ -13,6 +13,7 @@ from app.schemas.auth import UserPublic
 from app.schemas.usuario_vinculo import (
     IdsPayload,
     UserDetailFullDTO,
+    UnidadMiniDTO, 
     UserMiniDTO,  # 👈 necesario para response_model=List[UserMiniDTO]
 )
 from app.schemas.usuario_roles import RolesPayload
@@ -363,3 +364,47 @@ def get_usuarios_vinculados_por_servicio(
             getattr(current_user, "roles", None),
         )
         raise HTTPException(status_code=500, detail="Error interno obteniendo usuarios vinculados") from e
+
+@router.get(
+    "/{user_id}/unidades",
+    response_model=List[UnidadMiniDTO],
+    summary="Unidades vinculadas al usuario (scoped) (ADMIN/GESTOR_SERVICIO/GESTOR DE CONSULTA)",
+)
+def get_unidades_vinculadas_usuario(
+    user_id: Annotated[str, Path(...)],
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
+):
+    try:
+        unidades = svc.unidades_vinculadas_scoped(db, user_id, actor=current_user)
+        return [UnidadMiniDTO.model_validate(u) for u in (unidades or [])]
+    except HTTPException:
+        raise
+    except Exception as e:
+        Log.exception(
+            "Error get_unidades_vinculadas_usuario target=%s actor=%s roles=%s",
+            user_id, getattr(current_user, "id", None), getattr(current_user, "roles", None),
+        )
+        raise HTTPException(status_code=500, detail="Error interno obteniendo unidades vinculadas") from e
+    
+@router.get(
+    "/{user_id}/unidades/ids",
+    response_model=List[int],
+    summary="IDs de unidades vinculadas (scoped) (ADMIN/GESTOR_SERVICIO/GESTOR DE CONSULTA)",
+)
+def get_unidades_ids_vinculadas_usuario(
+    user_id: Annotated[str, Path(...)],
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
+):
+    try:
+        unidades = svc.unidades_vinculadas_scoped(db, user_id, actor=current_user)
+        return [int(u.Id) for u in (unidades or []) if getattr(u, "Id", None) is not None]
+    except HTTPException:
+        raise
+    except Exception as e:
+        Log.exception(
+            "Error get_unidades_ids_vinculadas_usuario target=%s actor=%s roles=%s",
+            user_id, getattr(current_user, "id", None), getattr(current_user, "roles", None),
+        )
+        raise HTTPException(status_code=500, detail="Error interno obteniendo unidades vinculadas") from e

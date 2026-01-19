@@ -63,6 +63,12 @@ class UserMiniDTO(BaseModel):
     Active: bool | None = None
     ServicioIds: List[int] = Field(default_factory=list)
     model_config = {"from_attributes": True}
+    
+class UnidadMiniDTO(BaseModel):
+    Id: int
+    Nombre: Optional[str] = None
+    ServicioId: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
 
 class UserDetailFullDTO(BaseModel):
     # ====== columnas AspNetUsers ======
