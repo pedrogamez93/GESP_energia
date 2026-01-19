@@ -395,35 +395,41 @@ class UsuarioVinculoService:
         db: Session,
         target_user_id: str,
         actor: UserPublic,
-    ) -> List[dict]:
+    ):
         """
         Retorna usuarios que comparten al menos un Servicio con target_user_id.
         Además, incluye ServicioIds = servicios EN COMÚN entre cada usuario y el target.
 
         Scoped:
         - ADMIN: sin restricción (usa todos los servicios del target)
-        - Gestores (servicio/consulta): solo ve usuarios dentro de servicios que el actor tiene asignados.
-          Además, el target debe estar en el scope del actor (si no, 403).
+        - Gestores: solo ve usuarios dentro de servicios que el actor tiene asignados.
+                Además, el target debe estar en el scope del actor (si no, 403).
         """
 
-        # ✅ asegura que el target exista
+        # 0) valida target existe
         self._ensure_user(db, target_user_id)
 
         is_admin = self._is_admin(actor)
 
-        # 1) Servicios del target (subquery)
+        # 1) subquery servicios del target
         target_srv_sq = (
             select(UsuarioServicio.ServicioId)
             .where(UsuarioServicio.UsuarioId == target_user_id)
         )
 
-        # Fast-path: si target no tiene servicios, no hay vinculados
-        target_has_any = db.execute(select(target_srv_sq.exists())).scalar()
+        # ✅ SQL Server friendly: "tiene servicios?"
+        # en vez de: select(target_srv_sq.exists())
+        target_has_any = db.execute(
+            select(UsuarioServicio.ServicioId)
+            .where(UsuarioServicio.UsuarioId == target_user_id)
+            .limit(1)  # SQLAlchemy lo traduce a TOP(1) en MSSQL
+        ).first() is not None
+
         if not target_has_any:
             Log.info("vinculados-por-servicio: target %s no tiene servicios", target_user_id)
             return []
 
-        # 2) Scope no-admin: intersección actor ∩ target
+        # 2) scope no-admin => allowed services = intersección actor ∩ target
         if not is_admin:
             actor_srv_sq = (
                 select(UsuarioServicio.ServicioId)
@@ -436,12 +442,14 @@ class UsuarioVinculoService:
                 .where(UsuarioServicio.ServicioId.in_(actor_srv_sq))
             )
 
-            any_allowed = db.execute(select(allowed_srv_sq.exists())).scalar()
+            # ✅ SQL Server friendly: "hay intersección?"
+            any_allowed = db.execute(
+                select(UsuarioServicio.ServicioId)
+                .where(UsuarioServicio.ServicioId.in_(allowed_srv_sq))
+                .limit(1)
+            ).first() is not None
+
             if not any_allowed:
-                Log.warning(
-                    "forbidden_scope vinculados-por-servicio target=%s actor=%s roles=%s",
-                    target_user_id, actor.id, actor.roles,
-                )
                 raise HTTPException(
                     status_code=403,
                     detail={
@@ -455,7 +463,7 @@ class UsuarioVinculoService:
         else:
             srv_filter_sq = target_srv_sq
 
-        # 3) Candidatos: usuarios que estén en algún servicio permitido
+        # 3) candidatos: usuarios que están en algún servicio permitido
         candidates_q = (
             select(distinct(AspNetUser.Id), AspNetUser)
             .join(UsuarioServicio, UsuarioServicio.UsuarioId == AspNetUser.Id)
@@ -465,13 +473,13 @@ class UsuarioVinculoService:
         )
 
         rows = db.execute(candidates_q).all()
-        users: List[AspNetUser] = [r[1] for r in rows]
+        users = [r[1] for r in rows]
         user_ids = [str(u.Id) for u in users]
 
         if not user_ids:
             return []
 
-        # 4) Servicios EN COMÚN (user ∩ target) restringido por scope real
+        # 4) servicios en común (user ∩ target) restringido al scope real
         common_services_q = (
             select(
                 UsuarioServicio.UsuarioId.label("UsuarioId"),
@@ -484,20 +492,17 @@ class UsuarioVinculoService:
 
         common_rows = db.execute(common_services_q).all()
 
-        # user_id -> [servicio_ids]
-        common_map: Dict[str, List[int]] = {}
+        common_map: dict[str, list[int]] = {}
         for r in common_rows:
             uid = str(r.UsuarioId)
             sid = int(r.ServicioId)
             common_map.setdefault(uid, []).append(sid)
 
-        # normaliza
         for uid, sids in list(common_map.items()):
             common_map[uid] = sorted(set(sids))
 
-        # 5) ✅ salida “plana” compatible con UserMiniDTO
-        #    (OJO: tu UserMiniDTO debe tener ServicioIds: List[int])
-        out: List[dict] = []
+        # 5) salida compatible con UserMiniDTO + ServicioIds
+        out = []
         for u in users:
             uid = str(u.Id)
             out.append(
