@@ -338,6 +338,73 @@ class UsuarioVinculoService:
 
         return self.set_instituciones(db, user_id, norm_ids)
 
+    def usuarios_vinculados_por_servicio_scoped(
+        self,
+        db,
+        target_user_id: str,
+        actor: UserPublic,
+    ):
+        """
+        Retorna usuarios que comparten al menos un Servicio con target_user_id.
+
+        Scoped:
+        - ADMIN: sin restricción
+        - Gestores: solo ve usuarios dentro de servicios que el actor tiene asignados.
+                  Además, el target debe estar en el scope del actor (si no, 403).
+        """
+
+        actor_roles = actor.roles or []
+        is_admin = ROLE_ADMIN in actor_roles
+
+        # Servicios del target
+        target_srv_sq = (
+            select(UsuarioServicio.ServicioId)
+            .where(UsuarioServicio.UsuarioId == target_user_id)
+        )
+
+        if not is_admin:
+            # Servicios del actor
+            actor_srv_sq = (
+                select(UsuarioServicio.ServicioId)
+                .where(UsuarioServicio.UsuarioId == actor.id)
+            )
+
+            # Intersección: solo servicios que ambos comparten (scope real)
+            allowed_srv_sq = (
+                select(distinct(UsuarioServicio.ServicioId))
+                .where(UsuarioServicio.ServicioId.in_(target_srv_sq))
+                .where(UsuarioServicio.ServicioId.in_(actor_srv_sq))
+            )
+
+            # Si no comparten ningún servicio => actor no puede consultar ese target
+            any_allowed = db.execute(select(allowed_srv_sq.exists())).scalar()
+            if not any_allowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "forbidden_scope",
+                        "msg": "No puedes consultar usuarios vinculados de este usuario (fuera de tu alcance por servicios).",
+                        "target_user_id": target_user_id,
+                    },
+                )
+
+            srv_filter_sq = allowed_srv_sq
+        else:
+            srv_filter_sq = target_srv_sq
+
+        # Usuarios vinculados: todos los que tengan alguno de esos servicios
+        q = (
+            select(distinct(AspNetUser.Id), AspNetUser)
+            .join(UsuarioServicio, UsuarioServicio.UsuarioId == AspNetUser.Id)
+            .where(UsuarioServicio.ServicioId.in_(srv_filter_sq))
+            .where(AspNetUser.Id != target_user_id)
+            .order_by(AspNetUser.Apellidos, AspNetUser.Nombres)
+        )
+
+        rows = db.execute(q).all()
+        # rows: [(id, AspNetUser), ...]
+        return [r[1] for r in rows]
+    
     def set_unidades_scoped(self, db: Session, user_id: str, ids: list[int], actor: UserPublic) -> list[int]:
         """
         ADMIN: puede asignar cualquier UnidadId
@@ -378,3 +445,5 @@ class UsuarioVinculoService:
             )
 
         return self.set_unidades(db, user_id, norm_ids)
+    
+    

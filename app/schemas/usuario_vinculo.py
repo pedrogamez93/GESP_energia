@@ -54,6 +54,15 @@ def _ser_dt(v: Optional[datetime]) -> Optional[str]:
     # ISO sin microsegundos
     return v.replace(microsecond=0).isoformat()
 
+class UserMiniDTO(BaseModel):
+    Id: str
+    UserName: str | None = None
+    Email: str | None = None
+    Nombres: str | None = None
+    Apellidos: str | None = None
+    Active: bool | None = None
+
+    model_config = {"from_attributes": True}
 
 class UserDetailFullDTO(BaseModel):
     # ====== columnas AspNetUsers ======

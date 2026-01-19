@@ -299,3 +299,25 @@ def set_user_roles(
 ):
     Log.info("PUT roles user_id=%s roles=%s", user_id, getattr(payload, "roles", None))
     return svc.set_roles(db, user_id, payload.roles)
+
+@router.get(
+    "/{user_id}/vinculados-por-servicio",
+    response_model=List[UserMiniDTO],
+    summary="Usuarios vinculados por servicio (scoped) (ADMIN/GESTOR_SERVICIO/GESTOR DE CONSULTA)",
+)
+def get_usuarios_vinculados_por_servicio(
+    user_id: Annotated[str, Path(...)],
+    db: DbDep,
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
+):
+    try:
+        items = svc.usuarios_vinculados_por_servicio_scoped(db, user_id, actor=current_user)
+        return [UserMiniDTO.model_validate(u) for u in items]
+    except HTTPException:
+        raise
+    except Exception as e:
+        Log.exception(
+            "Error vinculados-por-servicio target=%s actor=%s roles=%s",
+            user_id, getattr(current_user, "id", None), getattr(current_user, "roles", None),
+        )
+        raise HTTPException(status_code=500, detail="Error interno obteniendo usuarios vinculados") from e
