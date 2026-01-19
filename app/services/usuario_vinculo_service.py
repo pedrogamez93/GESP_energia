@@ -409,7 +409,8 @@ class UsuarioVinculoService:
         # 0) valida target existe
         self._ensure_user(db, target_user_id)
 
-        is_admin = self._is_admin(actor)
+        # ✅ usa tu constante real
+        is_admin = ADMIN in (actor.roles or [])
 
         # 1) subquery servicios del target
         target_srv_sq = (
@@ -417,12 +418,11 @@ class UsuarioVinculoService:
             .where(UsuarioServicio.UsuarioId == target_user_id)
         )
 
-        # ✅ SQL Server friendly: "tiene servicios?"
-        # en vez de: select(target_srv_sq.exists())
+        # 1.1) MSSQL-safe: target tiene al menos 1 servicio?
         target_has_any = db.execute(
             select(UsuarioServicio.ServicioId)
             .where(UsuarioServicio.UsuarioId == target_user_id)
-            .limit(1)  # SQLAlchemy lo traduce a TOP(1) en MSSQL
+            .limit(1)  # en MSSQL se traduce a TOP(1)
         ).first() is not None
 
         if not target_has_any:
@@ -442,7 +442,7 @@ class UsuarioVinculoService:
                 .where(UsuarioServicio.ServicioId.in_(actor_srv_sq))
             )
 
-            # ✅ SQL Server friendly: "hay intersección?"
+            # MSSQL-safe: hay intersección?
             any_allowed = db.execute(
                 select(UsuarioServicio.ServicioId)
                 .where(UsuarioServicio.ServicioId.in_(allowed_srv_sq))
@@ -463,17 +463,17 @@ class UsuarioVinculoService:
         else:
             srv_filter_sq = target_srv_sq
 
-        # 3) candidatos: usuarios que están en algún servicio permitido
+        # 3) ✅ Candidatos: SOLO entity + distinct() (NO distinct(pk), entity)
         candidates_q = (
-            select(distinct(AspNetUser.Id), AspNetUser)
+            select(AspNetUser)
             .join(UsuarioServicio, UsuarioServicio.UsuarioId == AspNetUser.Id)
             .where(UsuarioServicio.ServicioId.in_(srv_filter_sq))
             .where(AspNetUser.Id != target_user_id)
+            .distinct()
             .order_by(AspNetUser.Apellidos, AspNetUser.Nombres)
         )
 
-        rows = db.execute(candidates_q).all()
-        users = [r[1] for r in rows]
+        users = db.scalars(candidates_q).all()
         user_ids = [str(u.Id) for u in users]
 
         if not user_ids:
@@ -501,7 +501,7 @@ class UsuarioVinculoService:
         for uid, sids in list(common_map.items()):
             common_map[uid] = sorted(set(sids))
 
-        # 5) salida compatible con UserMiniDTO + ServicioIds
+        # 5) salida lista para UserMiniDTO (incluye ServicioIds)
         out = []
         for u in users:
             uid = str(u.Id)
