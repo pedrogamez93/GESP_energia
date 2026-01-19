@@ -48,10 +48,7 @@ ReadUserDep = Annotated[UserPublic, Depends(require_roles(*MEDIDORES_READ_ROLES)
 WriteUserDep = Annotated[UserPublic, Depends(require_roles(*MEDIDORES_WRITE_ROLES))]
 
 # ==========================================================
-# ✅ SCOPES (tablas puente)
-#   - UsuarioDivision: limita qué Divisiones puede ver un usuario
-#   - MedidorDivision: puente dbo.MedidorDivision (DivisionId, MedidorId)
-#   - Compra / CompraMedidor: si existen para validar /by-compra
+# ✅ SCOPES (solo para ESCRITURAS)
 # ==========================================================
 
 try:
@@ -92,6 +89,7 @@ def _ensure_actor_can_access_division(db: Session, actor: UserPublic, division_i
     """
     ADMIN: ok.
     No-admin: la division_id debe estar en UsuarioDivision.
+    (⚠️ Solo debe usarse en escrituras)
     """
     if _is_admin(actor):
         return
@@ -123,22 +121,10 @@ def _ensure_actor_can_access_division(db: Session, actor: UserPublic, division_i
         )
 
 
-def _require_division_for_non_admin(actor: UserPublic, division_id: Optional[int]) -> int:
-    """
-    Para listados, si NO es admin exigimos DivisionId
-    (evita que un gestor consulte TODO el universo).
-    """
-    if division_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "missing_division", "msg": "DivisionId es requerido para tu rol."},
-        )
-    return int(division_id)
-
-
 def _resolve_division_ids_for_medidor(db: Session, medidor_id: int) -> list[int]:
     """
     Devuelve las DivisionId asociadas a un MedidorId desde dbo.MedidorDivision.
+    (⚠️ Solo debe usarse en escrituras)
     """
     _ensure_scope_model_or_forbid(
         MedidorDivision,
@@ -159,6 +145,7 @@ def _ensure_actor_can_access_medidor(db: Session, actor: UserPublic, medidor_id:
     """
     ADMIN: ok.
     No-admin: el medidor debe estar asociado a al menos una división del actor.
+    (⚠️ Solo debe usarse en escrituras)
     """
     if _is_admin(actor):
         return
@@ -197,6 +184,7 @@ def _ensure_actor_can_access_compra(db: Session, actor: UserPublic, compra_id: i
     Valida alcance para endpoints que consultan por compra:
     - Caso A: Compra.DivisionId existe => valida esa división.
     - Caso B: CompraMedidor existe => valida al menos un medidor accesible en la compra.
+    (⚠️ Solo debe usarse si vuelves a poner scope en GET /by-compra)
     """
     if _is_admin(actor):
         return
@@ -249,13 +237,13 @@ def _ensure_actor_can_access_compra(db: Session, actor: UserPublic, compra_id: i
 
 
 # ==========================================================
-# GETs (LECTURA con scope)
+# ✅ GETs (LECTURA) -> GLOBAL (sin scope)
 # ==========================================================
 
 @router.get(
     "",
     response_model=MedidorPage,
-    summary="Listado paginado de medidores",
+    summary="Listado paginado de medidores (global)",
 )
 def list_medidores(
     db: DbDep,
@@ -264,21 +252,19 @@ def list_medidores(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     NumeroClienteId: int | None = Query(default=None),
-    DivisionId: int | None = Query(default=None),
+    DivisionId: int | None = Query(default=None),  # opcional, NO se exige
     institucion_id: int | None = Query(default=None),
     servicio_id: int | None = Query(default=None),
     active: bool | None = Query(default=None),
     medidor_id: int | None = Query(default=None, ge=1),
 ):
-    # 🔒 No-admin: exige DivisionId y valida scope
-    if not _is_admin(u):
-        div_id = _require_division_for_non_admin(u, DivisionId)
-        _ensure_actor_can_access_division(db, u, div_id)
-        DivisionId = div_id
-    else:
-        # ✅ Admin: si viene DivisionId, también podemos filtrar y proteger performance
-        if DivisionId is not None:
-            DivisionId = int(DivisionId)
+    """
+    🔓 LISTADO GLOBAL
+    - No exige DivisionId
+    - No aplica scope
+    - Si el front manda DivisionId, se usa solo como filtro
+    """
+    div = int(DivisionId) if DivisionId is not None else None
 
     return svc.list(
         db=db,
@@ -286,7 +272,7 @@ def list_medidores(
         page=page,
         page_size=page_size,
         numero_cliente_id=NumeroClienteId,
-        division_id=DivisionId,
+        division_id=div,
         institucion_id=institucion_id,
         servicio_id=servicio_id,
         active=active,
@@ -297,14 +283,13 @@ def list_medidores(
 @router.get(
     "/division/{division_id}",
     response_model=List[MedidorListDTO],
-    summary="Medidores por división",
+    summary="Medidores por división (global)",
 )
 def list_by_division(
     db: DbDep,
     u: ReadUserDep,
     division_id: Annotated[int, Path(..., ge=1)],
 ):
-    _ensure_actor_can_access_division(db, u, int(division_id))
     items = svc.by_division(db, int(division_id))
     return [MedidorListDTO.model_validate(x) for x in items]
 
@@ -312,7 +297,7 @@ def list_by_division(
 @router.get(
     "/numero-cliente/{numero_cliente_id}",
     response_model=List[MedidorListDTO],
-    summary="Medidores por NúmeroClienteId",
+    summary="Medidores por NúmeroClienteId (global)",
 )
 def list_by_numero_cliente(
     db: DbDep,
@@ -320,36 +305,19 @@ def list_by_numero_cliente(
     numero_cliente_id: Annotated[int, Path(..., ge=1)],
 ):
     items = svc.by_numero_cliente(db, int(numero_cliente_id))
-
-    # 🔒 No-admin: valida que exista al menos un medidor accesible
-    if not _is_admin(u):
-        ok_any = False
-        for it in items:
-            mid = int(getattr(it, "Id", None) or getattr(it, "id", None) or 0)
-            if mid:
-                try:
-                    _ensure_actor_can_access_medidor(db, u, mid)
-                    ok_any = True
-                    break
-                except HTTPException:
-                    continue
-        if not ok_any:
-            raise HTTPException(status_code=403, detail={"code": "forbidden_scope", "msg": "Fuera de tu alcance."})
-
     return [MedidorListDTO.model_validate(x) for x in items]
 
 
 @router.get(
     "/{medidor_id}",
     response_model=MedidorDTO,
-    summary="Detalle de un medidor",
+    summary="Detalle de un medidor (global)",
 )
 def get_medidor(
     db: DbDep,
     u: ReadUserDep,
     medidor_id: Annotated[int, Path(..., ge=1)],
 ):
-    _ensure_actor_can_access_medidor(db, u, int(medidor_id))
     obj = svc.get(db, int(medidor_id))
     if not obj:
         raise HTTPException(status_code=404, detail="Medidor no encontrado")
@@ -358,21 +326,20 @@ def get_medidor(
 
 @router.get(
     "/{medidor_id}/detalle",
-    summary="Detalle completo de medidor (institución, servicio, dirección)",
+    summary="Detalle completo de medidor (global)",
 )
 def get_medidor_detalle_completo(
     db: DbDep,
     u: ReadUserDep,
     medidor_id: Annotated[int, Path(..., ge=1)],
 ):
-    _ensure_actor_can_access_medidor(db, u, int(medidor_id))
     return svc.get_detalle_completo(db, int(medidor_id))
 
 
 @router.get(
     "/buscar",
     response_model=MedidorDTO,
-    summary="Buscar por NumeroClienteId y NumMedidor",
+    summary="Buscar por NumeroClienteId y NumMedidor (global)",
 )
 def find_by_num_cliente_and_numero(
     db: DbDep,
@@ -383,17 +350,13 @@ def find_by_num_cliente_and_numero(
     obj = svc.by_numcliente_and_numero(db, int(numeroClienteId), numMedidor)
     if not obj:
         raise HTTPException(status_code=404, detail="Medidor no encontrado")
-
-    mid = int(getattr(obj, "Id", None) or getattr(obj, "id", None) or 0)
-    if mid:
-        _ensure_actor_can_access_medidor(db, u, mid)
     return obj
 
 
 @router.get(
     "/para-compra/by-num-cliente/{num_cliente_id}/by-division/{division_id}",
     response_model=List[MedidorListDTO],
-    summary="Medidores habilitados para compra por (NumeroClienteId, DivisionId)",
+    summary="Medidores habilitados para compra por (NumeroClienteId, DivisionId) (global)",
 )
 def for_compra(
     db: DbDep,
@@ -401,7 +364,6 @@ def for_compra(
     num_cliente_id: Annotated[int, Path(..., ge=1)],
     division_id: Annotated[int, Path(..., ge=1)],
 ):
-    _ensure_actor_can_access_division(db, u, int(division_id))
     items = svc.for_compra_by_numcliente_division(db, int(num_cliente_id), int(division_id))
     return [MedidorListDTO.model_validate(x) for x in items]
 
@@ -409,14 +371,13 @@ def for_compra(
 @router.get(
     "/by-compra/{compra_id}",
     response_model=List[MedidorListDTO],
-    summary="Medidores asociados a una compra",
+    summary="Medidores asociados a una compra (global)",
 )
 def by_compra(
     db: DbDep,
     u: ReadUserDep,
     compra_id: Annotated[int, Path(..., ge=1)],
 ):
-    _ensure_actor_can_access_compra(db, u, int(compra_id))
     items = svc.by_compra(db, int(compra_id))
     return [MedidorListDTO.model_validate(x) for x in items]
 
@@ -424,7 +385,7 @@ def by_compra(
 @router.post(
     "/check-exist-medidor",
     response_model=MedidorDTO,
-    summary="Verifica existencia por (NumeroClienteId, Numero [, DivisionId])",
+    summary="Verifica existencia por (NumeroClienteId, Numero [, DivisionId]) (global)",
 )
 def check_exist_medidor(
     db: DbDep,
@@ -437,6 +398,8 @@ def check_exist_medidor(
         raise HTTPException(status_code=400, detail="NumeroClienteId inválido")
 
     numero = str(payload.get("Numero", "")).strip()
+    if not numero:
+        raise HTTPException(status_code=400, detail="Numero inválido")
 
     division_val = payload.get("DivisionId")
     try:
@@ -444,24 +407,15 @@ def check_exist_medidor(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="DivisionId inválido")
 
-    # 🔒 No-admin: exige DivisionId + scope
-    if not _is_admin(u):
-        div_id = _require_division_for_non_admin(u, division_id)
-        _ensure_actor_can_access_division(db, u, div_id)
-        division_id = div_id
-
     found = svc.check_exist(db, numero_cliente_id, numero, division_id)
     if not found:
         raise HTTPException(status_code=404, detail="No existe el medidor con esos parámetros")
 
-    mid = int(getattr(found, "Id", None) or getattr(found, "id", None) or 0)
-    if mid:
-        _ensure_actor_can_access_medidor(db, u, mid)
     return found
 
 
 # ==========================================================
-# ESCRITURAS (ADMINISTRADOR + GESTORES) -> con scope
+# ✅ ESCRITURAS (ADMINISTRADOR + GESTORES) -> con scope
 # ==========================================================
 
 @router.post(
@@ -475,8 +429,6 @@ def create_medidor(
     payload: MedidorCreate,
     current_user: WriteUserDep,
 ):
-    # Nota: aquí lo ideal es que el service "create" determine la(s) divisiones
-    # asociadas y validarlas. Si el create NO asocia divisiones, no hay scope que validar.
     return svc.create(db, payload, created_by=current_user.id)
 
 
