@@ -402,34 +402,40 @@ class UsuarioVinculoService:
 
         Scoped:
         - ADMIN: sin restricción (usa todos los servicios del target)
-        - Gestores: solo ve usuarios dentro de servicios que el actor tiene asignados.
-                Además, el target debe estar en el scope del actor (si no, 403).
+        - Gestores (GESTOR_SERVICIO / GESTOR DE CONSULTA):
+            * Solo ve usuarios dentro de servicios que el actor tiene asignados.
+            * El target debe estar dentro del scope del actor (si no, 403).
         """
 
         # 0) valida target existe
         self._ensure_user(db, target_user_id)
 
-        # ✅ usa tu constante real
-        is_admin = ADMIN in (actor.roles or [])
+        # ✅ usa tu constante real (app.core.roles.ADMIN)
+        actor_roles = actor.roles or []
+        is_admin = ADMIN in actor_roles
 
+        # ------------------------------------------------------------
         # 1) subquery servicios del target
+        # ------------------------------------------------------------
         target_srv_sq = (
             select(UsuarioServicio.ServicioId)
             .where(UsuarioServicio.UsuarioId == target_user_id)
         )
 
-        # 1.1) MSSQL-safe: target tiene al menos 1 servicio?
+        # MSSQL-safe: target tiene al menos 1 servicio?
         target_has_any = db.execute(
             select(UsuarioServicio.ServicioId)
             .where(UsuarioServicio.UsuarioId == target_user_id)
-            .limit(1)  # en MSSQL se traduce a TOP(1)
+            .limit(1)  # MSSQL => TOP(1)
         ).first() is not None
 
         if not target_has_any:
             Log.info("vinculados-por-servicio: target %s no tiene servicios", target_user_id)
             return []
 
+        # ------------------------------------------------------------
         # 2) scope no-admin => allowed services = intersección actor ∩ target
+        # ------------------------------------------------------------
         if not is_admin:
             actor_srv_sq = (
                 select(UsuarioServicio.ServicioId)
@@ -461,9 +467,16 @@ class UsuarioVinculoService:
 
             srv_filter_sq = allowed_srv_sq
         else:
+            # admin: puede usar todos los servicios del target
             srv_filter_sq = target_srv_sq
 
-        # 3) ✅ Candidatos: SOLO entity + distinct() (NO distinct(pk), entity)
+        # ------------------------------------------------------------
+        # 3) candidatos: usuarios que están en algún servicio permitido
+        #    IMPORTANTÍSIMO:
+        #    - select(AspNetUser) (solo entity)
+        #    - distinct()
+        #    - .unique() al scalar() para evitar InvalidRequestError por eager loads
+        # ------------------------------------------------------------
         candidates_q = (
             select(AspNetUser)
             .join(UsuarioServicio, UsuarioServicio.UsuarioId == AspNetUser.Id)
@@ -473,13 +486,17 @@ class UsuarioVinculoService:
             .order_by(AspNetUser.Apellidos, AspNetUser.Nombres)
         )
 
-        users = db.scalars(candidates_q).all()
-        user_ids = [str(u.Id) for u in users]
+        # ✅ FIX: unique() obligatorio cuando hay joined eager loads en AspNetUser
+        users = db.scalars(candidates_q).unique().all()
 
+        # Normaliza ids como str (GUID)
+        user_ids = [str(u.Id) for u in users if getattr(u, "Id", None)]
         if not user_ids:
             return []
 
+        # ------------------------------------------------------------
         # 4) servicios en común (user ∩ target) restringido al scope real
+        # ------------------------------------------------------------
         common_services_q = (
             select(
                 UsuarioServicio.UsuarioId.label("UsuarioId"),
@@ -492,17 +509,24 @@ class UsuarioVinculoService:
 
         common_rows = db.execute(common_services_q).all()
 
+        # user_id -> [servicio_ids]
         common_map: dict[str, list[int]] = {}
         for r in common_rows:
-            uid = str(r.UsuarioId)
-            sid = int(r.ServicioId)
+            uid = str(r.UsuarioId) if getattr(r, "UsuarioId", None) is not None else None
+            sid_raw = getattr(r, "ServicioId", None)
+            if not uid or sid_raw is None:
+                continue
+            sid = int(sid_raw)
             common_map.setdefault(uid, []).append(sid)
 
-        for uid, sids in list(common_map.items()):
-            common_map[uid] = sorted(set(sids))
+        # unique + orden
+        for uid in list(common_map.keys()):
+            common_map[uid] = sorted(set(common_map[uid]))
 
+        # ------------------------------------------------------------
         # 5) salida lista para UserMiniDTO (incluye ServicioIds)
-        out = []
+        # ------------------------------------------------------------
+        out: list[dict] = []
         for u in users:
             uid = str(u.Id)
             out.append(
@@ -519,6 +543,6 @@ class UsuarioVinculoService:
 
         Log.info(
             "vinculados-por-servicio target=%s actor=%s is_admin=%s -> %s usuarios",
-            target_user_id, actor.id, is_admin, len(out),
+            target_user_id, getattr(actor, "id", None), is_admin, len(out),
         )
         return out
