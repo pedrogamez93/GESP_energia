@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, List, Optional
 import logging
 
-from fastapi import APIRouter, Body, Depends, Path, Request
+from fastapi import APIRouter, Body, Depends, Path, Request, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -21,6 +21,22 @@ router = APIRouter(prefix="/api/v1/usuarios", tags=["Usuarios (admin)"])
 svc = UsuarioVinculoService()
 DbDep = Annotated[Session, Depends(get_db)]
 Log = logging.getLogger(__name__)
+
+# ==========================================================
+# Roles (ajusta nombres EXACTOS a tu BD/JWT)
+# ==========================================================
+ROLE_ADMIN = "ADMINISTRADOR"
+ROLE_GESTOR_SERVICIO = "GESTOR_SERVICIO"  
+ROLE_GESTOR_CONSULTA = "GESTOR DE CONSULTA"
+
+# ✅ Lecturas: Admin + Gestor Servicios + Gestor Consulta (scoped en service)
+USUARIOS_READ_ROLES = (ROLE_ADMIN, ROLE_GESTOR_SERVICIO, ROLE_GESTOR_CONSULTA)
+
+# ✅ Escrituras: Admin + Gestor Servicios (NO consulta)
+USUARIOS_WRITE_ROLES = (ROLE_ADMIN, ROLE_GESTOR_SERVICIO)
+
+# ✅ Debug/roles/activar/desactivar: solo Admin
+USUARIOS_ADMIN_ONLY = (ROLE_ADMIN,)
 
 
 def _actor_id(current_user: UserPublic | None, request: Request | None) -> Optional[str]:
@@ -51,6 +67,19 @@ def _to_full_dto(
     return base
 
 
+def _assert_can_read_user_detail(actor: UserPublic, target_user_id: str) -> None:
+    """
+    Seguridad mínima aquí:
+    - ADMIN: ok
+    - Otros (incluye GESTOR_SERVICIOS y GESTOR DE CONSULTA): permitido, PERO el service debe aplicar scope.
+      Si tu service hoy NO aplica scope al leer detalle, esto hay que reforzarlo ahí.
+    """
+    if ROLE_ADMIN in (actor.roles or []):
+        return
+    # No bloqueamos aquí, porque el alcance real lo impone el service con joins scoped.
+    return
+
+
 # ---------------- Alias / Ping (evita 404 en GET /api/v1/usuarios) ----------------
 @router.get(
     "",
@@ -62,20 +91,20 @@ def _to_full_dto(
     ),
 )
 def usuarios_index(
-    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    _user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
     return {
         "status": "ok",
         "hint": "Usa /api/v1/users para listar usuarios",
         "endpoints": {
-            "detalle": "/api/v1/usuarios/{user_id}",
-            "instituciones": "/api/v1/usuarios/{user_id}/instituciones",
-            "servicios": "/api/v1/usuarios/{user_id}/servicios",
-            "divisiones": "/api/v1/usuarios/{user_id}/divisiones",
-            "unidades": "/api/v1/usuarios/{user_id}/unidades",
-            "roles": "/api/v1/usuarios/{user_id}/roles",
-            "activar": "/api/v1/usuarios/{user_id}/activar",
-            "desactivar": "/api/v1/usuarios/{user_id}/desactivar",
+            "detalle": "/api/v1/usuarios/{user_id} (READ: ADMIN/GESTOR_SERVICIOS/GESTOR DE CONSULTA, SCOPED)",
+            "instituciones": "/api/v1/usuarios/{user_id}/instituciones (WRITE: ADMIN/GESTOR_SERVICIOS, SCOPED)",
+            "servicios": "/api/v1/usuarios/{user_id}/servicios (WRITE: ADMIN/GESTOR_SERVICIOS, SCOPED)",
+            "divisiones": "/api/v1/usuarios/{user_id}/divisiones (ADMIN)",
+            "unidades": "/api/v1/usuarios/{user_id}/unidades (WRITE: ADMIN/GESTOR_SERVICIOS, SCOPED)",
+            "roles": "/api/v1/usuarios/{user_id}/roles (ADMIN)",
+            "activar": "/api/v1/usuarios/{user_id}/activar (ADMIN)",
+            "desactivar": "/api/v1/usuarios/{user_id}/desactivar (ADMIN)",
         },
     }
 
@@ -88,7 +117,7 @@ def usuarios_index(
 def debug_unidades_usuario(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    _admin: Annotated[UserPublic, Depends(require_roles(*USUARIOS_ADMIN_ONLY))],
 ):
     rows = db.execute(
         select(UsuarioUnidad.UsuarioId, UsuarioUnidad.UnidadId)
@@ -98,26 +127,56 @@ def debug_unidades_usuario(
     return [{"UsuarioId": r[0], "UnidadId": r[1]} for r in rows]
 
 
-# ---------------- Detalle admin ----------------
+# ---------------- Detalle (READ scoped) ----------------
 @router.get(
     "/{user_id}",
-    summary="Detalle de usuario (ADMIN): roles, sets vinculados y todas las columnas de AspNetUsers",
+    summary="Detalle de usuario (roles, sets vinculados y columnas de AspNetUsers) (scoped)",
     response_model=UserDetailFullDTO,
 )
 def get_user_detail(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
-    user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
-    Log.info(
-        "GET detalle usuario %s -> inst=%s srv=%s div=%s uni=%s",
-        user_id, inst_ids, srv_ids, div_ids, uni_ids,
-    )
-    return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
+    # ✅ Para GESTOR_SERVICIOS y GESTOR DE CONSULTA esto debe ser SCOPED.
+    #    Si el service aún no filtra por actor, hay que reforzarlo allá.
+    _assert_can_read_user_detail(current_user, user_id)
+
+    try:
+        # Preferimos método scoped si existe
+        if hasattr(svc, "get_detail_scoped"):
+            user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail_scoped(db, user_id, actor=current_user)
+        else:
+            # Fallback al método actual (OJO: si no filtra, hay riesgo de fuga).
+            user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
+
+            # Medida defensiva: si no es admin y el service no es scoped, bloqueamos para no filtrar usuarios globales
+            if ROLE_ADMIN not in (current_user.roles or []):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "forbidden_scope",
+                        "msg": "Este endpoint requiere lectura scoped. Implementa get_detail_scoped en UsuarioVinculoService.",
+                    },
+                )
+
+        Log.info(
+            "GET detalle usuario %s actor=%s roles=%s -> inst=%s srv=%s div=%s uni=%s",
+            user_id,
+            getattr(current_user, "id", None),
+            getattr(current_user, "roles", None),
+            inst_ids, srv_ids, div_ids, uni_ids,
+        )
+        return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        Log.exception("Error get_user_detail user_id=%s actor=%s", user_id, getattr(current_user, "id", None))
+        raise HTTPException(status_code=500, detail="Error interno obteniendo detalle de usuario") from e
 
 
-# ---------------- Reemplazar sets vinculados ----------------
+# ---------------- Reemplazar sets vinculados (WRITE scoped) ----------------
 @router.put(
     "/{user_id}/instituciones",
     response_model=List[int],
@@ -126,20 +185,14 @@ def get_user_detail(
 def set_user_instituciones(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR", "GESTOR_SERVICIOS"))],
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_WRITE_ROLES))],
     payload: IdsPayload | None = Body(None),
 ):
-    Log.info(
-        "PUT instituciones user_id=%s actor_id=%s actor_roles=%s raw_payload=%s",
-        user_id,
-        current_user.id,
-        current_user.roles,
-        payload.model_dump(mode="python") if payload else None,
-    )
     ids = payload.Ids if payload else []
-    Log.info("PUT instituciones user_id=%s requested_ids=%s", user_id, ids)
-
-    # ✅ scoped (ADMIN sin restricción; GESTOR limitado por servicios -> instituciones)
+    Log.info(
+        "PUT instituciones user_id=%s actor_id=%s actor_roles=%s requested_ids=%s",
+        user_id, current_user.id, current_user.roles, ids,
+    )
     return svc.set_instituciones_scoped(db, user_id, ids, actor=current_user)
 
 
@@ -151,20 +204,14 @@ def set_user_instituciones(
 def set_user_servicios(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR", "GESTOR_SERVICIOS"))],
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_WRITE_ROLES))],
     payload: IdsPayload | None = Body(None),
 ):
-    Log.info(
-        "PUT servicios user_id=%s actor_id=%s actor_roles=%s raw_payload=%s",
-        user_id,
-        current_user.id,
-        current_user.roles,
-        payload.model_dump(mode="python") if payload else None,
-    )
     ids = payload.Ids if payload else []
-    Log.info("PUT servicios user_id=%s requested_ids=%s", user_id, ids)
-
-    # ✅ scoped
+    Log.info(
+        "PUT servicios user_id=%s actor_id=%s actor_roles=%s requested_ids=%s",
+        user_id, current_user.id, current_user.roles, ids,
+    )
     return svc.set_servicios_scoped(db, user_id, ids, actor=current_user)
 
 
@@ -176,14 +223,9 @@ def set_user_servicios(
 def set_user_divisiones(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    _admin: Annotated[UserPublic, Depends(require_roles(*USUARIOS_ADMIN_ONLY))],
     payload: IdsPayload | None = Body(None),
 ):
-    Log.info(
-        "PUT divisiones user_id=%s raw_payload=%s",
-        user_id,
-        payload.model_dump(mode="python") if payload else None,
-    )
     ids = payload.Ids if payload else []
     Log.info("PUT divisiones user_id=%s normalized_ids=%s", user_id, ids)
     return svc.set_divisiones(db, user_id, ids)
@@ -197,24 +239,18 @@ def set_user_divisiones(
 def set_user_unidades(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR", "GESTOR_SERVICIOS"))],
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_WRITE_ROLES))],
     payload: IdsPayload | None = Body(None),
 ):
-    Log.info(
-        "PUT unidades user_id=%s actor_id=%s actor_roles=%s raw_payload=%s",
-        user_id,
-        current_user.id,
-        current_user.roles,
-        payload.model_dump(mode="python") if payload else None,
-    )
     ids = payload.Ids if payload else []
-    Log.info("PUT unidades user_id=%s requested_ids=%s", user_id, ids)
-
-    # ✅ scoped (ADMIN sin restricción; GESTOR limitado por servicios -> unidades)
+    Log.info(
+        "PUT unidades user_id=%s actor_id=%s actor_roles=%s requested_ids=%s",
+        user_id, current_user.id, current_user.roles, ids,
+    )
     return svc.set_unidades_scoped(db, user_id, ids, actor=current_user)
 
 
-# ---------------- Activar / desactivar ----------------
+# ---------------- Activar / desactivar (ADMIN) ----------------
 @router.put(
     "/{user_id}/activar",
     response_model=UserDetailFullDTO,
@@ -224,7 +260,7 @@ def activar_usuario(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
     request: Request,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_ADMIN_ONLY))],
 ):
     svc.set_active(db, user_id, True, actor_id=_actor_id(current_user, request))
     user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
@@ -241,7 +277,7 @@ def desactivar_usuario(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
     request: Request,
-    current_user: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_ADMIN_ONLY))],
 ):
     svc.set_active(db, user_id, False, actor_id=_actor_id(current_user, request))
     user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
@@ -249,7 +285,7 @@ def desactivar_usuario(
     return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
 
 
-# ---------------- Roles ----------------
+# ---------------- Roles (ADMIN) ----------------
 @router.put(
     "/{user_id}/roles",
     response_model=list[str],
@@ -259,7 +295,7 @@ def set_user_roles(
     user_id: Annotated[str, Path(...)],
     db: DbDep,
     payload: RolesPayload,
-    _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
+    _admin: Annotated[UserPublic, Depends(require_roles(*USUARIOS_ADMIN_ONLY))],
 ):
     Log.info("PUT roles user_id=%s roles=%s", user_id, getattr(payload, "roles", None))
     return svc.set_roles(db, user_id, payload.roles)

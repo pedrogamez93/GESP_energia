@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated, List, Optional, TypeAlias
+from typing import Annotated, List, Optional, Tuple, TypeAlias
 
 from fastapi import APIRouter, Depends, Path, Query, status, HTTPException
 from sqlalchemy import select
@@ -24,15 +24,28 @@ svc = EnergeticoDivisionService()
 DbDep: TypeAlias = Annotated[Session, Depends(get_db)]
 Log = logging.getLogger(__name__)
 
-# ✅ Mismos roles que en Compras/Sistemas
-ENERGETICO_DIVISION_WRITE_ROLES = (
+# ==========================================================
+# ✅ ROLES
+#   - LECTURA: incluye GESTOR DE CONSULTA
+#   - ESCRITURA: NO incluye GESTOR DE CONSULTA
+# ==========================================================
+ENERGETICO_DIVISION_READ_ROLES: Tuple[str, ...] = (
+    "ADMINISTRADOR",
+    "GESTOR_UNIDAD",
+    "GESTOR_SERVICIO",
+    "GESTOR_FLOTA",
+    "GESTOR DE CONSULTA",
+)
+
+ENERGETICO_DIVISION_WRITE_ROLES: Tuple[str, ...] = (
     "ADMINISTRADOR",
     "GESTOR_UNIDAD",
     "GESTOR_SERVICIO",
     "GESTOR_FLOTA",
 )
 
-CurrentUser = Annotated[UserPublic, Depends(require_roles(*ENERGETICO_DIVISION_WRITE_ROLES))]
+ReadUser = Annotated[UserPublic, Depends(require_roles(*ENERGETICO_DIVISION_READ_ROLES))]
+WriteUser = Annotated[UserPublic, Depends(require_roles(*ENERGETICO_DIVISION_WRITE_ROLES))]
 
 # ─────────────────────────────────────────────────────────────
 # Scopes (si existen en tu proyecto)
@@ -52,37 +65,39 @@ def _is_admin(user: UserPublic) -> bool:
     return "ADMINISTRADOR" in (user.roles or [])
 
 
-def _assert_user_can_manage_unidad(db: Session, user: UserPublic, unidad_id: int) -> None:
+def _assert_user_can_access_unidad(db: Session, user: UserPublic, unidad_id: int) -> None:
     """
     ADMIN: ok.
-    Gestores: deben tener la UnidadId en su alcance (UsuarioUnidad).
+    No-admin: debe tener la UnidadId en su alcance (UsuarioUnidad).
 
-    Si no existe UsuarioUnidad, por seguridad no abrimos.
+    Si no existe UsuarioUnidad, por seguridad NO abrimos.
     """
     if _is_admin(user):
         return
 
     if UsuarioUnidad is None:
         Log.warning(
-            "forbidden_scope (no UsuarioUnidad) actor=%s roles=%s unidad_id=%s",
+            "forbidden_scope(no UsuarioUnidad) actor=%s roles=%s unidad_id=%s",
             getattr(user, "id", None),
-            user.roles,
-            unidad_id,
+            getattr(user, "roles", None),
+            int(unidad_id),
         )
         raise HTTPException(
             status_code=403,
             detail={
                 "code": "forbidden_scope",
-                "msg": "No se puede verificar alcance del gestor (UsuarioUnidad no disponible).",
-                "unidad_id": unidad_id,
+                "msg": "No se puede verificar alcance del usuario (UsuarioUnidad no disponible).",
+                "unidad_id": int(unidad_id),
             },
         )
 
     ok = db.execute(
-        select(UsuarioUnidad.UnidadId).where(
+        select(UsuarioUnidad.UnidadId)
+        .where(
             UsuarioUnidad.UsuarioId == user.id,
             UsuarioUnidad.UnidadId == int(unidad_id),
         )
+        .limit(1)
     ).first()
 
     if not ok:
@@ -90,43 +105,45 @@ def _assert_user_can_manage_unidad(db: Session, user: UserPublic, unidad_id: int
             status_code=403,
             detail={
                 "code": "forbidden_scope",
-                "msg": "No puedes gestionar esta unidad (fuera de tu alcance).",
+                "msg": "No tienes acceso a esta unidad (fuera de tu alcance).",
                 "unidad_id": int(unidad_id),
             },
         )
 
 
-def _assert_user_can_manage_division(db: Session, user: UserPublic, division_id: int) -> None:
+def _assert_user_can_access_division(db: Session, user: UserPublic, division_id: int) -> None:
     """
     ADMIN: ok.
-    Gestores: deben tener la DivisionId en su alcance (UsuarioDivision).
+    No-admin: debe tener la DivisionId en su alcance (UsuarioDivision).
 
-    Si no existe UsuarioDivision, por seguridad no abrimos.
+    Si no existe UsuarioDivision, por seguridad NO abrimos.
     """
     if _is_admin(user):
         return
 
     if UsuarioDivision is None:
         Log.warning(
-            "forbidden_scope (no UsuarioDivision) actor=%s roles=%s division_id=%s",
+            "forbidden_scope(no UsuarioDivision) actor=%s roles=%s division_id=%s",
             getattr(user, "id", None),
-            user.roles,
-            division_id,
+            getattr(user, "roles", None),
+            int(division_id),
         )
         raise HTTPException(
             status_code=403,
             detail={
                 "code": "forbidden_scope",
-                "msg": "No se puede verificar alcance del gestor (UsuarioDivision no disponible).",
-                "division_id": division_id,
+                "msg": "No se puede verificar alcance del usuario (UsuarioDivision no disponible).",
+                "division_id": int(division_id),
             },
         )
 
     ok = db.execute(
-        select(UsuarioDivision.DivisionId).where(
+        select(UsuarioDivision.DivisionId)
+        .where(
             UsuarioDivision.UsuarioId == user.id,
             UsuarioDivision.DivisionId == int(division_id),
         )
+        .limit(1)
     ).first()
 
     if not ok:
@@ -134,13 +151,16 @@ def _assert_user_can_manage_division(db: Session, user: UserPublic, division_id:
             status_code=403,
             detail={
                 "code": "forbidden_scope",
-                "msg": "No puedes gestionar esta división (fuera de tu alcance).",
+                "msg": "No tienes acceso a esta división (fuera de tu alcance).",
                 "division_id": int(division_id),
             },
         )
 
 
 def _resolve_division_from_unidad_or_raise(db: Session, unidad_id: int) -> int:
+    """
+    UnidadId -> DivisionId (alias)
+    """
     try:
         div = division_id_from_unidad(db, int(unidad_id))
         return int(div)
@@ -153,8 +173,20 @@ def _resolve_division_from_unidad_or_raise(db: Session, unidad_id: int) -> int:
         )
 
 
+def _require_role_for_write(user: UserPublic) -> None:
+    """
+    Guardia extra: aunque el dependency ya bloquea,
+    dejamos un mensaje más claro si alguien intenta colarse.
+    """
+    if "GESTOR DE CONSULTA" in (user.roles or []) and not _is_admin(user):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "forbidden_role", "msg": "GESTOR DE CONSULTA es solo lectura."},
+        )
+
+
 # =========================
-# GET: listado por UNIDAD
+# GET: listado por UNIDAD (lectura)
 # =========================
 @router.get(
     "/unidad/{unidad_id}",
@@ -164,17 +196,17 @@ def _resolve_division_from_unidad_or_raise(db: Session, unidad_id: int) -> int:
 def list_por_unidad(
     unidad_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    user: CurrentUser,
+    user: ReadUser,
 ):
-    _assert_user_can_manage_unidad(db, user, int(unidad_id))
+    _assert_user_can_access_unidad(db, user, int(unidad_id))
     division_id = _resolve_division_from_unidad_or_raise(db, int(unidad_id))
-    # (opcional) también valida división si tienes UsuarioDivision consistente
-    # _assert_user_can_manage_division(db, user, int(division_id))
-    return svc.list_by_division(db, division_id)
+    # (Opcional) si tu mapping real es solo por division:
+    _assert_user_can_access_division(db, user, int(division_id))
+    return svc.list_by_division(db, int(division_id))
 
 
 # ==========================================
-# PUT: reemplazar set por UNIDAD
+# PUT: reemplazar set por UNIDAD (write)
 # ==========================================
 @router.put(
     "/unidad/{unidad_id}",
@@ -185,16 +217,19 @@ def replace_set_por_unidad(
     unidad_id: Annotated[int, Path(..., ge=1)],
     payload: EnergeticoDivisionReplacePayload,
     db: DbDep,
-    user: CurrentUser,
+    user: WriteUser,
 ):
-    _assert_user_can_manage_unidad(db, user, int(unidad_id))
+    _require_role_for_write(user)
+    _assert_user_can_access_unidad(db, user, int(unidad_id))
     division_id = _resolve_division_from_unidad_or_raise(db, int(unidad_id))
+    _assert_user_can_access_division(db, user, int(division_id))
+
     items = [it.model_dump() for it in (payload.items or [])]
-    return svc.replace_for_division(db, division_id, items)
+    return svc.replace_for_division(db, int(division_id), items)
 
 
 # ==========================================
-# POST: asignar energético a una UNIDAD
+# POST: asignar energético a una UNIDAD (write)
 # ==========================================
 @router.post(
     "/unidad/{unidad_id}/assign",
@@ -206,20 +241,23 @@ def assign_energetico_unidad(
     unidad_id: Annotated[int, Path(..., ge=1)],
     payload: EnergeticoDivisionCreateItem,
     db: DbDep,
-    user: CurrentUser,
+    user: WriteUser,
 ):
-    _assert_user_can_manage_unidad(db, user, int(unidad_id))
+    _require_role_for_write(user)
+    _assert_user_can_access_unidad(db, user, int(unidad_id))
     division_id = _resolve_division_from_unidad_or_raise(db, int(unidad_id))
+    _assert_user_can_access_division(db, user, int(division_id))
+
     return svc.assign_to_division(
         db=db,
-        division_id=division_id,
+        division_id=int(division_id),
         energetico_id=payload.EnergeticoId,
         numero_cliente_id=payload.NumeroClienteId,
     )
 
 
 # ==========================================
-# DELETE: desasignar energético de una UNIDAD
+# DELETE: desasignar energético de una UNIDAD (write)
 # ==========================================
 @router.delete(
     "/unidad/{unidad_id}/energetico/{energetico_id}",
@@ -230,14 +268,17 @@ def unassign_energetico_unidad(
     unidad_id: Annotated[int, Path(..., ge=1)],
     energetico_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    user: CurrentUser,
+    user: WriteUser,
     numero_cliente_id: Optional[int] = Query(None, ge=1),
 ):
-    _assert_user_can_manage_unidad(db, user, int(unidad_id))
+    _require_role_for_write(user)
+    _assert_user_can_access_unidad(db, user, int(unidad_id))
     division_id = _resolve_division_from_unidad_or_raise(db, int(unidad_id))
+    _assert_user_can_access_division(db, user, int(division_id))
+
     svc.unassign_from_division(
         db=db,
-        division_id=division_id,
+        division_id=int(division_id),
         energetico_id=int(energetico_id),
         numero_cliente_id=numero_cliente_id,
     )
@@ -245,7 +286,7 @@ def unassign_energetico_unidad(
 
 
 # =========================
-# GET: listado por DIVISION
+# GET: listado por DIVISION (lectura)
 # =========================
 @router.get(
     "/division/{division_id}",
@@ -255,12 +296,15 @@ def unassign_energetico_unidad(
 def list_por_division(
     division_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    user: CurrentUser,
+    user: ReadUser,
 ):
-    _assert_user_can_manage_division(db, user, int(division_id))
+    _assert_user_can_access_division(db, user, int(division_id))
     return svc.list_by_division(db, int(division_id))
 
 
+# ==========================================
+# PUT: reemplazar set por DIVISION (write)
+# ==========================================
 @router.put(
     "/division/{division_id}",
     response_model=List[EnergeticoDivisionDTO],
@@ -270,9 +314,11 @@ def replace_set_por_division(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: EnergeticoDivisionReplacePayload,
     db: DbDep,
-    user: CurrentUser,
+    user: WriteUser,
 ):
-    _assert_user_can_manage_division(db, user, int(division_id))
+    _require_role_for_write(user)
+    _assert_user_can_access_division(db, user, int(division_id))
+
     items = [it.model_dump() for it in (payload.items or [])]
     return svc.replace_for_division(db, int(division_id), items)
 
@@ -287,9 +333,11 @@ def assign_energetico_division(
     division_id: Annotated[int, Path(..., ge=1)],
     payload: EnergeticoDivisionCreateItem,
     db: DbDep,
-    user: CurrentUser,
+    user: WriteUser,
 ):
-    _assert_user_can_manage_division(db, user, int(division_id))
+    _require_role_for_write(user)
+    _assert_user_can_access_division(db, user, int(division_id))
+
     return svc.assign_to_division(
         db=db,
         division_id=int(division_id),
@@ -307,10 +355,12 @@ def unassign_energetico_division(
     division_id: Annotated[int, Path(..., ge=1)],
     energetico_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    user: CurrentUser,
+    user: WriteUser,
     numero_cliente_id: Optional[int] = Query(None, ge=1),
 ):
-    _assert_user_can_manage_division(db, user, int(division_id))
+    _require_role_for_write(user)
+    _assert_user_can_access_division(db, user, int(division_id))
+
     svc.unassign_from_division(
         db=db,
         division_id=int(division_id),

@@ -2,34 +2,52 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated, List
+from typing import Annotated, List, Tuple
 
 from fastapi import APIRouter, Depends, Query, Path, status, Response, HTTPException
-from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 from app.schemas.edificio import (
-    EdificioDTO, EdificioListDTO, EdificioSelectDTO,
-    EdificioCreate, EdificioUpdate,
+    EdificioDTO,
+    EdificioListDTO,
+    EdificioSelectDTO,
+    EdificioCreate,
+    EdificioUpdate,
 )
 from app.services.edificio_service import EdificioService
-from app.db.models.edificio import Edificio  # ✅ para validar comuna en create (si aplica)
+from app.db.models.edificio import Edificio  # ✅ para join a comuna en create scope (si aplica)
 
 router = APIRouter(prefix="/api/v1/edificios", tags=["Edificios"])
 svc = EdificioService()
 DbDep = Annotated[Session, Depends(get_db)]
 Log = logging.getLogger(__name__)
 
-# ✅ Roles de escritura (igual que tus otros módulos)
-EDIFICIOS_WRITE_ROLES = (
+# ==========================================================
+# ✅ ROLES
+#   - LECTURA: incluye GESTOR DE CONSULTA
+#   - ESCRITURA: NO incluye GESTOR DE CONSULTA
+# ==========================================================
+EDIFICIOS_READ_ROLES: Tuple[str, ...] = (
+    "ADMINISTRADOR",
+    "GESTOR_UNIDAD",
+    "GESTOR_SERVICIO",
+    "GESTOR_FLOTA",
+    "GESTOR DE CONSULTA",
+)
+
+EDIFICIOS_WRITE_ROLES: Tuple[str, ...] = (
     "ADMINISTRADOR",
     "GESTOR_UNIDAD",
     "GESTOR_SERVICIO",
     "GESTOR_FLOTA",
 )
+
+ReadUserDep = Annotated[UserPublic, Depends(require_roles(*EDIFICIOS_READ_ROLES))]
+WriteUserDep = Annotated[UserPublic, Depends(require_roles(*EDIFICIOS_WRITE_ROLES))]
 
 # ─────────────────────────────────────────────────────────────
 # Scopes (si existen en tu proyecto)
@@ -51,7 +69,7 @@ def _is_admin(user: UserPublic) -> bool:
 
 def _ensure_scope_models_or_forbid(kind: str) -> None:
     """
-    Si faltan modelos para scope, por seguridad no dejamos operar a gestores.
+    Si faltan modelos para scope, por seguridad no dejamos operar a no-admin.
     """
     if UsuarioDivision is None or Division is None:
         raise HTTPException(
@@ -64,28 +82,22 @@ def _ensure_scope_models_or_forbid(kind: str) -> None:
 
 
 def _division_has_field(field: str) -> bool:
-    """
-    Protege contra casos donde el modelo existe pero no tiene la columna.
-    """
     return Division is not None and hasattr(Division, field)
 
 
-def _ensure_actor_can_edit_edificio(db: Session, actor: UserPublic, edificio_id: int) -> None:
+def _ensure_actor_can_access_edificio(db: Session, actor: UserPublic, edificio_id: int) -> None:
     """
-    ADMIN: puede editar cualquier edificio.
-    Gestores: pueden editar SOLO edificios donde tengan al menos una División en su alcance,
-             y esa División pertenezca a ese edificio.
+    ADMIN: ok.
+    No-admin: debe tener al menos una división en su scope perteneciente a ese edificio.
 
     Requiere:
       - UsuarioDivision(UsuarioId, DivisionId)
       - Division(Id, EdificioId)
-
-    Si faltan modelos/columnas, por seguridad devolvemos 403.
     """
     if _is_admin(actor):
         return
 
-    _ensure_scope_models_or_forbid("edificio")
+    _ensure_scope_models_or_forbid("edificio_access")
     if not _division_has_field("EdificioId"):
         raise HTTPException(
             status_code=403,
@@ -111,7 +123,7 @@ def _ensure_actor_can_edit_edificio(db: Session, actor: UserPublic, edificio_id:
             status_code=403,
             detail={
                 "code": "forbidden_scope",
-                "msg": "No puedes modificar este edificio (fuera de tu alcance).",
+                "msg": "No tienes acceso a este edificio (fuera de tu alcance).",
                 "edificio_id": int(edificio_id),
             },
         )
@@ -119,13 +131,14 @@ def _ensure_actor_can_edit_edificio(db: Session, actor: UserPublic, edificio_id:
 
 def _ensure_actor_can_create_edificio(db: Session, actor: UserPublic, comuna_id: int | None) -> None:
     """
-    Crear edificio es delicado: Edificio no tiene ServicioId/InstitucionId.
-    Opción segura para gestores:
-      - Permitimos crear solo si el gestor ya tiene alcance en esa comuna
-        (es decir, tiene al menos una Division en su scope dentro de un edificio de esa comuna).
+    Crear edificio es sensible (Edificio no cuelga directo de División).
+    Política segura:
+      - ADMIN: ok.
+      - No-admin: solo si indica ComunaId y el usuario ya tiene alguna división en su scope
+                 cuyo edificio actual pertenezca a esa comuna (proxy de alcance territorial).
 
-    Si no hay comuna_id -> solo ADMIN.
-    Si no hay modelos/columnas para resolver -> solo ADMIN.
+    Si no hay ComunaId -> solo ADMIN.
+    Si no podemos verificar scope -> solo ADMIN.
     """
     if _is_admin(actor):
         return
@@ -136,10 +149,8 @@ def _ensure_actor_can_create_edificio(db: Session, actor: UserPublic, comuna_id:
             detail={"code": "forbidden", "msg": "Para crear edificio debes indicar ComunaId (solo gestores)."},
         )
 
-    # Si no podemos verificar scope real, no abrimos creación
     _ensure_scope_models_or_forbid("create_edificio")
 
-    # Necesitamos Division.EdificioId para llegar a Edificio.ComunaId
     if not _division_has_field("EdificioId"):
         raise HTTPException(
             status_code=403,
@@ -149,7 +160,6 @@ def _ensure_actor_can_create_edificio(db: Session, actor: UserPublic, comuna_id:
             },
         )
 
-    # ¿El gestor tiene alguna división en su alcance cuya división pertenezca a un edificio en esa comuna?
     ok = db.execute(
         select(Division.Id)
         .join(UsuarioDivision, UsuarioDivision.DivisionId == Division.Id)
@@ -172,26 +182,36 @@ def _ensure_actor_can_create_edificio(db: Session, actor: UserPublic, comuna_id:
         )
 
 
-# --- GET (con token cualquiera) ---
+# ==========================================================
+# GET (lectura + scope)
+# ==========================================================
 @router.get(
     "",
     response_model=List[EdificioListDTO],
     summary="Listado paginado (headers) de edificios",
-    dependencies=[Depends(require_roles("*"))],
 )
 def list_edificios(
     response: Response,
     db: DbDep,
+    u: ReadUserDep,
     q: str | None = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     ComunaId: int | None = Query(default=None),
     active: bool | None = Query(default=True),
 ):
+    # 🔒 Si no es admin, exigimos ComunaId (o se vuelve “listado global”).
+    if not _is_admin(u) and ComunaId is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "missing_comuna", "msg": "ComunaId es requerido para tu rol."},
+        )
+
     res = svc.list(db, q, page, page_size, ComunaId, active)
-    total = res["total"]
-    size = res["page_size"]
-    curr = res["page"]
+
+    total = int(res["total"])
+    size = int(res["page_size"])
+    curr = int(res["page"])
     total_pages = (total + size - 1) // size if size else 1
 
     response.headers["X-Total-Count"] = str(total)
@@ -199,21 +219,55 @@ def list_edificios(
     response.headers["X-Page-Size"] = str(size)
     response.headers["X-Total-Pages"] = str(total_pages)
 
-    return [EdificioListDTO.model_validate(x) for x in res["items"]]
+    # 🔒 Si no es admin, filtramos por alcance edificio a edificio (seguro, aunque menos eficiente).
+    items = res["items"]
+    if not _is_admin(u):
+        filtered: list = []
+        for it in items:
+            eid = int(getattr(it, "Id", None) or getattr(it, "id", None) or 0)
+            if not eid:
+                continue
+            try:
+                _ensure_actor_can_access_edificio(db, u, eid)
+                filtered.append(it)
+            except HTTPException:
+                continue
+        items = filtered
+
+    return [EdificioListDTO.model_validate(x) for x in items]
 
 
 @router.get(
     "/select",
     response_model=List[EdificioSelectDTO],
     summary="Select (Id, Nombre) solo activos",
-    dependencies=[Depends(require_roles("*"))],
 )
 def select_edificios(
     db: DbDep,
+    u: ReadUserDep,
     q: str | None = Query(default=None),
     ComunaId: int | None = Query(default=None),
 ):
+    if not _is_admin(u) and ComunaId is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "missing_comuna", "msg": "ComunaId es requerido para tu rol."},
+        )
+
     rows = svc.list_select(db, q, ComunaId)
+
+    # 🔒 Si no es admin, filtramos por alcance edificio a edificio
+    if not _is_admin(u):
+        out: list[EdificioSelectDTO] = []
+        for r in rows:
+            eid = int(r[0])
+            try:
+                _ensure_actor_can_access_edificio(db, u, eid)
+                out.append(EdificioSelectDTO(Id=eid, Nombre=r[1]))
+            except HTTPException:
+                continue
+        return out
+
     return [EdificioSelectDTO(Id=r[0], Nombre=r[1]) for r in rows]
 
 
@@ -221,16 +275,19 @@ def select_edificios(
     "/{id}",
     response_model=EdificioDTO,
     summary="Detalle de edificio",
-    dependencies=[Depends(require_roles("*"))],
 )
 def get_edificio(
     id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
+    u: ReadUserDep,
 ):
-    return svc.get(db, id)
+    _ensure_actor_can_access_edificio(db, u, int(id))
+    return svc.get(db, int(id))
 
 
-# --- ESCRITURAS (ADMIN + gestores con scope) ---
+# ==========================================================
+# ESCRITURAS (ADMIN + gestores con scope)
+# ==========================================================
 @router.post(
     "",
     response_model=EdificioDTO,
@@ -240,10 +297,9 @@ def get_edificio(
 def create_edificio(
     payload: EdificioCreate,
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles(*EDIFICIOS_WRITE_ROLES))],
+    current_user: WriteUserDep,
 ):
-    # ✅ ahora sí permitimos gestores, pero solo si tienen scope en esa comuna
-    _ensure_actor_can_create_edificio(db, current_user, payload.ComunaId)
+    _ensure_actor_can_create_edificio(db, current_user, getattr(payload, "ComunaId", None))
 
     obj = svc.create(
         db,
@@ -262,9 +318,9 @@ def update_edificio(
     id: Annotated[int, Path(..., ge=1)],
     payload: EdificioUpdate,
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles(*EDIFICIOS_WRITE_ROLES))],
+    current_user: WriteUserDep,
 ):
-    _ensure_actor_can_edit_edificio(db, current_user, int(id))
+    _ensure_actor_can_access_edificio(db, current_user, int(id))
     obj = svc.update(
         db,
         int(id),
@@ -282,9 +338,9 @@ def update_edificio(
 def delete_edificio(
     id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles(*EDIFICIOS_WRITE_ROLES))],
+    current_user: WriteUserDep,
 ):
-    _ensure_actor_can_edit_edificio(db, current_user, int(id))
+    _ensure_actor_can_access_edificio(db, current_user, int(id))
     svc.soft_delete(db, int(id), modified_by=current_user.id)
     return None
 
@@ -297,8 +353,8 @@ def delete_edificio(
 def reactivate_edificio(
     id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    current_user: Annotated[UserPublic, Depends(require_roles(*EDIFICIOS_WRITE_ROLES))],
+    current_user: WriteUserDep,
 ):
-    _ensure_actor_can_edit_edificio(db, current_user, int(id))
+    _ensure_actor_can_access_edificio(db, current_user, int(id))
     obj = svc.reactivate(db, int(id), modified_by=current_user.id)
     return obj

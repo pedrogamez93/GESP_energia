@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated, List, Union, Optional
+from typing import Annotated, List, Union, Optional, Tuple, TypeAlias
 
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from fastapi.responses import JSONResponse
@@ -10,7 +10,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
 from app.schemas.compra import (
@@ -30,26 +29,48 @@ from app.services.unidad_scope import division_id_from_unidad
 from app.services.compra_service import CompraService
 
 router = APIRouter(prefix="/api/v1/compras", tags=["Compras / Consumos"])
-DbDep = Annotated[Session, Depends(get_db)]
 svc = CompraService()
-
+DbDep: TypeAlias = Annotated[Session, Depends(get_db)]
 Log = logging.getLogger(__name__)
 
 _MAX_PAGE_SIZE = 200
 
-# ✅ Roles que pueden ESCRIBIR (CRUD) compras/consumos
-COMPRAS_WRITE_ROLES = (
+
+# ==========================================================
+# ✅ ROLES
+#   - LECTURA: incluye GESTOR DE CONSULTA
+#   - ESCRITURA: NO incluye GESTOR DE CONSULTA
+# ==========================================================
+COMPRAS_READ_ROLES: Tuple[str, ...] = (
+    "ADMINISTRADOR",
+    "GESTOR_UNIDAD",
+    "GESTOR_SERVICIO",
+    "GESTOR_FLOTA",
+    "GESTOR DE CONSULTA",
+)
+
+COMPRAS_WRITE_ROLES: Tuple[str, ...] = (
     "ADMINISTRADOR",
     "GESTOR_UNIDAD",
     "GESTOR_SERVICIO",
     "GESTOR_FLOTA",
 )
 
-# Tabla puente para scope por división (si existe)
+ReadUserDep = Annotated[UserPublic, Depends(require_roles(*COMPRAS_READ_ROLES))]
+WriteUserDep = Annotated[UserPublic, Depends(require_roles(*COMPRAS_WRITE_ROLES))]
+
+
+# ==========================================================
+# Scope mínimo: UsuarioDivision(UsuarioId, DivisionId)
+# ==========================================================
 try:
     from app.db.models.usuarios_divisiones import UsuarioDivision  # type: ignore
 except Exception:
     UsuarioDivision = None  # type: ignore
+
+
+def _is_admin(u: UserPublic) -> bool:
+    return "ADMINISTRADOR" in (u.roles or [])
 
 
 def _clamp_page(n: int) -> int:
@@ -73,72 +94,83 @@ def _nz_str(s: Optional[str]) -> Optional[str]:
 
 def _ensure_actor_can_access_division(db: Session, actor: UserPublic, division_id: int) -> None:
     """
-    ADMINISTRADOR: ok a todo.
-    Gestores: deben tener la DivisionId dentro de su alcance.
-    Alcance mínimo: UsuarioDivision(UsuarioId, DivisionId)
+    ADMINISTRADOR: ok.
+    No-admin: división debe estar en UsuarioDivision.
 
     Si no existe UsuarioDivision, por seguridad NO abrimos.
     """
-    roles = actor.roles or []
-
-    if "ADMINISTRADOR" in roles:
+    if _is_admin(actor):
         return
 
     if UsuarioDivision is None:
         Log.warning(
-            "forbidden_scope (no UsuarioDivision) actor=%s roles=%s division_id=%s",
+            "forbidden_scope(no UsuarioDivision) actor=%s roles=%s division_id=%s",
             getattr(actor, "id", None),
-            roles,
-            division_id,
+            getattr(actor, "roles", None),
+            int(division_id),
         )
         raise HTTPException(
             status_code=403,
             detail={
                 "code": "forbidden_scope",
                 "msg": "No se puede verificar alcance del gestor (UsuarioDivision no disponible).",
-                "division_id": division_id,
+                "division_id": int(division_id),
             },
         )
 
     ok = db.execute(
-        select(UsuarioDivision.DivisionId).where(
+        select(UsuarioDivision.DivisionId)
+        .where(
             UsuarioDivision.UsuarioId == actor.id,
-            UsuarioDivision.DivisionId == division_id,
+            UsuarioDivision.DivisionId == int(division_id),
         )
+        .limit(1)
     ).first()
 
     if not ok:
         Log.warning(
             "forbidden_scope actor=%s roles=%s division_id=%s",
             getattr(actor, "id", None),
-            roles,
-            division_id,
+            getattr(actor, "roles", None),
+            int(division_id),
         )
         raise HTTPException(
             status_code=403,
             detail={
                 "code": "forbidden_scope",
-                "msg": "No puedes operar compras en esta división (fuera de tu alcance).",
-                "division_id": division_id,
+                "msg": "No tienes acceso a esta división.",
+                "division_id": int(division_id),
             },
         )
 
 
-def _op_roles():
-    return Depends(require_roles(*COMPRAS_WRITE_ROLES))
+def _require_division_for_non_admin(actor: UserPublic, division_id: Optional[int]) -> int:
+    """
+    En listados: para no-admin exigimos DivisionId para no permitir “ver todo”.
+    Para admin también lo exigimos por seguridad/performance (consistente con otros módulos).
+    """
+    if division_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "missing_division",
+                "msg": "DivisionId es requerido (por seguridad/performance).",
+            },
+        )
+    return int(division_id)
 
 
 # ==========================================================
-# LISTADO (con token de cualquier rol, no público)
+# LISTADO (LECTURA + scope)
 # ==========================================================
 @router.get(
     "",
     summary="Listado paginado de compras/consumos (básico o enriquecido)",
     response_model=Union[CompraFullPage, CompraPage],
-    dependencies=[Depends(require_roles("*"))],
 )
 def list_compras(
     db: DbDep,
+    u: ReadUserDep,
     q: str | None = Query(default=None, description="Busca en Observacion"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=_MAX_PAGE_SIZE),
@@ -153,7 +185,6 @@ def list_compras(
     EstadoValidacionId: str | None = Query(default=None),
     RegionId: int | None = Query(default=None),
     EdificioId: int | None = Query(default=None),
-
     UnidadId: int | None = Query(default=None, description="Alias: resuelve a DivisionId vía UnidadesInmuebles"),
     NombreOpcional: str | None = Query(default=None, description="Match en c.NombreOpcional o d.Nombre"),
     full: bool = Query(default=True, description="Si true, retorna versión enriquecida"),
@@ -167,10 +198,9 @@ def list_compras(
     EstadoValidacionId = _nz_str(EstadoValidacionId)
     NombreOpcional = _nz_str(NombreOpcional)
 
-    # Alias por unidad: UnidadId -> DivisionId (InmuebleId)
+    # Alias por unidad: UnidadId -> DivisionId
     if UnidadId is not None:
         resolved_div = division_id_from_unidad(db, int(UnidadId))
-
         if DivisionId is not None and int(DivisionId) != int(resolved_div):
             return JSONResponse(
                 status_code=400,
@@ -182,8 +212,12 @@ def list_compras(
                     "DivisionId_from_unidad": int(resolved_div),
                 },
             )
-
         DivisionId = int(resolved_div)
+
+    # 🔒 Exigir DivisionId para TODOS (admin incluido) y validar scope para no-admin
+    div_id = _require_division_for_non_admin(u, DivisionId)
+    _ensure_actor_can_access_division(db, u, div_id)
+    DivisionId = div_id
 
     if full:
         total, items = svc.list_full(
@@ -236,22 +270,32 @@ def list_compras(
 
 
 # ==========================================================
-# DETALLE (token cualquiera)
+# DETALLE (LECTURA + scope)
+#   - requiere validar división desde el registro existente
 # ==========================================================
 @router.get(
     "/{compra_id}",
     response_model=CompraFullDTO,
     summary="Detalle (incluye items por medidor + Medidor completo)",
     response_model_exclude_none=True,
-    dependencies=[Depends(require_roles("*"))],
 )
 def get_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
+    u: ReadUserDep,
 ):
-    c = svc.get(db, compra_id)
-    items = svc._items_by_compra_with_medidor_full(db, compra_id)
+    c = svc.get(db, int(compra_id))
 
+    # 🔒 scope por DivisionId del registro
+    div_id = getattr(c, "DivisionId", None)
+    if div_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "forbidden_scope", "msg": "Compra sin DivisionId; no se puede validar alcance.", "compra_id": int(compra_id)},
+        )
+    _ensure_actor_can_access_division(db, u, int(div_id))
+
+    items = svc._items_by_compra_with_medidor_full(db, int(compra_id))
     dto = CompraFullDTO.model_validate(c)
     dto.Items = [CompraMedidorItemFullDTO.model_validate(x) for x in items]
     return dto
@@ -262,13 +306,24 @@ def get_compra(
     response_model=CompraFullDetalleDTO,
     summary="Detalle enriquecido",
     response_model_exclude_none=True,
-    dependencies=[Depends(require_roles("*"))],
 )
 def get_compra_detalle(
     compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
+    u: ReadUserDep,
 ):
-    data = svc.get_full(db, compra_id)
+    c = svc.get(db, int(compra_id))
+
+    # 🔒 scope por DivisionId del registro
+    div_id = getattr(c, "DivisionId", None)
+    if div_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "forbidden_scope", "msg": "Compra sin DivisionId; no se puede validar alcance.", "compra_id": int(compra_id)},
+        )
+    _ensure_actor_can_access_division(db, u, int(div_id))
+
+    data = svc.get_full(db, int(compra_id))
     return CompraFullDetalleDTO(**data)
 
 
@@ -285,11 +340,17 @@ def get_compra_detalle(
 def create_compra(
     payload: CompraCreate,
     db: DbDep,
-    current_user: Annotated[UserPublic, _op_roles()],
+    current_user: WriteUserDep,
 ):
     # ✅ si viene DivisionId, validamos scope
     if getattr(payload, "DivisionId", None) is not None:
         _ensure_actor_can_access_division(db, current_user, int(payload.DivisionId))
+    else:
+        # si no viene, esto es peligroso: forzamos a que venga para poder validar
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "missing_division", "msg": "DivisionId es requerido para crear una compra."},
+        )
 
     c, items = svc.create(db, payload, created_by=current_user.id)
     dto = CompraDTO.model_validate(c)
@@ -307,15 +368,19 @@ def update_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     payload: CompraUpdate,
     db: DbDep,
-    current_user: Annotated[UserPublic, _op_roles()],
+    current_user: WriteUserDep,
 ):
-    # ✅ determinamos división desde la compra existente (más robusto)
-    existing = svc.get(db, compra_id)
+    existing = svc.get(db, int(compra_id))
     div_id = getattr(existing, "DivisionId", None)
-    if div_id is not None:
-        _ensure_actor_can_access_division(db, current_user, int(div_id))
+    if div_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "forbidden_scope", "msg": "Compra sin DivisionId; no se puede validar alcance.", "compra_id": int(compra_id)},
+        )
 
-    c, items = svc.update(db, compra_id, payload, modified_by=current_user.id)
+    _ensure_actor_can_access_division(db, current_user, int(div_id))
+
+    c, items = svc.update(db, int(compra_id), payload, modified_by=current_user.id)
     dto = CompraDTO.model_validate(c)
     dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
     return dto
@@ -329,14 +394,18 @@ def update_compra(
 def delete_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    current_user: Annotated[UserPublic, _op_roles()],
+    current_user: WriteUserDep,
 ):
-    existing = svc.get(db, compra_id)
+    existing = svc.get(db, int(compra_id))
     div_id = getattr(existing, "DivisionId", None)
-    if div_id is not None:
-        _ensure_actor_can_access_division(db, current_user, int(div_id))
+    if div_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "forbidden_scope", "msg": "Compra sin DivisionId; no se puede validar alcance.", "compra_id": int(compra_id)},
+        )
 
-    svc.soft_delete(db, compra_id, modified_by=current_user.id)
+    _ensure_actor_can_access_division(db, current_user, int(div_id))
+    svc.soft_delete(db, int(compra_id), modified_by=current_user.id)
     return None
 
 
@@ -349,15 +418,20 @@ def delete_compra(
 def reactivate_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     db: DbDep,
-    current_user: Annotated[UserPublic, _op_roles()],
+    current_user: WriteUserDep,
 ):
-    existing = svc.get(db, compra_id)
+    existing = svc.get(db, int(compra_id))
     div_id = getattr(existing, "DivisionId", None)
-    if div_id is not None:
-        _ensure_actor_can_access_division(db, current_user, int(div_id))
+    if div_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "forbidden_scope", "msg": "Compra sin DivisionId; no se puede validar alcance.", "compra_id": int(compra_id)},
+        )
 
-    c = svc.reactivate(db, compra_id, modified_by=current_user.id)
-    items = svc._items_by_compra(db, compra_id)
+    _ensure_actor_can_access_division(db, current_user, int(div_id))
+
+    c = svc.reactivate(db, int(compra_id), modified_by=current_user.id)
+    items = svc._items_by_compra(db, int(compra_id))
     dto = CompraDTO.model_validate(c)
     dto.Items = [CompraMedidorItemDTO.model_validate(x) for x in items]
     return dto
@@ -373,16 +447,21 @@ def replace_items_compra(
     compra_id: Annotated[int, Path(..., ge=1)],
     payload: CompraItemsPayload,
     db: DbDep,
-    current_user: Annotated[UserPublic, _op_roles()],
+    current_user: WriteUserDep,
 ):
-    existing = svc.get(db, compra_id)
+    existing = svc.get(db, int(compra_id))
     div_id = getattr(existing, "DivisionId", None)
-    if div_id is not None:
-        _ensure_actor_can_access_division(db, current_user, int(div_id))
+    if div_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "forbidden_scope", "msg": "Compra sin DivisionId; no se puede validar alcance.", "compra_id": int(compra_id)},
+        )
+
+    _ensure_actor_can_access_division(db, current_user, int(div_id))
 
     rows = svc.replace_items(
         db,
-        compra_id,
+        int(compra_id),
         [x.model_dump() for x in (payload.Items or [])],
         modified_by=current_user.id,
     )
