@@ -833,33 +833,73 @@ class DivisionService:
     ) -> Division:
         """
         Crea una División con “todos los campos”.
-        Reglas:
-        - No se aceptan Id/CreatedAt/UpdatedAt/Version/CreatedBy/ModifiedBy desde el cliente.
-        - Version parte en 1.
-        - CreatedAt/UpdatedAt = utcnow.
-        - CreatedBy/ModifiedBy se setean con el user_id (si viene).
+
+        FIX CRÍTICO:
+        - ServicioId NO puede ser NULL en dbo.Divisiones.
+        - Si payload no trae ServicioId o viene NULL, intentamos heredarlo del ParentId.
+        - Si no hay ParentId o no se puede heredar, usamos 1 por defecto.
         """
         now = datetime.utcnow()
 
         forbidden = {"Id", "CreatedAt", "UpdatedAt", "Version", "CreatedBy", "ModifiedBy"}
         d = Division()
 
+        # 1) Aplicar payload PERO sin pisar ServicioId con None
         for k, v in payload.items():
             if k in forbidden:
                 continue
-            if hasattr(d, k):
-                setattr(d, k, v)
-            else:
+            if not hasattr(d, k):
                 log.debug("DIVISIONES.create_full: campo %r no existe", k)
+                continue
 
-        # Defaults / auditoría
+            # 🔒 NO permitimos que ServicioId quede None
+            if k == "ServicioId" and v is None:
+                continue
+
+            setattr(d, k, v)
+
+        # 2) Auditoría / defaults base
         d.CreatedAt = now
         d.UpdatedAt = now
         d.Version = 1
 
-        # Active por defecto (si el front no manda)
         if getattr(d, "Active", None) is None:
             d.Active = True
+
+        # 3) Resolver ServicioId (NUNCA NULL)
+        servicio_final: int | None = None
+
+        # (a) si quedó seteado desde payload (y no es None), úsalo
+        try:
+            if getattr(d, "ServicioId", None) is not None:
+                servicio_final = int(d.ServicioId)
+        except Exception:
+            servicio_final = None
+
+        # (b) si no vino, heredar desde ParentId
+        if servicio_final is None:
+            parent_id = getattr(d, "ParentId", None)
+            if parent_id:
+                parent_srv = (
+                    db.query(Division.ServicioId)
+                    .filter(Division.Id == int(parent_id))
+                    .scalar()
+                )
+                if parent_srv is not None:
+                    try:
+                        servicio_final = int(parent_srv)
+                    except Exception:
+                        servicio_final = None
+
+        # (c) fallback duro
+        if servicio_final is None:
+            servicio_final = 1
+
+        d.ServicioId = servicio_final  # ✅ aquí queda blindado
+
+        # 4) Defaults útiles
+        if getattr(d, "GeVersion", None) is None:
+            d.GeVersion = 3
 
         if user_id:
             d.CreatedBy = user_id
@@ -869,5 +909,4 @@ class DivisionService:
         db.commit()
         db.refresh(d)
 
-        # reutiliza tu normalización del detalle
         return self.get(db, d.Id)

@@ -18,7 +18,6 @@ from app.core.security import require_roles
 from app.db.session import get_db
 from app.schemas.auth import UserPublic
 from app.schemas.division import (
-    DivisionBusquedaEspecificaDTO,
     DivisionBusquedaEspecificaPage,
     DivisionAniosDTO,
     DivisionDTO,
@@ -35,7 +34,6 @@ from app.schemas.division_full_update import DivisionFullUpdate
 from app.schemas.division import DivisionCreate
 from app.services.division_service import DivisionService
 
-
 router = APIRouter(prefix="/api/v1/divisiones", tags=["Divisiones"])
 svc = DivisionService()
 DbDep = Annotated[Session, Depends(get_db)]
@@ -44,7 +42,6 @@ DbDep = Annotated[Session, Depends(get_db)]
 # ------------------------------------------------------------
 # Helpers de usuario / auth
 # ------------------------------------------------------------
-
 def _current_user_id(request: Request) -> str | None:
     return getattr(request.state, "user_id", None) or request.headers.get("X-User-Id")
 
@@ -61,11 +58,9 @@ def _user_id_str(user: UserPublic) -> str:
 def _enforce_self_or_admin(user: UserPublic, path_user_id: str) -> None:
     roles = _user_roles_upper(user)
 
-    # Admin puede consultar cualquier user_id
     if "ADMINISTRADOR" in roles or "ADMIN" in roles or "SUPERADMIN" in roles:
         return
 
-    # Gestores: solo su propio usuario
     token_user_id = _user_id_str(user)
     if not token_user_id:
         raise HTTPException(
@@ -83,7 +78,6 @@ def _enforce_self_or_admin(user: UserPublic, path_user_id: str) -> None:
 # ------------------------------------------------------------
 # GET públicos
 # ------------------------------------------------------------
-
 @router.get("", response_model=DivisionPage, summary="Listado paginado")
 def list_divisiones(
     db: DbDep,
@@ -108,18 +102,28 @@ def list_divisiones(
         comuna_id=ComunaId,
     )
 
-@router.post("", response_model=DivisionDTO, status_code=status.HTTP_201_CREATED, summary="Crear (FULL)")
+
+@router.post(
+    "",
+    response_model=DivisionDTO,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear (FULL)",
+)
 def create_division_full(
     payload: DivisionCreate,
     db: DbDep,
     request: Request,
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
+    # ✅ CRÍTICO: evita mandar campos en null (ej: ServicioId=None) que rompen SQL Server
+    data = payload.model_dump(exclude_unset=True, exclude_none=True)
+
     return svc.create_full(
         db=db,
-        payload=payload.model_dump(exclude_unset=True),
+        payload=data,
         user_id=_current_user_id(request),
     )
+
 
 @router.get("/select", response_model=List[DivisionSelectDTO], summary="(picker) Id/Dirección")
 def select_divisiones(
@@ -187,13 +191,7 @@ def get_divisiones_by_region(
 
 # ------------------------------------------------------------
 # Por usuario (ADMIN + gestores, self-only)
-#  Roles reales (según token):
-#   - ADMINISTRADOR
-#   - GESTOR_SERVICIO
-#   - GESTOR_UNIDAD
-#   - GESTOR DE CONSULTA
 # ------------------------------------------------------------
-
 @router.get(
     "/usuario/{user_id}",
     response_model=List[DivisionListDTO],
@@ -219,9 +217,8 @@ def get_divisiones_by_user(
 
 
 # ------------------------------------------------------------
-# Observaciones / flags / años (paridad .NET)
+# Observaciones / flags / años
 # ------------------------------------------------------------
-
 @router.get("/observacion-papel/{division_id}", response_model=ObservacionDTO)
 def get_obs_papel(division_id: Annotated[int, Path(..., ge=1)], db: DbDep):
     return svc.get_observacion_papel(db, division_id)
@@ -342,9 +339,11 @@ def update_division_full(
     request: Request,
     _admin: Annotated[UserPublic, Depends(require_roles("ADMINISTRADOR"))],
 ):
+    data = payload.model_dump(exclude_unset=True, exclude_none=True)
+
     return svc.update_full(
         db,
         division_id,
-        payload=payload.model_dump(exclude_unset=True),
+        payload=data,
         user_id=_current_user_id(request),
     )
