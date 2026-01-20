@@ -615,17 +615,17 @@ class UsuarioVinculoService:
         return db.scalars(scoped_q).unique().all()
     
     def get_detail_scoped(
-    self,
-    db: Session,
-    target_user_id: str,
-    actor: UserPublic,
+        self,
+        db: Session,
+        target_user_id: str,
+        actor: UserPublic,
     ):
         """
         Detalle de usuario con scope:
         - ADMIN: sin restricción
         - GESTOR_SERVICIO / GESTOR DE CONSULTA:
             * Solo puede ver el detalle si el target comparte al menos 1 servicio con el actor.
-            * Los sets devueltos se filtran al alcance del actor (servicios/unidades).
+            * Los sets devueltos se filtran al alcance del actor (servicios/unidades/instituciones/divisiones).
         """
         user = self._ensure_user(db, target_user_id)
 
@@ -659,29 +659,47 @@ class UsuarioVinculoService:
                 },
             )
 
-        # roles del target (roles NO son sensibles; igual los devolvemos)
+        # roles del target (no sensible)
         roles = self._roles_by_user(db, target_user_id)
 
-        # instituciones del target: (opcional filtrar por instituciones derivadas del scope)
-        inst_ids = [r[0] for r in db.execute(
-            select(UsuarioInstitucion.InstitucionId).where(UsuarioInstitucion.UsuarioId == target_user_id)
+        # -------- Instituciones (FILTRADAS al scope del actor vía Servicios -> InstitucionId)
+        rows = db.execute(
+            select(Servicio.InstitucionId).where(Servicio.Id.in_(sorted(allowed_servicios)))
+        ).all()
+        allowed_inst = {int(r[0]) for r in rows if r and r[0] is not None}
+
+        inst_ids = [int(r[0]) for r in db.execute(
+            select(UsuarioInstitucion.InstitucionId)
+            .where(UsuarioInstitucion.UsuarioId == target_user_id)
+            .where(UsuarioInstitucion.InstitucionId.in_(sorted(allowed_inst))) if allowed_inst else
+            select(UsuarioInstitucion.InstitucionId).where(UsuarioInstitucion.UsuarioId == target_user_id).where(False)
         ).all()]
 
-        # servicios del target, filtrados al alcance del actor
-        srv_ids = [r[0] for r in db.execute(
+        # -------- Servicios del target (FILTRADOS al alcance del actor)
+        srv_ids = [int(r[0]) for r in db.execute(
             select(UsuarioServicio.ServicioId)
             .where(UsuarioServicio.UsuarioId == target_user_id)
             .where(UsuarioServicio.ServicioId.in_(sorted(allowed_servicios)))
         ).all()]
 
-        # divisiones del target: si tienes División->ServicioId, filtra por allowed_servicios.
-        # Si no quieres esa dependencia ahora, déjalo sin filtrar.
-        div_ids = [r[0] for r in db.execute(
-            select(UsuarioDivision.DivisionId).where(UsuarioDivision.UsuarioId == target_user_id)
-        ).all()]
+        # -------- Divisiones del target (FILTRADAS por servicio)
+        # Requiere Division.ServicioId (si no existe, comenta este bloque y deja el viejo sin filtrar)
+        try:
+            from app.db.models.division import Division
+            div_ids = [int(r[0]) for r in db.execute(
+                select(UsuarioDivision.DivisionId)
+                .join(Division, Division.Id == UsuarioDivision.DivisionId)
+                .where(UsuarioDivision.UsuarioId == target_user_id)
+                .where(Division.ServicioId.in_(sorted(allowed_servicios)))
+            ).all()]
+        except Exception:
+            # fallback: sin filtrar (no ideal, pero no rompe)
+            div_ids = [int(r[0]) for r in db.execute(
+                select(UsuarioDivision.DivisionId).where(UsuarioDivision.UsuarioId == target_user_id)
+            ).all()]
 
-        # unidades del target: filtra por servicios permitidos del actor (join a Unidad)
-        uni_ids = [r[0] for r in db.execute(
+        # -------- Unidades del target (FILTRADAS al alcance del actor)
+        uni_ids = [int(r[0]) for r in db.execute(
             select(UsuarioUnidad.UnidadId)
             .join(Unidad, Unidad.Id == UsuarioUnidad.UnidadId)
             .where(UsuarioUnidad.UsuarioId == target_user_id)
@@ -689,8 +707,8 @@ class UsuarioVinculoService:
         ).all()]
 
         Log.info(
-            "get_detail_scoped target=%s actor=%s allowed_servicios=%s -> srv=%s uni=%s",
-            target_user_id, actor.id, sorted(allowed_servicios), srv_ids, uni_ids
+            "get_detail_scoped target=%s actor=%s allowed_servicios=%s -> inst=%s srv=%s div=%s uni=%s",
+            target_user_id, actor.id, sorted(allowed_servicios), inst_ids, srv_ids, div_ids, uni_ids
         )
 
         return user, roles, inst_ids, srv_ids, div_ids, uni_ids

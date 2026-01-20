@@ -144,27 +144,12 @@ def get_user_detail(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
-    # ✅ Para GESTOR_SERVICIOS y GESTOR DE CONSULTA esto debe ser SCOPED.
-    #    Si el service aún no filtra por actor, hay que reforzarlo allá.
     _assert_can_read_user_detail(current_user, user_id)
 
     try:
-        # Preferimos método scoped si existe
-        if hasattr(svc, "get_detail_scoped"):
-            user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail_scoped(db, user_id, actor=current_user)
-        else:
-            # Fallback al método actual (OJO: si no filtra, hay riesgo de fuga).
-            user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
-
-            # Medida defensiva: si no es admin y el service no es scoped, bloqueamos para no filtrar usuarios globales
-            if ROLE_ADMIN not in (current_user.roles or []):
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "code": "forbidden_scope",
-                        "msg": "Este endpoint requiere lectura scoped. Implementa get_detail_scoped en UsuarioVinculoService.",
-                    },
-                )
+        user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail_scoped(
+            db, user_id, actor=current_user
+        )
 
         Log.info(
             "GET detalle usuario %s actor=%s roles=%s -> inst=%s srv=%s div=%s uni=%s",
@@ -376,7 +361,15 @@ def get_unidades_vinculadas_usuario(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
-    return svc.unidades_vinculadas_scoped(db, user_id, actor=current_user)
+    unidades = svc.unidades_vinculadas_scoped(db, user_id, actor=current_user)
+    return [
+        UnidadSelectDTO(
+            Id=int(getattr(u, "Id")),
+            Nombre=str(getattr(u, "Nombre", "")) if getattr(u, "Nombre", None) is not None else "",
+        )
+        for u in (unidades or [])
+        if getattr(u, "Id", None) is not None
+    ]
     
 @router.get(
     "/{user_id}/unidades/ids",
