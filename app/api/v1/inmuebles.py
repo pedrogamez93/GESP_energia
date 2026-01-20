@@ -68,11 +68,7 @@ WriteUserDep = Annotated[UserPublic, Depends(require_roles(*INMUEBLES_WRITE_ROLE
 # ─────────────────────────────────────────────
 # GETs (lectura)
 # ─────────────────────────────────────────────
-@router.get(
-    "",
-    response_model=InmueblePage,
-    summary="Listado paginado de inmuebles",
-)
+@router.get("", response_model=InmueblePage)
 def listar_inmuebles(
     db: DbDep,
     u: ReadUserDep,
@@ -87,28 +83,48 @@ def listar_inmuebles(
     search: Annotated[str | None, Query()] = None,
     gev: Annotated[int | None, Query()] = 3,
 ):
-    # 🔒 Regla simple: no-admin debe filtrar por algún eje (servicio o comuna o región)
-    # (evita “listado global” de inmuebles a gestores/consulta)
-    if not is_admin(u) and servicio_id is None and comuna_id is None and region_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "missing_filter",
-                "msg": "Para tu rol debes filtrar al menos por servicio_id, comuna_id o region_id.",
-            },
+    # ✅ Si es admin, sin restricciones
+    if is_admin(u):
+        total, items = InmuebleService(db).list_paged(
+            page=page, page_size=page_size, active=active,
+            servicio_id=servicio_id, region_id=region_id, comuna_id=comuna_id,
+            tipo_inmueble=tipo_inmueble, direccion=direccion, search=search, gev=gev,
         )
+        return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+    # ✅ No-admin: si no trae filtros explícitos, NO tires 400;
+    # aplica scope automático (por servicio(s) del usuario).
+    if servicio_id is None and comuna_id is None and region_id is None:
+        # 1) obtén servicios del actor (ajusta a tu realidad)
+        servicio_ids = InmuebleService(db).servicios_vinculados_ids(u.id)  # <- implementa
+        if not servicio_ids:
+            # aquí sí tiene sentido bloquear (no tiene alcance)
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "no_scope", "msg": "No tienes servicios asociados para listar inmuebles."},
+            )
+
+        total, items = InmuebleService(db).list_paged(
+            page=page, page_size=page_size, active=active,
+            servicio_ids=servicio_ids,  # <- NUEVO (lista)
+            region_id=None, comuna_id=None,
+            tipo_inmueble=tipo_inmueble, direccion=direccion, search=search, gev=gev,
+        )
+        return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+    # ✅ Si sí viene servicio_id, valida que esté dentro del scope del actor
+    if servicio_id is not None:
+        servicio_ids = InmuebleService(db).servicios_vinculados_ids(u.id)
+        if servicio_id not in (servicio_ids or []):
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "out_of_scope", "msg": "servicio_id fuera de tu alcance."},
+            )
 
     total, items = InmuebleService(db).list_paged(
-        page=page,
-        page_size=page_size,
-        active=active,
-        servicio_id=servicio_id,
-        region_id=region_id,
-        comuna_id=comuna_id,
-        tipo_inmueble=tipo_inmueble,
-        direccion=direccion,
-        search=search,
-        gev=gev,
+        page=page, page_size=page_size, active=active,
+        servicio_id=servicio_id, region_id=region_id, comuna_id=comuna_id,
+        tipo_inmueble=tipo_inmueble, direccion=direccion, search=search, gev=gev,
     )
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 

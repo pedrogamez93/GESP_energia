@@ -78,6 +78,7 @@ class InmuebleService:
         page_size: int = 50,
         active: Optional[bool] = True,
         servicio_id: Optional[int] = None,
+        servicio_ids: Optional[List[int]] = None,
         region_id: Optional[int] = None,
         comuna_id: Optional[int] = None,
         tipo_inmueble: Optional[int] = None,
@@ -88,24 +89,34 @@ class InmuebleService:
 
         where_parts: List[str] = ["1=1"]
         params: dict = {}
+
         if active is not None:
             where_parts.append("dv.Active = :active")
             params["active"] = 1 if active else 0
+
         if gev is not None:
             where_parts.append("dv.GeVersion = :gev")
             params["gev"] = gev
-        if servicio_id is not None:
+
+        # ✅ soporte singular o múltiple (múltiple tiene prioridad)
+        if servicio_ids:
+            where_parts.append("dv.ServicioId IN :servicio_ids")
+            params["servicio_ids"] = [int(x) for x in servicio_ids]
+        elif servicio_id is not None:
             where_parts.append("dv.ServicioId = :servicio_id")
-            params["servicio_id"] = servicio_id
+            params["servicio_id"] = int(servicio_id)
+
         if region_id is not None:
             where_parts.append("dv.RegionId = :region_id")
-            params["region_id"] = region_id
+            params["region_id"] = int(region_id)
+
         if comuna_id is not None:
             where_parts.append("dv.ComunaId = :comuna_id")
-            params["comuna_id"] = comuna_id
+            params["comuna_id"] = int(comuna_id)
+
         if tipo_inmueble is not None:
             where_parts.append("dv.TipoInmueble = :tipo_inmueble")
-            params["tipo_inmueble"] = tipo_inmueble
+            params["tipo_inmueble"] = int(tipo_inmueble)
 
         join_dir_for_filter = ""
         if direccion:
@@ -114,7 +125,10 @@ class InmuebleService:
                 "OR LOWER(ISNULL(di.Numero,'')) LIKE LOWER(:direccion_like))"
             )
             params["direccion_like"] = f"%{direccion}%"
-            join_dir_for_filter = "LEFT JOIN dbo.Direcciones di WITH (NOLOCK) ON di.Id = dv.DireccionInmuebleId"
+            join_dir_for_filter = (
+                "LEFT JOIN dbo.Direcciones di WITH (NOLOCK) ON di.Id = dv.DireccionInmuebleId"
+            )
+
         if search:
             where_parts.append(
                 "(LOWER(ISNULL(dv.Nombre,'')) LIKE LOWER(:like) "
@@ -123,7 +137,9 @@ class InmuebleService:
             )
             params["like"] = f"%{search}%"
             if "di WITH (NOLOCK)" not in join_dir_for_filter:
-                join_dir_for_filter = "LEFT JOIN dbo.Direcciones di WITH (NOLOCK) ON di.Id = dv.DireccionInmuebleId"
+                join_dir_for_filter = (
+                    "LEFT JOIN dbo.Direcciones di WITH (NOLOCK) ON di.Id = dv.DireccionInmuebleId"
+                )
 
         where_sql = " AND ".join(where_parts)
         size = max(1, min(200, page_size))
@@ -135,7 +151,6 @@ class InmuebleService:
             {join_dir_for_filter}
             WHERE {where_sql}
         """
-        total = int(self.db.execute(text(count_sql), params).scalar() or 0)
 
         rows_sql = f"""
             SELECT
@@ -150,11 +165,21 @@ class InmuebleService:
             ORDER BY {_order_by_nombre_nulls_last_sql()}
             OFFSET :offset ROWS FETCH NEXT :size ROWS ONLY
         """
+
+        # ✅ IMPORTANTÍSIMO: expanding para IN :servicio_ids (cuando aplica)
+        count_stmt = text(count_sql)
+        rows_stmt = text(rows_sql)
+        if "servicio_ids" in params:
+            count_stmt = count_stmt.bindparams(bindparam("servicio_ids", expanding=True))
+            rows_stmt = rows_stmt.bindparams(bindparam("servicio_ids", expanding=True))
+
+        total = int(self.db.execute(count_stmt, params).scalar() or 0)
+
         rows_params = dict(params)
         rows_params.update({"offset": offset, "size": size})
         items = [
             self._to_list_dto_row(r)
-            for r in self.db.execute(text(rows_sql), rows_params).mappings().all()
+            for r in self.db.execute(rows_stmt, rows_params).mappings().all()
         ]
         return total, items
 
@@ -167,10 +192,12 @@ class InmuebleService:
         )
         if not root:
             return None
+
         dir_ = (
             self.db.query(Direccion).filter(Direccion.Id == root.DireccionInmuebleId).first()
             if root.DireccionInmuebleId else None
         )
+
         dto = self._to_detail_base(root, dir_)
         dto.Unidades = self._fetch_unidades_por_inmueble(root.Id)
         dto.Pisos = self._fetch_pisos_for_division(root.Id)
@@ -298,7 +325,8 @@ class InmuebleService:
                 ComunaId=payload.ComunaId or 0,
                 DireccionCompleta=payload.DireccionCompleta,
             )
-            self.db.add(dir_); self.db.flush()
+            self.db.add(dir_)
+            self.db.flush()
             return dir_.Id
         return None
 
@@ -332,7 +360,10 @@ class InmuebleService:
             Funcionarios=0,
             GeVersion=3,
         )
-        self.db.add(obj); self.db.commit(); self.db.refresh(obj)
+        self.db.add(obj)
+        self.db.commit()
+        self.db.refresh(obj)
+
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
@@ -369,9 +400,13 @@ class InmuebleService:
 
         obj.ServicioId = payload.get("ServicioId", obj.ServicioId or (parent.ServicioId if parent else 1))
         obj.Funcionarios = obj.Funcionarios or 0
-        obj.UpdatedAt = datetime.utcnow(); obj.ModifiedBy = modified_by; obj.Version = (obj.Version or 0) + 1
+        obj.UpdatedAt = datetime.utcnow()
+        obj.ModifiedBy = modified_by
+        obj.Version = (obj.Version or 0) + 1
 
-        self.db.commit(); self.db.refresh(obj)
+        self.db.commit()
+        self.db.refresh(obj)
+
         dir_ = self.db.query(Direccion).filter(Direccion.Id == obj.DireccionInmuebleId).first() if obj.DireccionInmuebleId else None
         return self._to_detail_base(obj, dir_)
 
@@ -436,7 +471,7 @@ class InmuebleService:
         ).delete(synchronize_session=False)
         self.db.commit()
 
-# ---------------------------------------- BUSCAR INMUEBLES POR UNIDAD-------------------
+    # ---------------------------------------- BUSCAR INMUEBLES POR UNIDAD-------------------
     def _find_inmueble_id_by_unidad(self, unidad_id: int) -> int | None:
         """
         Busca el DivisionId (inmueble) vinculado a la unidad, probando:
