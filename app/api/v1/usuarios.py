@@ -6,7 +6,8 @@ import logging
 from fastapi import APIRouter, Body, Depends, Path, Request, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-
+from uuid import UUID
+from typing import Optional
 from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
@@ -120,10 +121,10 @@ def usuarios_index(
     "/{user_id}/debug-unidades",
     summary="DEBUG: Unidades vinculadas según la BD que ve el backend",
 )
-def debug_unidades_usuario(
-    user_id: Annotated[str, Path(...)],
-    db: DbDep,
-    _admin: Annotated[UserPublic, Depends(require_roles(*USUARIOS_ADMIN_ONLY))],
+def get_unidades_usuario(
+    user_id: UUID,
+    request_id: Optional[UUID] = None, 
+    db: Session = Depends(get_db),
 ):
     rows = db.execute(
         select(UsuarioUnidad.UsuarioId, UsuarioUnidad.UnidadId)
