@@ -61,7 +61,7 @@ WriteUserDep = Annotated[UserPublic, Depends(require_roles(*COMPRAS_WRITE_ROLES)
 
 
 # ==========================================================
-# Scope mínimo: UsuarioDivision(UsuarioId, DivisionId)
+# Scope mínimo (se mantiene SOLO para ESCRITURAS)
 # ==========================================================
 try:
     from app.db.models.usuarios_divisiones import UsuarioDivision  # type: ignore
@@ -94,6 +94,7 @@ def _nz_str(s: Optional[str]) -> Optional[str]:
 
 def _ensure_actor_can_access_division(db: Session, actor: UserPublic, division_id: int) -> None:
     """
+    (ESCRITURAS)
     ADMINISTRADOR: ok.
     No-admin: división debe estar en UsuarioDivision.
 
@@ -144,28 +145,12 @@ def _ensure_actor_can_access_division(db: Session, actor: UserPublic, division_i
         )
 
 
-def _require_division_for_non_admin(actor: UserPublic, division_id: Optional[int]) -> int:
-    """
-    En listados: para no-admin exigimos DivisionId para no permitir “ver todo”.
-    Para admin también lo exigimos por seguridad/performance (consistente con otros módulos).
-    """
-    if division_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "missing_division",
-                "msg": "DivisionId es requerido (por seguridad/performance).",
-            },
-        )
-    return int(division_id)
-
-
 # ==========================================================
-# LISTADO (LECTURA + scope)
+# LISTADO (LECTURA) -> GLOBAL (sin scope)
 # ==========================================================
 @router.get(
     "",
-    summary="Listado paginado de compras/consumos (básico o enriquecido)",
+    summary="Listado paginado de compras/consumos (básico o enriquecido) (global)",
     response_model=Union[CompraFullPage, CompraPage],
 )
 def list_compras(
@@ -189,6 +174,13 @@ def list_compras(
     NombreOpcional: str | None = Query(default=None, description="Match en c.NombreOpcional o d.Nombre"),
     full: bool = Query(default=True, description="Si true, retorna versión enriquecida"),
 ):
+    """
+    🔓 LISTADO GLOBAL
+    - No exige DivisionId
+    - No aplica scope por UsuarioDivision
+    - Si viene UnidadId, se usa SOLO como filtro (resuelve DivisionId)
+    - El control/privatización queda en el frontend
+    """
     page = _clamp_page(page)
     page_size = _clamp_page_size(page_size)
 
@@ -198,7 +190,7 @@ def list_compras(
     EstadoValidacionId = _nz_str(EstadoValidacionId)
     NombreOpcional = _nz_str(NombreOpcional)
 
-    # Alias por unidad: UnidadId -> DivisionId
+    # Alias por unidad: UnidadId -> DivisionId (solo como filtro)
     if UnidadId is not None:
         resolved_div = division_id_from_unidad(db, int(UnidadId))
         if DivisionId is not None and int(DivisionId) != int(resolved_div):
@@ -214,10 +206,9 @@ def list_compras(
             )
         DivisionId = int(resolved_div)
 
-    # 🔒 Exigir DivisionId para TODOS (admin incluido) y validar scope para no-admin
-    div_id = _require_division_for_non_admin(u, DivisionId)
-    _ensure_actor_can_access_division(db, u, div_id)
-    DivisionId = div_id
+    # Normaliza DivisionId si viene
+    if DivisionId is not None:
+        DivisionId = int(DivisionId)
 
     if full:
         total, items = svc.list_full(
@@ -247,6 +238,7 @@ def list_compras(
             }
         )
 
+    # OJO: aquí mantengo tu firma original del service.list()
     result = svc.list(
         db,
         q,
@@ -270,13 +262,12 @@ def list_compras(
 
 
 # ==========================================================
-# DETALLE (LECTURA + scope)
-#   - requiere validar división desde el registro existente
+# DETALLE (LECTURA) -> GLOBAL (sin scope)
 # ==========================================================
 @router.get(
     "/{compra_id}",
     response_model=CompraFullDTO,
-    summary="Detalle (incluye items por medidor + Medidor completo)",
+    summary="Detalle (incluye items por medidor + Medidor completo) (global)",
     response_model_exclude_none=True,
 )
 def get_compra(
@@ -285,16 +276,6 @@ def get_compra(
     u: ReadUserDep,
 ):
     c = svc.get(db, int(compra_id))
-
-    # 🔒 scope por DivisionId del registro
-    div_id = getattr(c, "DivisionId", None)
-    if div_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "forbidden_scope", "msg": "Compra sin DivisionId; no se puede validar alcance.", "compra_id": int(compra_id)},
-        )
-    _ensure_actor_can_access_division(db, u, int(div_id))
-
     items = svc._items_by_compra_with_medidor_full(db, int(compra_id))
     dto = CompraFullDTO.model_validate(c)
     dto.Items = [CompraMedidorItemFullDTO.model_validate(x) for x in items]
@@ -304,7 +285,7 @@ def get_compra(
 @router.get(
     "/{compra_id}/detalle",
     response_model=CompraFullDetalleDTO,
-    summary="Detalle enriquecido",
+    summary="Detalle enriquecido (global)",
     response_model_exclude_none=True,
 )
 def get_compra_detalle(
@@ -312,17 +293,6 @@ def get_compra_detalle(
     db: DbDep,
     u: ReadUserDep,
 ):
-    c = svc.get(db, int(compra_id))
-
-    # 🔒 scope por DivisionId del registro
-    div_id = getattr(c, "DivisionId", None)
-    if div_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "forbidden_scope", "msg": "Compra sin DivisionId; no se puede validar alcance.", "compra_id": int(compra_id)},
-        )
-    _ensure_actor_can_access_division(db, u, int(div_id))
-
     data = svc.get_full(db, int(compra_id))
     return CompraFullDetalleDTO(**data)
 
@@ -346,7 +316,6 @@ def create_compra(
     if getattr(payload, "DivisionId", None) is not None:
         _ensure_actor_can_access_division(db, current_user, int(payload.DivisionId))
     else:
-        # si no viene, esto es peligroso: forzamos a que venga para poder validar
         raise HTTPException(
             status_code=400,
             detail={"code": "missing_division", "msg": "DivisionId es requerido para crear una compra."},
