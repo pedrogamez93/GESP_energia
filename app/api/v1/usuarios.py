@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Annotated, List, Optional
 import logging
+from typing import Annotated, List, Optional, Union
+from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, Path, Request, HTTPException
+from fastapi import APIRouter, Body, Depends, Path, Request, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from uuid import UUID
-from typing import Optional
+
 from app.db.session import get_db
 from app.core.security import require_roles
 from app.schemas.auth import UserPublic
@@ -15,8 +15,7 @@ from app.schemas.unidad import UnidadSelectDTO
 from app.schemas.usuario_vinculo import (
     IdsPayload,
     UserDetailFullDTO,
-    UnidadMiniDTO,
-    UserMiniDTO,  # 👈 necesario para response_model=List[UserMiniDTO]
+    UserMiniDTO,
 )
 from app.schemas.usuario_roles import RolesPayload
 
@@ -33,21 +32,15 @@ Log = logging.getLogger(__name__)
 # Roles (ajusta nombres EXACTOS a tu BD/JWT)
 # ==========================================================
 ROLE_ADMIN = "ADMINISTRADOR"
-ROLE_GESTOR_SERVICIO = "GESTOR_SERVICIO"  
+ROLE_GESTOR_SERVICIO = "GESTOR_SERVICIO"
 ROLE_GESTOR_CONSULTA = "GESTOR DE CONSULTA"
 
-# ✅ Lecturas: Admin + Gestor Servicios + Gestor Consulta (scoped en service)
 USUARIOS_READ_ROLES = (ROLE_ADMIN, ROLE_GESTOR_SERVICIO, ROLE_GESTOR_CONSULTA)
-
-# ✅ Escrituras: Admin + Gestor Servicios (NO consulta)
 USUARIOS_WRITE_ROLES = (ROLE_ADMIN, ROLE_GESTOR_SERVICIO)
-
-# ✅ Debug/roles/activar/desactivar: solo Admin
 USUARIOS_ADMIN_ONLY = (ROLE_ADMIN,)
 
 
 def _actor_id(current_user: UserPublic | None, request: Request | None) -> Optional[str]:
-    # Prioriza usuario autenticado; si no, permite header X-User-Id (igual que en divisiones)
     return (current_user.id if current_user else None) or (
         request.headers.get("X-User-Id") if request else None
     )
@@ -61,11 +54,7 @@ def _to_full_dto(
     div_ids: list[int],
     uni_ids: list[int],
 ) -> UserDetailFullDTO:
-    """
-    Mapea directamente todas las columnas del modelo AspNetUser (from_attributes=True)
-    e inyecta roles y sets vinculados.
-    """
-    base = UserDetailFullDTO.model_validate(user)  # toma todos los campos del modelo
+    base = UserDetailFullDTO.model_validate(user)
     base.Roles = roles or []
     base.InstitucionIds = inst_ids or []
     base.ServicioIds = srv_ids or []
@@ -75,19 +64,12 @@ def _to_full_dto(
 
 
 def _assert_can_read_user_detail(actor: UserPublic, target_user_id: str) -> None:
-    """
-    Seguridad mínima aquí:
-    - ADMIN: ok
-    - Otros (incluye GESTOR_SERVICIOS y GESTOR DE CONSULTA): permitido, PERO el service debe aplicar scope.
-      Si tu service hoy NO aplica scope al leer detalle, esto hay que reforzarlo ahí.
-    """
     if ROLE_ADMIN in (actor.roles or []):
         return
-    # No bloqueamos aquí, porque el alcance real lo impone el service con joins scoped.
+    # el scope real lo impone el service (joins scoped)
     return
 
 
-# ---------------- Alias / Ping (evita 404 en GET /api/v1/usuarios) ----------------
 @router.get(
     "",
     summary="Alias/ping del router admin de usuarios",
@@ -108,7 +90,7 @@ def usuarios_index(
             "instituciones": "/api/v1/usuarios/{user_id}/instituciones (WRITE: ADMIN/GESTOR_SERVICIOS, SCOPED)",
             "servicios": "/api/v1/usuarios/{user_id}/servicios (WRITE: ADMIN/GESTOR_SERVICIOS, SCOPED)",
             "divisiones": "/api/v1/usuarios/{user_id}/divisiones (ADMIN)",
-            "unidades": "/api/v1/usuarios/{user_id}/unidades (WRITE: ADMIN/GESTOR_SERVICIOS, SCOPED)",
+            "unidades": "/api/v1/usuarios/{user_id}/unidades (READ scoped) + PUT (WRITE scoped)",
             "roles": "/api/v1/usuarios/{user_id}/roles (ADMIN)",
             "activar": "/api/v1/usuarios/{user_id}/activar (ADMIN)",
             "desactivar": "/api/v1/usuarios/{user_id}/desactivar (ADMIN)",
@@ -116,22 +98,33 @@ def usuarios_index(
     }
 
 
-# ---------------- DEBUG: ver lo que el backend ve en UsuariosUnidades -----------
+# ==========================================================
+# DEBUG: ver lo que el backend ve en UsuariosUnidades
+# ==========================================================
 @router.get(
     "/{user_id}/debug-unidades",
     summary="DEBUG: Unidades vinculadas según la BD que ve el backend",
 )
-def get_unidades_usuario(
-    user_id: UUID,
-    request_id: Optional[UUID] = None, 
-    db: Session = Depends(get_db),
+def debug_unidades_usuario(
+    user_id: Annotated[str, Path(...)],
+    # si alguien te lo manda, bien; si no, no falla
+    request_id: Annotated[Optional[str], Query(default=None)] = None,
+    db: DbDep = None,
+    current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))] = None,
 ):
-    rows = db.execute(
-        select(UsuarioUnidad.UsuarioId, UsuarioUnidad.UnidadId)
-        .where(UsuarioUnidad.UsuarioId == user_id)
-    ).all()
-    Log.info("DEBUG-unidades user_id=%s rows=%s", user_id, rows)
-    return [{"UsuarioId": r[0], "UnidadId": r[1]} for r in rows]
+    """
+    Debug controlado (requiere login). `user_id` es GUID string en Identity.
+    """
+    try:
+        rows = db.execute(
+            select(UsuarioUnidad.UsuarioId, UsuarioUnidad.UnidadId)
+            .where(UsuarioUnidad.UsuarioId == user_id)
+        ).all()
+        Log.info("DEBUG-unidades user_id=%s request_id=%s rows=%s", user_id, request_id, rows)
+        return [{"UsuarioId": r[0], "UnidadId": r[1]} for r in rows]
+    except Exception as e:
+        Log.exception("Error debug_unidades_usuario user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="Error interno debug-unidades") from e
 
 
 # ---------------- Detalle (READ scoped) ----------------
@@ -151,7 +144,6 @@ def get_user_detail(
         user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail_scoped(
             db, user_id, actor=current_user
         )
-
         Log.info(
             "GET detalle usuario %s actor=%s roles=%s -> inst=%s srv=%s div=%s uni=%s",
             user_id,
@@ -160,7 +152,6 @@ def get_user_detail(
             inst_ids, srv_ids, div_ids, uni_ids,
         )
         return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
-
     except HTTPException:
         raise
     except Exception as e:
@@ -181,10 +172,7 @@ def set_user_instituciones(
     payload: IdsPayload | None = Body(None),
 ):
     ids = payload.Ids if payload else []
-    Log.info(
-        "PUT instituciones user_id=%s actor_id=%s actor_roles=%s requested_ids=%s",
-        user_id, current_user.id, current_user.roles, ids,
-    )
+    Log.info("PUT instituciones user_id=%s actor_id=%s roles=%s ids=%s", user_id, current_user.id, current_user.roles, ids)
     return svc.set_instituciones_scoped(db, user_id, ids, actor=current_user)
 
 
@@ -200,10 +188,7 @@ def set_user_servicios(
     payload: IdsPayload | None = Body(None),
 ):
     ids = payload.Ids if payload else []
-    Log.info(
-        "PUT servicios user_id=%s actor_id=%s actor_roles=%s requested_ids=%s",
-        user_id, current_user.id, current_user.roles, ids,
-    )
+    Log.info("PUT servicios user_id=%s actor_id=%s roles=%s ids=%s", user_id, current_user.id, current_user.roles, ids)
     return svc.set_servicios_scoped(db, user_id, ids, actor=current_user)
 
 
@@ -219,7 +204,7 @@ def set_user_divisiones(
     payload: IdsPayload | None = Body(None),
 ):
     ids = payload.Ids if payload else []
-    Log.info("PUT divisiones user_id=%s normalized_ids=%s", user_id, ids)
+    Log.info("PUT divisiones user_id=%s ids=%s", user_id, ids)
     return svc.set_divisiones(db, user_id, ids)
 
 
@@ -235,10 +220,7 @@ def set_user_unidades(
     payload: IdsPayload | None = Body(None),
 ):
     ids = payload.Ids if payload else []
-    Log.info(
-        "PUT unidades user_id=%s actor_id=%s actor_roles=%s requested_ids=%s",
-        user_id, current_user.id, current_user.roles, ids,
-    )
+    Log.info("PUT unidades user_id=%s actor_id=%s roles=%s ids=%s", user_id, current_user.id, current_user.roles, ids)
     return svc.set_unidades_scoped(db, user_id, ids, actor=current_user)
 
 
@@ -256,7 +238,6 @@ def activar_usuario(
 ):
     svc.set_active(db, user_id, True, actor_id=_actor_id(current_user, request))
     user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
-    Log.info("PUT activar usuario %s", user_id)
     return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
 
 
@@ -273,7 +254,6 @@ def desactivar_usuario(
 ):
     svc.set_active(db, user_id, False, actor_id=_actor_id(current_user, request))
     user, roles, inst_ids, srv_ids, div_ids, uni_ids = svc.get_detail(db, user_id)
-    Log.info("PUT desactivar usuario %s", user_id)
     return _to_full_dto(user, roles, inst_ids, srv_ids, div_ids, uni_ids)
 
 
@@ -292,6 +272,7 @@ def set_user_roles(
     Log.info("PUT roles user_id=%s roles=%s", user_id, getattr(payload, "roles", None))
     return svc.set_roles(db, user_id, payload.roles)
 
+
 @router.get(
     "/{user_id}/vinculados-por-servicio",
     response_model=List[UserMiniDTO],
@@ -302,23 +283,11 @@ def get_usuarios_vinculados_por_servicio(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
-    """
-    Retorna usuarios que comparten al menos un servicio con `user_id`.
-    Además, incluye `ServicioIds` = lista de servicios en común con el usuario base.
-
-    El scoping (qué puede ver un GESTOR) lo impone el service:
-      - ADMIN: sin restricción
-      - GESTOR_SERVICIO / GESTOR DE CONSULTA: limitado a su alcance
-    """
     try:
         items = svc.usuarios_vinculados_por_servicio_scoped(db, user_id, actor=current_user)
 
-        # Soporta 2 formatos de retorno desde el service:
-        #  1) [{'user': <AspNetUser o dict>, 'ServicioIds': [..]}, ...]
-        #  2) [<AspNetUser>, ...]  (en ese caso el DTO saldrá sin ServicioIds)
         out: list[UserMiniDTO] = []
         for it in (items or []):
-            # Caso A: viene como dict con user + ServicioIds
             if isinstance(it, dict):
                 u = it.get("user") or it.get("User") or it.get("usuario") or it
                 dto = UserMiniDTO.model_validate(u)
@@ -326,7 +295,6 @@ def get_usuarios_vinculados_por_servicio(
                 out.append(dto)
                 continue
 
-            # Caso B: viene como tupla (user, ServicioIds)
             if isinstance(it, (list, tuple)) and len(it) >= 2:
                 u = it[0]
                 svc_ids = it[1] or []
@@ -335,7 +303,6 @@ def get_usuarios_vinculados_por_servicio(
                 out.append(dto)
                 continue
 
-            # Caso C: viene el modelo directo (AspNetUser)
             dto = UserMiniDTO.model_validate(it)
             out.append(dto)
 
@@ -344,13 +311,9 @@ def get_usuarios_vinculados_por_servicio(
     except HTTPException:
         raise
     except Exception as e:
-        Log.exception(
-            "Error vinculados-por-servicio target=%s actor=%s roles=%s",
-            user_id,
-            getattr(current_user, "id", None),
-            getattr(current_user, "roles", None),
-        )
+        Log.exception("Error vinculados-por-servicio target=%s actor=%s", user_id, getattr(current_user, "id", None))
         raise HTTPException(status_code=500, detail="Error interno obteniendo usuarios vinculados") from e
+
 
 @router.get(
     "/{user_id}/unidades",
@@ -362,7 +325,13 @@ def get_unidades_vinculadas_usuario(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
+    """
+    IMPORTANTE:
+    Si acá te da 422 "Field required", no es este endpoint: es un dependency (require_roles),
+    normalmente por header requerido (ej: 'app') en seguridad/auth.
+    """
     unidades = svc.unidades_vinculadas_scoped(db, user_id, actor=current_user)
+
     return [
         UnidadSelectDTO(
             Id=int(getattr(u, "Id")),
@@ -371,7 +340,8 @@ def get_unidades_vinculadas_usuario(
         for u in (unidades or [])
         if getattr(u, "Id", None) is not None
     ]
-    
+
+
 @router.get(
     "/{user_id}/unidades/ids",
     response_model=List[int],
@@ -388,8 +358,5 @@ def get_unidades_ids_vinculadas_usuario(
     except HTTPException:
         raise
     except Exception as e:
-        Log.exception(
-            "Error get_unidades_ids_vinculadas_usuario target=%s actor=%s roles=%s",
-            user_id, getattr(current_user, "id", None), getattr(current_user, "roles", None),
-        )
+        Log.exception("Error get_unidades_ids_vinculadas_usuario target=%s actor=%s", user_id, getattr(current_user, "id", None))
         raise HTTPException(status_code=500, detail="Error interno obteniendo unidades vinculadas") from e

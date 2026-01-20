@@ -117,7 +117,7 @@ class UnidadSelectDTO(BaseModel):
     Id: int
     Nombre: str
     ServicioId: int | None = None
-    Active: bool
+    Active: bool | None = None  
 
     model_config = {
         "from_attributes": True  # clave si vienes desde SQLAlchemy
