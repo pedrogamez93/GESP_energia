@@ -115,13 +115,11 @@ class UnidadDTO(BaseModel):
 
 class UnidadSelectDTO(BaseModel):
     Id: int
-    Nombre: str
-    ServicioId: int | None = None
-    Active: bool | None = None  
+    Nombre: Optional[str] = None
+    ServicioId: Optional[int] = None
+    Active: Optional[bool] = None
 
-    model_config = {
-        "from_attributes": True  # clave si vienes desde SQLAlchemy
-    }
+    model_config = ConfigDict(from_attributes=True)
 
 class UnidadListDTO(BaseModel):
     """

@@ -321,21 +321,17 @@ def get_unidades_vinculadas_usuario(
     db: DbDep,
     current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))],
 ):
-    """
-    IMPORTANTE:
-    Si acá te da 422 "Field required", no es este endpoint: es un dependency (require_roles),
-    normalmente por header requerido (ej: 'app') en seguridad/auth.
-    """
     unidades = svc.unidades_vinculadas_scoped(db, user_id, actor=current_user)
 
-    return [
-        UnidadSelectDTO(
-            Id=int(getattr(u, "Id")),
-            Nombre=str(getattr(u, "Nombre", "")) if getattr(u, "Nombre", None) is not None else "",
-        )
-        for u in (unidades or [])
-        if getattr(u, "Id", None) is not None
-    ]
+    out: list[UnidadSelectDTO] = []
+    for u in (unidades or []):
+        if getattr(u, "Id", None) is None:
+            continue
+        dto = UnidadSelectDTO.model_validate(u)
+        dto.Id = int(dto.Id)  # por si viene Decimal/int raro desde MSSQL
+        out.append(dto)
+
+    return out
 
 
 @router.get(
