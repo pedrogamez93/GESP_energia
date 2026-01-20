@@ -101,14 +101,10 @@ def usuarios_index(
 # ==========================================================
 # DEBUG: ver lo que el backend ve en UsuariosUnidades
 # ==========================================================
-@router.get(
-    "/{user_id}/debug-unidades",
-    summary="DEBUG: Unidades vinculadas según la BD que ve el backend",
-)
+@router.get("/{user_id}/debug-unidades")
 def debug_unidades_usuario(
     user_id: Annotated[str, Path(...)],
-    # si alguien te lo manda, bien; si no, no falla
-    request_id: Annotated[Optional[str], Query(default=None)] = None,
+    request_id: Annotated[Optional[str], Query()] = None,
     db: DbDep = None,
     current_user: Annotated[UserPublic, Depends(require_roles(*USUARIOS_READ_ROLES))] = None,
 ):
