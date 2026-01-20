@@ -43,7 +43,7 @@ Log = logging.getLogger(__name__)
 # ==========================================================
 # ✅ ROLES
 #   - LECTURA: incluye GESTOR DE CONSULTA
-#   - ESCRITURA: SOLO ADMINISTRADOR (según regla nueva)
+#   - ESCRITURA: SOLO ADMINISTRADOR (confirmado)
 # ==========================================================
 INMUEBLES_READ_ROLES: Tuple[str, ...] = (
     "ADMINISTRADOR",
@@ -57,7 +57,6 @@ INMUEBLES_WRITE_ROLES: Tuple[str, ...] = ("ADMINISTRADOR",)
 
 ReadUserDep = Annotated[UserPublic, Depends(require_roles(*INMUEBLES_READ_ROLES))]
 WriteUserDep = Annotated[UserPublic, Depends(require_roles(*INMUEBLES_WRITE_ROLES))]
-
 
 # ─────────────────────────────────────────────
 # GETs (lectura)
@@ -79,7 +78,7 @@ def listar_inmuebles(
 ):
     svc = InmuebleService(db)
 
-    # ✅ Si es admin, sin restricciones
+    # ✅ Admin sin restricciones
     if is_admin(u):
         total, items = svc.list_paged(
             page=page,
@@ -95,44 +94,29 @@ def listar_inmuebles(
         )
         return {"total": total, "page": page, "page_size": page_size, "items": items}
 
-    # ✅ No-admin: si no trae filtros explícitos, aplica scope automático (por servicio(s) del usuario).
-    # Nota: servicio_ids se obtienen del alcance del usuario. Si no hay alcance => 403.
-    if servicio_id is None and comuna_id is None and region_id is None:
-        servicio_ids = svc.servicios_vinculados_ids(u.id)
-        if not servicio_ids:
-            raise HTTPException(
-                status_code=403,
-                detail={"code": "no_scope", "msg": "No tienes servicios asociados para listar inmuebles."},
-            )
-
-        total, items = svc.list_paged(
-            page=page,
-            page_size=page_size,
-            active=active,
-            servicio_ids=servicio_ids,  # ✅ lista
-            region_id=None,
-            comuna_id=None,
-            tipo_inmueble=tipo_inmueble,
-            direccion=direccion,
-            search=search,
-            gev=gev,
+    # ✅ No-admin: scope por servicios del usuario SIEMPRE que no venga servicio_id explícito
+    # (si viene servicio_id, se valida abajo que esté dentro de su scope)
+    servicio_ids = svc.servicios_vinculados_ids(u.id)
+    if not servicio_ids:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "no_scope", "msg": "No tienes servicios asociados para listar inmuebles."},
         )
-        return {"total": total, "page": page, "page_size": page_size, "items": items}
 
-    # ✅ Si sí viene servicio_id, valida que esté dentro del scope del actor
-    if servicio_id is not None:
-        servicio_ids = svc.servicios_vinculados_ids(u.id)
-        if servicio_id not in (servicio_ids or []):
-            raise HTTPException(
-                status_code=403,
-                detail={"code": "out_of_scope", "msg": "servicio_id fuera de tu alcance."},
-            )
+    # Si mandan servicio_id explícito, valida que esté dentro de su scope
+    if servicio_id is not None and int(servicio_id) not in (servicio_ids or []):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "out_of_scope", "msg": "servicio_id fuera de tu alcance."},
+        )
 
+    # Si NO mandan servicio_id, aplicamos filtro IN (servicio_ids) automáticamente
     total, items = svc.list_paged(
         page=page,
         page_size=page_size,
         active=active,
-        servicio_id=servicio_id,
+        servicio_id=servicio_id,      # si vino explícito, se usa (=)
+        servicio_ids=None if servicio_id is not None else servicio_ids,  # si no vino, usamos IN (...)
         region_id=region_id,
         comuna_id=comuna_id,
         tipo_inmueble=tipo_inmueble,
@@ -153,7 +137,7 @@ def obtener_inmueble(
     db: DbDep,
     u: ReadUserDep,
 ):
-    # 🔒 inmueble == Division => scope por división (para lectura también valida alcance)
+    # 🔒 inmueble == Division => scope por división
     ensure_actor_can_edit_division(db, u, int(inmueble_id))
 
     obj = InmuebleService(db).get(int(inmueble_id))
@@ -172,11 +156,7 @@ def inmuebles_por_direccion(
     db: DbDep,
     u: ReadUserDep,
 ):
-    # Nota: este endpoint puede devolver varios; si tu service no filtra por scope,
-    # aquí filtramos por alcance post-query (más caro pero seguro).
-    svc = InmuebleService(db)
-    items = svc.get_by_address(req)
-
+    items = InmuebleService(db).get_by_address(req)
     if is_admin(u):
         return items
 
@@ -227,7 +207,6 @@ def listar_unidades_de_inmueble(
 
     rows = db.query(UnidadInmueble.UnidadId).filter(UnidadInmueble.InmuebleId == int(inmueble_id)).all()
 
-    # 🔒 extra: valida que las unidades también sean tocables por el actor (si aplica)
     out: list[UnidadVinculadaDTO] = []
     for r in rows:
         uid = int(r[0])
@@ -255,7 +234,6 @@ def get_inmueble_por_unidad(
     if not dto:
         raise HTTPException(status_code=404, detail="No se encontró inmueble (Division) para la unidad indicada")
 
-    # 🔒 asegura que el inmueble resultante también está dentro de alcance
     div_id = int(getattr(dto, "Id", None) or getattr(dto, "id", None) or 0)
     if div_id:
         ensure_actor_can_edit_division(db, u, div_id)
@@ -276,7 +254,6 @@ def list_inmuebles_por_unidad(
 
     svc = InmuebleService(db)
     items = svc.list_by_unidad(int(unidad_id))
-
     if is_admin(u):
         return items
 
@@ -294,27 +271,27 @@ def list_inmuebles_por_unidad(
 
 
 # ─────────────────────────────────────────────
-# Escrituras (SOLO ADMIN)
+# Escrituras (SOLO ADMINISTRADOR)
 # ─────────────────────────────────────────────
 @router.post(
     "",
     response_model=InmuebleDTO,
     status_code=status.HTTP_201_CREATED,
-    summary="Crear inmueble (SOLO ADMIN)",
+    summary="Crear inmueble (SOLO ADMINISTRADOR)",
 )
 def crear_inmueble(
     data: InmuebleCreate,
     db: DbDep,
     current_user: WriteUserDep,
 ):
-    # current_user ya es admin por WriteUserDep
+    # WriteUserDep ya restringe a admin
     return InmuebleService(db).create(data, created_by=current_user.id)
 
 
 @router.put(
     "/{inmueble_id}",
     response_model=InmuebleDTO,
-    summary="Actualizar inmueble (SOLO ADMIN)",
+    summary="Actualizar inmueble (SOLO ADMINISTRADOR)",
 )
 def actualizar_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -331,7 +308,7 @@ def actualizar_inmueble(
 @router.delete(
     "/{inmueble_id}",
     response_model=InmuebleDTO,
-    summary="Eliminar inmueble (soft-delete) (SOLO ADMIN)",
+    summary="Eliminar inmueble (soft-delete) (SOLO ADMINISTRADOR)",
 )
 def eliminar_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -347,7 +324,7 @@ def eliminar_inmueble(
 @router.put(
     "/{inmueble_id}/activar",
     response_model=InmuebleDTO,
-    summary="Activar inmueble (SOLO ADMIN)",
+    summary="Activar inmueble (SOLO ADMINISTRADOR)",
 )
 def activar_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -363,7 +340,7 @@ def activar_inmueble(
 @router.put(
     "/{inmueble_id}/desactivar",
     response_model=InmuebleDTO,
-    summary="Desactivar inmueble (SOLO ADMIN)",
+    summary="Desactivar inmueble (SOLO ADMINISTRADOR)",
 )
 def desactivar_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -379,7 +356,7 @@ def desactivar_inmueble(
 @router.put(
     "/{inmueble_id}/direccion",
     response_model=DireccionDTO,
-    summary="Reemplazar/crear dirección del inmueble (SOLO ADMIN)",
+    summary="Reemplazar/crear dirección del inmueble (SOLO ADMINISTRADOR)",
 )
 def actualizar_direccion_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -407,7 +384,7 @@ def actualizar_direccion_inmueble(
 @router.post(
     "/{inmueble_id}/unidades",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Vincular unidad a inmueble (SOLO ADMIN)",
+    summary="Vincular unidad a inmueble (SOLO ADMINISTRADOR)",
 )
 def add_unidad_a_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -415,10 +392,8 @@ def add_unidad_a_inmueble(
     db: DbDep,
     current_user: WriteUserDep,
 ):
-    # Aunque sea admin, mantenemos consistencia: no vincular a algo inexistente.
-    obj = db.query(Division.Id).filter(Division.Id == int(inmueble_id)).first()
-    if not obj:
-        raise HTTPException(status_code=404, detail="Inmueble no encontrado")
+    # Opcional: si quieres mantener consistencia fuerte, valida que unidad exista/sea tocable por admin.
+    # ensure_actor_can_touch_unidad(db, current_user, int(body.UnidadId))
 
     InmuebleService(db).add_unidad(int(inmueble_id), int(body.UnidadId))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -427,7 +402,7 @@ def add_unidad_a_inmueble(
 @router.delete(
     "/{inmueble_id}/unidades/{unidad_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Desvincular unidad de inmueble (SOLO ADMIN)",
+    summary="Desvincular unidad de inmueble (SOLO ADMINISTRADOR)",
 )
 def remove_unidad_de_inmueble(
     inmueble_id: Annotated[int, Path(ge=1)],
@@ -435,9 +410,5 @@ def remove_unidad_de_inmueble(
     db: DbDep,
     current_user: WriteUserDep,
 ):
-    obj = db.query(Division.Id).filter(Division.Id == int(inmueble_id)).first()
-    if not obj:
-        raise HTTPException(status_code=404, detail="Inmueble no encontrado")
-
     InmuebleService(db).remove_unidad(int(inmueble_id), int(unidad_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
