@@ -613,3 +613,84 @@ class UsuarioVinculoService:
         scoped_q = base_q.where(Unidad.ServicioId.in_(sorted(allowed_servicios)))
 
         return db.scalars(scoped_q).unique().all()
+    
+    def get_detail_scoped(
+    self,
+    db: Session,
+    target_user_id: str,
+    actor: UserPublic,
+    ):
+        """
+        Detalle de usuario con scope:
+        - ADMIN: sin restricción
+        - GESTOR_SERVICIO / GESTOR DE CONSULTA:
+            * Solo puede ver el detalle si el target comparte al menos 1 servicio con el actor.
+            * Los sets devueltos se filtran al alcance del actor (servicios/unidades).
+        """
+        user = self._ensure_user(db, target_user_id)
+
+        is_admin = ADMIN in (actor.roles or [])
+        if is_admin:
+            return self.get_detail(db, target_user_id)
+
+        # servicios del actor
+        allowed_servicios = self._allowed_servicios_for_actor(db, actor.id)
+        if not allowed_servicios:
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "forbidden_scope", "msg": "Gestor sin servicios asignados"},
+            )
+
+        # target comparte algún servicio con actor? (MSSQL-safe)
+        any_shared = db.execute(
+            select(UsuarioServicio.ServicioId)
+            .where(UsuarioServicio.UsuarioId == target_user_id)
+            .where(UsuarioServicio.ServicioId.in_(sorted(allowed_servicios)))
+            .limit(1)
+        ).first() is not None
+
+        if not any_shared:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "forbidden_scope",
+                    "msg": "No puedes ver el detalle de este usuario (fuera de tu alcance por servicios).",
+                    "target_user_id": target_user_id,
+                },
+            )
+
+        # roles del target (roles NO son sensibles; igual los devolvemos)
+        roles = self._roles_by_user(db, target_user_id)
+
+        # instituciones del target: (opcional filtrar por instituciones derivadas del scope)
+        inst_ids = [r[0] for r in db.execute(
+            select(UsuarioInstitucion.InstitucionId).where(UsuarioInstitucion.UsuarioId == target_user_id)
+        ).all()]
+
+        # servicios del target, filtrados al alcance del actor
+        srv_ids = [r[0] for r in db.execute(
+            select(UsuarioServicio.ServicioId)
+            .where(UsuarioServicio.UsuarioId == target_user_id)
+            .where(UsuarioServicio.ServicioId.in_(sorted(allowed_servicios)))
+        ).all()]
+
+        # divisiones del target: si tienes División->ServicioId, filtra por allowed_servicios.
+        # Si no quieres esa dependencia ahora, déjalo sin filtrar.
+        div_ids = [r[0] for r in db.execute(
+            select(UsuarioDivision.DivisionId).where(UsuarioDivision.UsuarioId == target_user_id)
+        ).all()]
+
+        # unidades del target: filtra por servicios permitidos del actor (join a Unidad)
+        uni_ids = [r[0] for r in db.execute(
+            select(UsuarioUnidad.UnidadId)
+            .join(Unidad, Unidad.Id == UsuarioUnidad.UnidadId)
+            .where(UsuarioUnidad.UsuarioId == target_user_id)
+            .where(Unidad.ServicioId.in_(sorted(allowed_servicios)))
+        ).all()]
+
+        Log.info(
+            "get_detail_scoped target=%s actor=%s allowed_servicios=%s -> srv=%s uni=%s",
+            target_user_id, actor.id, sorted(allowed_servicios), srv_ids, uni_ids
+        )
+
+        return user, roles, inst_ids, srv_ids, div_ids, uni_ids
